@@ -1,0 +1,13 @@
+
+## ignore these files
+*.pyc
+*~
+.DS_Store
+*.ipynb_checkpoints
+.ipynb_checkpoints
+build
+dist
+*.egg-info
+*.sublime-*
+__pycache__
+	
