@@ -1,0 +1,174 @@
+#!/usr/bin/env python
+
+"""
+"""
+
+import sys
+import argparse
+from .make_wide import make_wide
+# from .cli_demux import _setup_demux_subparser
+from .cli_trim import _setup_trim_subparser
+from .cli_map import _setup_map_subparser
+from .cli_assemble import _setup_assemble_subparser
+from ..trimmer import run_trimmer
+from ..mapper import run_mapper
+from ..assembler import run_assembler
+from ..utils.logger import set_log_level
+# from ipyrad.core.exceptions import IPyradError
+from loguru import logger
+
+
+logger = logger.bind(name="ipyrad")
+
+# VERSION = str(get_distribution('ipyrad')).split()[1]
+# VERSION = str(ip.__version__)
+VERSION = "TODO"
+
+HEADER = f"""
+-------------------------------------------------------------
+ipyrad [v.{VERSION}]
+Interactive assembly and analysis of RAD-seq data
+-------------------------------------------------------------\
+"""
+
+DESCRIPTION = "ipyrad command line tool. Select a positional subcommand:"
+
+EPILOG = """\
+Note
+----
+Each subcommand has its own help screen, e.g.,:
+$ ipyrad demux -h
+
+Examples
+--------
+# demux: demultiplexing data to samples by index or barcode
+$ ipyrad demux -d RAW/*.fastq.gz -b BARCODES.csv -m 1 -c 10 -o ./demux
+
+# trim: trim reads for quality, adapters, and restriction overhangs
+$ ipyrad trim -d DATA/*.fastq.gz -o TRIMMED/ -q 20 -n 5 -c 10
+
+# map: map reads to a reference genome and filter and sort BAMs
+$ ipyrad map -d DATA/*.fastq.gz -o BAMs -c 10
+
+# assemble: delimit rad loci, call variants, filter, and write outputs
+$ ipyrad assemble -b BAMS/*.bam -o OUT -p TEST -m 4 -q 20 -c 10
+"""
+
+
+def setup_parsers() -> argparse.ArgumentParser:
+    """Setup and return an ArgumentParser w/ subcommands."""
+    parser = argparse.ArgumentParser(
+        prog="ipyrad",
+        description=f"{HEADER}\n{DESCRIPTION}",
+        epilog=EPILOG,
+        formatter_class=make_wide(argparse.RawDescriptionHelpFormatter),
+    )
+    parser.add_argument("-v", "--version", action='version', version=f"ipyrad {VERSION}")
+    subparser = parser.add_subparsers(help="sub-commands", dest="subcommand")
+
+    # add subcommands
+    # _setup_demux_subparser(subparser, f"{HEADER}\nipyrad demux: demultiplex reads by index/barcode")
+    _setup_trim_subparser(subparser, f"{HEADER}\nipyrad trim: trim for quality, adapters, and restriction overhangs")
+    _setup_map_subparser(subparser, f"{HEADER}\nipyrad map: reference map, filter, and sort reads to bam files")
+    _setup_assemble_subparser(subparser, f"{HEADER}\nipyrad assemble: delimit loci, call variants, and write outputs")
+    return parser
+
+
+def main():
+    parser = setup_parsers()
+    args = parser.parse_args()
+
+    # set logging --------------------------------------------------
+    if hasattr(args, "logger") and args.logger:
+        if len(args.logger) > 1:
+            set_log_level(args.logger[0], args.logger[1])
+        else:
+            set_log_level(args.logger[0])
+    else:
+        set_log_level("INFO")
+
+    # DEMUX: demultiplexing job ------------------------------------
+    if args.subcommand == "demux":
+        from ipyrad.demux.demux import Demux
+        Demux(
+            fastq_paths=args.d,
+            barcodes_path=args.b,
+            outpath=args.o,
+            re1=args.re1,
+            re2=args.re2,
+            cores=args.c,
+            max_barcode_mismatch=args.m,
+            merge_technical_replicates=args.merge_technical_replicates,
+            chunksize=args.chunksize,
+            i7=args.i7,
+        ).run()
+
+    # TRIM: ---------------------------------------------
+    if args.subcommand == "trim":
+        logger.info("----- ipyrad trim: quality, adapter, and RE trimming -----")
+        logger.info(f"CMD: ipyrad {' '.join(sys.argv[1:])}")
+        run_trimmer(
+            fastqs=args.fastqs,
+            outdir=args.out,
+            restriction_overhangs=args.restriction_overhangs,
+            max_reads=args.max_reads,
+            min_trimmed_length=args.min_trimmed_length,
+            min_quality=args.min_quality,
+            max_low_quality_bases=args.max_low_quality_bases,
+            max_reads_kmer=args.max_reads_kmer,
+            phred_qscore_offset=args.phred_qscore_offset,
+            disable_infer_re_overhangs=args.disable_infer_re_overhangs,
+            disable_adapter_trimming=args.disable_adapter_trimming,
+            disable_quality_filtering=args.disable_quality_filtering,
+            cores=args.cores,
+            threads=args.threads,
+            name_parse=None if args.name_delim is None else (args.name_delim, args.name_index),
+        )
+
+    # MAP: ---------------------------------------------
+    if args.subcommand == "map":
+        logger.info("----- ipyrad map: map, filter and sort reads to bams -----")
+        logger.info(f"CMD: ipyrad {' '.join(sys.argv[1:])}")
+        run_mapper(
+            fastqs=args.fastqs,
+            reference=args.reference,
+            outdir=args.out,
+            cores=args.cores,
+            threads=args.threads,
+            force=args.force,
+            name_parse=None if args.name_delim is None else (args.name_delim, args.name_index),
+        )
+
+    # ASSEMBLE: run assembly steps from json file ---------------------
+    if args.subcommand == "assemble":
+        logger.info("----- ipyrad assemble: delimit loci and call variants -----")
+        logger.info(f"CMD: ipyrad {' '.join(sys.argv[1:])}")
+        run_assembler(
+            rad_bams=args.rad_bams,
+            wgs_bams=args.wgs_bams,
+            reference=args.reference,
+            outdir=args.out,
+            name=args.name,
+            min_gq=args.min_gq,
+            min_qual=args.min_qual,
+            min_sample_depth=args.min_sample_depth,
+            min_locus_sample_coverage=args.min_locus_sample_coverage,
+            min_locus_trim_sample_coverage=args.min_locus_trim_sample_coverage,
+            min_locus_length=args.min_locus_length,
+            min_locus_merge_distance=args.min_locus_merge_distance,
+            max_locus_hetero_frequency=args.max_locus_hetero_frequency,
+            max_locus_variant_frequency=args.max_locus_variant_frequency,
+            populations=args.populations,
+            masks=args.masks,
+            exclude_reference=args.exclude_reference,
+            cores=args.cores,
+            threads=args.threads,
+            force=args.force,
+            name_parse=None if args.name_delim is None else (args.name_delim, args.name_index),
+        )
+
+
+
+if __name__ == "__main__":
+
+    main()

@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ipyrad2"
+version = "2.0.0-a1"
+requires-python = ">= 3.8"
+license = { file = "LICENSE.txt" }
+dependencies = [
+    "loguru",
+    "h5py",
+    "numba",
+    "toytree >= 3.0.1",
+    "ipyparallel >= 8.0",
+]
+description = "Interactive assembly and analysis of RAD-seq data sets"
+readme = {file = "README.md", content-type = "text/markdown"}
+keywords = ["RAD", "RAD-seq", "ddRAD", "genomics", "assembly", "popgen", "phylogeny"]
+classifiers =[
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+	"Development Status :: 4 - Beta",    
+]
+authors = [
+	{name = "Deren Eaton", email="de2356@columbia.edu"},
+	{name = "Isaac Overcast", email="isaac.overcast@gmail.com"},
+]
+maintainers = [
+	{name = "Deren Eaton", email="de2356@columbia.edu"},
+	{name = "Isaac Overcast", email="isaac.overcast@gmail.com"},
+]
+
+[project.optional-dependencies]
+full = [
+    "jupyter",
+    "mpi4py >= 3.0",
+]
+
+[project_urls]
+Homepage = "https://eaton-lab.org/ipyrad2"
+Documentation = "https://eaton-lab.org/ipyrad2"
+Repository = "https://github.com/eaton-lab/ipyrad2"
+Issues = "https://github.com/eaton-lab/ipyrad2/issues"
+
+[project.scripts]
+ipyrad3 = "ipyrad2.cli:main"
+# ipyrad3-trim = "ipyrad3.trim.cli_trim:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ipyrad2*"]
