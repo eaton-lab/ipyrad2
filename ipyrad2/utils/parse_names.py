@@ -12,7 +12,7 @@ from typing import List, Tuple, Dict, Union, Iterable, Optional
 from pathlib import Path
 from collections import defaultdict
 from loguru import logger
-from .utils import IPyradError
+from .exceptions import IPyradError
 
 __all__ = [
     "get_paths_list_from_fastq_str",
