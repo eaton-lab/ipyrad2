@@ -17,6 +17,7 @@ from ..mapper import run_mapper
 from ..assembler import run_assembler
 from ..analysis.window_extracter import run_window_extracter
 from ..utils.logger import set_log_level
+from ..utils.exceptions import IPyradError
 from loguru import logger
 import ipyrad2 as ip
 
@@ -76,6 +77,15 @@ def setup_parsers() -> argparse.ArgumentParser:
 def main():
     try:
         command_line()
+    except KeyboardInterrupt:
+        logger.error("interrupted by user. Shutting down.")
+        sys.exit(1)
+    # expected error, only report message no traceback
+    except IPyradError as exc:
+        logger.error(f"Error: {exc}")
+        logger.error("see error message above. Shutting down.")
+        sys.exit(1)
+    # raise with traceback
     except Exception as exc:
         logger.error(exc)
         # sys.exit(1)
@@ -97,7 +107,8 @@ def command_line():
 
     # DEMUX: -------------------------------------------------------
     if args.subcommand == "demux":
-        logger.warning(vars(args))
+        logger.info("----- ipyrad demux: demultiplexing reads to samples -----")
+        logger.info(f"CMD: ipyrad {' '.join(sys.argv[1:])}")
         run_demuxer(
             fastqs=args.fastqs,
             outdir=args.out,
@@ -108,8 +119,11 @@ def command_line():
             chunksize=args.chunksize,
             i7=args.i7,
             disable_infer_re_overhangs=args.disable_infer_re_overhangs,
+            merge_technical_replicates=args.merge_technical_replicates,
             cores=args.cores,
+            max_reads=args.max_reads,
         )
+        sys.exit(0)
 
     # TRIM: -------------------------------------------------------
     if args.subcommand == "trim":

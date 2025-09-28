@@ -80,6 +80,7 @@ def trim_sample_with_fastp(
     phred_qscore_offset: int,
     disable_adapter_trimming: bool,
     disable_quality_filtering: bool,
+    umi_tag_in_i5: bool,
     threads: int,
 ):
     """Run FASTP and return: {stats} (r1, r2)
@@ -108,6 +109,8 @@ def trim_sample_with_fastp(
             "--trim_front1", str(len(restriction_overhangs[0])),
             "--trim_front2", str(len(restriction_overhangs[1])),
         ]
+        if umi_tag_in_i5:
+            cmd.extend(["-U", "--umi_loc=index2", "--umi_prefix=UMI"])
     else:
         cmd = [
             str(FASTP_BINARY),
@@ -177,6 +180,7 @@ def run_trimmer(
     cores: int,
     threads: int,
     name_parse: Tuple[str, str] | None,
+    umi_tag_in_i5: bool,
 ):
     # ------------------------------------------------------------
     # parse dict of {name: (r1, r2)}

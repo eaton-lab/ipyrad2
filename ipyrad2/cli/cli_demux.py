@@ -51,17 +51,17 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
     )
     tool.add_argument(
         "-m", "--max_mismatch", metavar="int", type=int, default=0,
-        help=("The maximum number of allowed mismatches between true and "
+        help=("The max number of allowed mismatches between true and "
         "oberved index/barcode [default=0].")
     )
     tool.add_argument(
-        "-c", "--cores", metavar="int", type=int, default=4,
-        help="Number of cores for parallelization",
+        "-x", "--max_reads", metavar="int", type=intlike,
+        help="Sample only the first N reads per file. Useful for testing. [default=None]."
     )
     tool.add_argument(
-        "-x", "--chunksize", metavar="int", type=intlike, default=int(1e7),
-        help=("Number of reads to process in between writing to disk. "
-        "Larger values process faster, but use more RAM.")
+        "-k", "--chunksize", metavar="int", type=intlike, default=int(1e7),
+        help=("N reads to process between writing to disk. "
+        "Larger values = faster, but uses more RAM. [default=1e7]")
     )
     tool.add_argument(
         "-R", "--disable-infer-re-overhangs", action="store_true",
@@ -77,6 +77,10 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
     tool.add_argument(
         "--i7",action="store_true",
         help="Demultiplex on i7 index instead of inline barcodes."
+    )
+    tool.add_argument(
+        "-c", "--cores", metavar="int", type=int, default=4,
+        help="Number of cores for parallelization",
     )
     tool.add_argument(
         "--logger", type=str, nargs="*", default=("INFO", None),

@@ -41,8 +41,8 @@ class BarMatching:
     """: ..."""
     chunksize: int
     """: Number of reads to store in memory before writing to disk."""
-    # subsample: int = int(1e15)
-    # """: Only sample this many reads from a file (mainly used in testing)."""
+    max_reads: int = int(1e20)
+    """: Only sample this many reads from a file (mainly used in testing)."""
 
     # stats counters
     barcode_misses: Dict[str, int] = field(default_factory=dict)
@@ -76,7 +76,12 @@ class BarMatching:
             quart2 = iter(int, 1)
 
         # yield from iterators as 4 items as a time (fastq)
+        ridx = 0
         for read1, read2 in zip(quart1, quart2):
+            # stop if max_reads is reached
+            ridx += 1
+            if ridx == self.max_reads:
+                return
             yield read1, read2
 
     def _iter_matched_barcode(self):
@@ -136,9 +141,7 @@ class BarMatching:
                 nprocessed = min(self.chunksize, sum(len(i) for i in read1s.values()))
                 total += nprocessed
                 logger.info(
-                    f"writing/compressing {nprocessed:.0f} matched reads "
-                    f"(total={total:.0f})")
-
+                    f"writing/compressing {nprocessed:.0f} matched reads (total={total:.0f})")
                 rasyncs = {}
 
                 # parallel workers cannot write to the same file so lists

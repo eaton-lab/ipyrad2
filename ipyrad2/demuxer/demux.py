@@ -11,7 +11,7 @@ to be written, based on this approach:
 https://stackoverflow.com/questions/9770027/how-to-parse-a-large-file-taking-advantage-of-threading-in-python
 """
 
-from typing import Dict, Tuple, List, Iterator, Optional
+from typing import Dict, Tuple, List, Iterator
 import sys
 import itertools
 from pathlib import Path
@@ -37,15 +37,15 @@ BASES = set("ACGTN")
 
 @dataclass
 class Demux:
-    fastq_paths: List[Path]
+    fastqs: List[Path]
     """: List of Paths to fastq files, unpaired."""
-    barcodes_path: Path
+    barcodes: Path
     """: Path to the barcodes file."""
     re1: str
     """: Overhang on read1 from restriction digestion + ligation. Inferred if None."""
     re2: str
     """: Overhang on read2 from restriction digestion + ligation. Inferred if None."""
-    max_barcode_mismatch: int
+    max_mismatch: int
     """: Max number of mismatches between barcodes. Checked for conflict."""
     cores: int
     """: max number of parallel workers."""
@@ -58,6 +58,9 @@ class Demux:
     i7: bool
     """: if True then demux on i7 index instead of inline barcode(s)."""
     disable_infer_re_overhangs: bool
+    """: do not infer res"""
+    max_reads: int
+    """: subsample only the first N reads from each file (used for testing)."""
 
     # attrs to be filled ----------------------------------------------
     _names_to_barcodes: Dict[str, Tuple[str, str]] = None
@@ -96,7 +99,7 @@ class Demux:
         self._merge_cleanup()
 
     def _get_filenames_to_paired_fastqs(self) -> None:
-        self._filenames_to_fastqs = get_name_to_fastq_dict(self.fastq_paths)
+        self._filenames_to_fastqs = get_name_to_fastq_dict(self.fastqs)
 
     def _get_outdir(self) -> None:
         """Require an empty outdir to write to."""
@@ -106,7 +109,7 @@ class Demux:
         # if the path exists, but is empty, that is OK.
         if self.outdir.exists():
             if any(self.outdir.iterdir()):
-                raise ValueError(
+                raise IPyradError(
                     f"outdir '{self.outdir}' exists and contains files. "
                     "To prevent overwriting or removing data you must "
                     "manually rm this dir or change the outdir arg")
@@ -114,12 +117,11 @@ class Demux:
 
     def _get_barcodes_path(self) -> None:
         """Get barcodes path as Path object allow for regex name."""
-        bars = Path(self.barcodes_path)
+        bars = Path(self.barcodes)
         bpath = list(bars.parent.glob(bars.name))
         if not bpath:
-            msg = f"No barcodes file found at {self.barcodes_path}"
-            raise IPyradError(msg)
-        self.barcodes_path = Path(bpath[0]).expanduser().resolve()
+            raise IPyradError(f"No barcodes file found at {self.barcodes}")
+        self.barcodes = Path(bpath[0]).expanduser().resolve()
 
     def _get_names_to_barcodes(self) -> None:
         """Fill .names_to_barcodes dict w/ info from barcodes file.
@@ -132,7 +134,7 @@ class Demux:
         # combinatorial barcodes.
         try:
             bardata = pd.read_csv(
-                self.barcodes_path, header=None, sep=r"\s+",
+                self.barcodes, header=None, sep=r"\s+",
             ).dropna()
         except ParserError as err:
             raise IPyradError(
@@ -197,7 +199,7 @@ class Demux:
             # check that data is paired
             for fname, ftuple in self._filenames_to_fastqs.items():
                 if not ftuple[1]:
-                    raise ValueError(
+                    raise IPyradError(
                         "Only paired-end reads can make use of combinatorial "
                         "barcodes. The barcode table suggests multiple barcodes "
                         "but the fastq file names suggest data are not paired."
@@ -313,7 +315,7 @@ class Demux:
         self._barcodes_to_names = {}
 
         # finished if no mismatch is allowed.
-        if not self.max_barcode_mismatch:
+        if not self.max_mismatch:
             for name, barcode in self._names_to_barcodes.items():
                 # convert tuple to string with _ separator
                 barc = (
@@ -328,7 +330,7 @@ class Demux:
         for name, barcode in self._names_to_barcodes.items():
 
             # get generators of off-by-n barcodes
-            if self.max_barcode_mismatch == 1:
+            if self.max_mismatch == 1:
                 gen1 = mutate(barcode[0])
                 gen2 = mutate(barcode[1])
             else:
@@ -350,7 +352,7 @@ class Demux:
                 else:
                     logger.warning(
                         f"\nSample: {name} ({barc}) is within "
-                        f"{self.max_barcode_mismatch} "
+                        f"{self.max_mismatch} "
                         f"changes of sample ({self._barcodes_to_names[barc]}).")
                     warning = True
 
@@ -359,12 +361,13 @@ class Demux:
                 "Ambiguous barcodes that match to multiple samples "
                 "will arbitrarily be assigned to the first sample.\n"
                 "If you do not like this then lower the value of "
-                "max_barcode_mismatch and rerun (recommended).")
+                "max_mismatch and rerun (recommended).")
 
     def _demultiplex(self) -> None:
         """Send fastq tuples to barmatch() function to process in parallel."""
 
-        # barmatching performed on each fastq (r1, r2) file pair
+        # barmatching performed on each fastq (r1, r2) file pair serially.
+        # Some parallelization occurs within barmatch.
         jobs = {}
         for fname, fastq_tuple in self._filenames_to_fastqs.items():
             short = tuple(i.name if i else "" for i in fastq_tuple)
@@ -513,6 +516,7 @@ def barmatch(fastq_tuple, demux_obj):
         outdir=demux_obj.outdir,
         cores=demux_obj.cores,
         chunksize=demux_obj.chunksize,
+        max_reads=demux_obj.max_reads,
     )
 
     if demux_obj.i7:
@@ -544,20 +548,10 @@ def barmatch(fastq_tuple, demux_obj):
     return barmatcher.barcode_misses, barmatcher.barcode_hits, barmatcher.sample_hits
 
 
-def run_demuxer(
-    fastqs: List[Path],
-    barcodes: Path,
-    outdir: Path,
-    re1: str,
-    re2: str,
-    merge_technical_replicates: bool,
-    disable_infer_re_overhangs: bool,
-    i7: bool,
-    chunksize: int,
-    cores: int,
-    ):
-    pass
-
+def run_demuxer(**kwargs):
+    """Command-line wrapper for Demux."""
+    tool = Demux(**kwargs)
+    tool.run()
 
 
 if __name__ == "__main__":
@@ -569,10 +563,10 @@ if __name__ == "__main__":
 
     DATA = Path("/home/deren/Documents/ipyrad-tests/")
     tool = Demux(
-        fastq_paths=DATA / "iTru*.gz",
-        barcodes_path=DATA / "barcode*.csv",
+        fastqs=DATA / "iTru*.gz",
+        barcodes=DATA / "barcode*.csv",
         outdir="/tmp/DEMUX",
-        max_barcode_mismatch=0,
+        max_mismatch=0,
         cores=4,
         chunksize=int(1e7),
         re1="ATCGG",
@@ -628,8 +622,8 @@ if __name__ == "__main__":
     if os.path.exists("/home/deren/Documents/tools/ipyrad2/examples/demux_2024-8-8"):
         shutil.rmtree("/home/deren/Documents/tools/ipyrad2/examples/demux_2024-8-8")
     tool = Demux(
-        barcodes_path="../../pedtest/barcodes-fewer-plate1.csv",
-        fastq_paths="../../pedtest/Pedicularis_plate1_R*.fastq.gz",
+        barcodes="../../pedtest/barcodes-fewer-plate1.csv",
+        fastqs="../../pedtest/Pedicularis_plate1_R*.fastq.gz",
         outdir="../../pedtest/demux_2024-3-16",
         max_barcode_mismatch=1,
         cores=7,

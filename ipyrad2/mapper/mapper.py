@@ -7,6 +7,22 @@ Example
 -------
 map-delim --fastqs-rad ... --fastqs-wgs ... --ref REF --max-reads ... --min-samp-cov 4 --min-read-depth ...
 
+
+TODO
+-----
+# Name-sort → fixmate (adds MC/ms tags) → coordinate-sort ((markdup relies on tags created by fixmate -m.))
+samtools sort -n -o aln.name.bam aln.bam
+samtools fixmate -m aln.name.bam aln.fixmate.bam
+samtools sort -o aln.coord.bam aln.fixmate.bam
+samtools index aln.coord.bam
+
+# UMI-aware duplicate marking (read-name regex)
+samtools markdup \
+  --barcode-rgx 'UMI_([ACGTN]+)' \
+  -o aln.dedup.bam \
+  aln.coord.bam
+samtools index aln.dedup.bam
+
 """
 
 from typing import Tuple
