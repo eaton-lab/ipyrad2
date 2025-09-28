@@ -6,7 +6,7 @@ from pathlib import Path
 from .make_wide import make_wide, intlike
 
 
-ASSEMBLE_EPILOG = """\
+EPILOG = """\
 Examples
 --------
 $ ipyrad assemble --bams BAMs/*.bam --ref REF --out OUT -m 4 -d 5 -q 20
@@ -22,7 +22,7 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         "assemble",
         description=header,
         help="assemble loci and call variants in shared mapping beds using 'bedtools' and 'bcftools'.",
-        epilog=ASSEMBLE_EPILOG,
+        epilog=EPILOG,
         formatter_class=make_wide(argparse.RawDescriptionHelpFormatter, max_help_position=60, width=140),
     )
     tool.add_argument(
@@ -61,6 +61,8 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         "-m", "--min-locus-sample-coverage", metavar="int", type=int, default=4,
         help="Min num samples that must be present to retain a locus. [default=4]",
     )
+    # This isn't super necessary. It reduces the size of the seqs h5 a bit,
+    # but otherwise this filter is applied when you use wex.
     tool.add_argument(
         "-a", "--min-locus-trim-sample-coverage", metavar="int", type=int, default=4,
         help="Min num samples with non-N calls for trimming locus edges. Must be <= '-m'. [default=4]",
@@ -68,6 +70,12 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
     tool.add_argument(
         "-l", "--min-locus-length", metavar="int", type=int, default=25,
         help="Min length of locus after trimming. [default=25]",
+    )
+    # locus beds could overlap and still be relatively short, there are
+    # better ways to do this probably...
+    tool.add_argument(
+        "-L", "--max-locus-length", metavar="int", type=int, default=None,
+        help="Max length of locus (to prevent overlapping locus beds). [default=None]",
     )
     tool.add_argument(
         "-g", "--min-locus-merge-distance", metavar="int", type=int, default=300,

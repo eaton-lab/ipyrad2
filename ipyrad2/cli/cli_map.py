@@ -6,7 +6,7 @@ from pathlib import Path
 from .make_wide import make_wide, intlike
 
 
-ASSEMBLE_EPILOG = """\
+EPILOG = """\
 Examples
 --------
 $ ipyrad map --fastqs DATA/*.fastq.gz --ref REF --out OUT/
@@ -21,7 +21,7 @@ def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = N
         "map",
         description=header,
         help="map, filter, and sort reads with 'bwa-mem2' and 'samtools'.",
-        epilog=ASSEMBLE_EPILOG,
+        epilog=EPILOG,
         formatter_class=make_wide(argparse.RawDescriptionHelpFormatter, max_help_position=60, width=140),
     )
     tool.add_argument(

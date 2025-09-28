@@ -6,7 +6,7 @@ from pathlib import Path
 from .make_wide import make_wide, intlike
 
 
-ASSEMBLE_EPILOG = """\
+EPILOG = """\
 Examples
 --------
 $ ipyrad trim --fastqs DATA/*.fastq.gz --out OUT/
@@ -24,7 +24,7 @@ def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = 
         "trim",
         description=header,
         help="trim reads for quality, adapters, and restriction overhangs using 'fastp'.",
-        epilog=ASSEMBLE_EPILOG,
+        epilog=EPILOG,
         formatter_class=make_wide(argparse.RawDescriptionHelpFormatter, max_help_position=60, width=140),
     )
     tool.add_argument(

@@ -1,0 +1,18 @@
+# This file can be used to create a fresh conda env:
+# `conda env create -f environmental.yml -n ipyrad2`
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python>=3.8
+  - ipython
+  - loguru
+  - h5py
+  - toytree >=3.0.1
+  - numba
+  - ipyparallel >= 8.0
+  - samtools
+  - bedtools
+  - bcftools
+  - fastp
+  - bwa-mem2

@@ -16,8 +16,16 @@ def make_wide(formatter, width: int = 120, max_help_position: int = 36):
 
 
 def intlike(s: str) -> int:
-    """Allows int to be entered as a float (e.g., 1e5)"""
+    """Allows int or float to be entered but converts to an int"""
     try:
         return int(round(float(s)))                # 3.5 -> 4; 1e5 -> 100_000
+    except ValueError:
+        raise ArgumentTypeError(f"{s!r} is not a number")
+
+
+def floatlike(s: str) -> float:
+    """Allows int or float to be entered but converts to a float."""
+    try:
+        return float(s)
     except ValueError:
         raise ArgumentTypeError(f"{s!r} is not a number")

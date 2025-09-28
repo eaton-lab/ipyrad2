@@ -65,24 +65,26 @@ def map_filter_sort(sname: str, fastqs: Tuple[Path, Path], reference: Path, outd
     if r2:
         bwa_cmd.append(str(r2))
 
-    # Keep secondary; drop unmapped + seconday + supplementary; require proper pair only if paired
+    # drop unmapped + seconday + supplementary; require proper pair only if paired
     view_cmd = [
         BIN_SAMTOOLS, "view",
         "-b",
         "-u",
-        "-F", "2308",
+        # "-F", "2308",
+        "-F", "0x400",      # add this to exclude optical/dups if marked.
+        "-F", "0x900",      # exclude seconday and supplemental.
+        "-q", "20",         # only MAPQ≥20         # TODO: expose as param
         "-@", "1",
-        # "-q", "20",  # do not apply a MAPQ filter yet.
-    ] + (["-f", "2"] if paired else [])
+    ] + (["-f", "0x2"] if paired else [])
 
     # coordinate sorted command
     sort_cmd = [
         BIN_SAMTOOLS, "sort",
-        "-@", "1",
         "-m", "50M",                # tune per-thread memory
         "-T", str(tmp_prefix),
         "-O", "bam",
         "-o", str(tmp_bam),
+        "-@", "1",
     ]
 
     print(f"@@DEBUG: cmd: {' '.join(map(str, bwa_cmd))}")

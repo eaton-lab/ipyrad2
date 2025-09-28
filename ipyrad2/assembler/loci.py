@@ -242,8 +242,7 @@ def iter_fasta(fasta: Path):
 
 
 def iter_build_loci(fastas: List[Path]) -> Tuple[List[str], List[str]]:
-    """
-    Read all FASTA files in `indir` and group sequences by header.
+    """Read all FASTA files in `indir` and group sequences by header.
 
     Returns
     -------
@@ -382,7 +381,7 @@ def filter_trim_locus(
     """
     # parse input locus
     scaff, pos = header.split(":")
-    start, end = map(int, pos.split("-"))
+    start, end = [int(i) for i in pos.split("-")]
     snames = list(locus_dict.keys())
     seqs = [list(bytes(seq, "utf-8")) for seq in locus_dict.values()]
     seqs = np.array(seqs, dtype=np.uint8)
@@ -429,7 +428,7 @@ def filter_trim_locus(
     except IndexError:
         trim_right = seqs.shape[1]
     tseqs = seqs[:, trim_left:trim_right + 1]
-    tsite_sample_covs = site_sample_covs[trim_left:trim_right]
+    tsite_sample_covs = site_sample_covs[trim_left:trim_right + 1]
 
     # get snps array
     snpsarr = snp_count_numba(tseqs)
@@ -445,7 +444,8 @@ def filter_trim_locus(
     stats["nsites_sample_cov_greater_than_or_equal_to_min_locus_trim_sample_coverage"] = int(np.sum(tsite_sample_covs >= min_locus_trim_sample_coverage))
 
     # calculate proportion variable from sites with enough sample cov to detect pis
-    stats["variant_site_frequency_where_sample_cov_greater_than_2"] = float(stats["variant_sites"] / stats["nsites_sample_cov_greater_than_2"])
+    if stats["nsites_sample_cov_greater_than_2"]:
+        stats["variant_site_frequency_where_sample_cov_greater_than_2"] = float(stats["variant_sites"] / stats["nsites_sample_cov_greater_than_2"])
 
     # get bed intervals of sites that were trimmed to mask in VCF later.
     # TODO: check +1 for end trims
@@ -455,7 +455,7 @@ def filter_trim_locus(
         if trim_left > 0:
             bed_masks[scaff].append((start, start + trim_left))
         if trim_right < seqs.shape[1] - 1:
-            bed_masks[scaff].append((start + trim_right, end))
+            bed_masks[scaff].append((start + trim_right + 1, end))
 
     # In addition to filtering by min-locus-length also filter by the
     # the number of non-N sites, since small loci with non-overlapping
@@ -476,16 +476,17 @@ def filter_trim_locus(
         filters["max_variant_proportion"] = True
 
     # filter for max shared het sites
-    max_shared_h = max_heteros_count_numba(tseqs)
-    max_shared_h_prop = max_shared_h / tseqs.shape[0]
-    if max_shared_h_prop > max_locus_hetero_frequency:
-        filters["max_shared_hetero_site_proportion"] = True
+    if tseqs.size:
+        max_shared_h = max_heteros_count_numba(tseqs)
+        max_shared_h_prop = max_shared_h / tseqs.shape[0]
+        if max_shared_h_prop > max_locus_hetero_frequency:
+            filters["max_shared_hetero_site_proportion"] = True
 
     # revise the header for applied trim/filter
     if not sum(filters.values()):
-        start = start + trim_left
-        end = end - trim_right
-        header = f"{scaff}:{start}-{end}"
+        t_start = start + trim_left  # e.g., l=5 is 5 ahead of 0.
+        t_end = start + trim_right   # e.g., r=295 is 5 back from 300. (no +1 needed here)
+        header = f"{scaff}:{t_start}-{t_end}"
     else:
         bed_masks[scaff] = [(start, end)]
 

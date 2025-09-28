@@ -11,7 +11,9 @@ dependencies = [
     "loguru",
     "h5py",
     "numba",
-    "toytree >= 3.0.1",
+    "numpy",
+    "scipy",
+    "pandas",
     "ipyparallel >= 8.0",
 ]
 description = "Interactive assembly and analysis of RAD-seq data sets"
@@ -33,6 +35,7 @@ maintainers = [
 
 [project.optional-dependencies]
 full = [
+    "toytree >= 3.0.1",
     "jupyter",
     "mpi4py >= 3.0",
 ]
@@ -44,8 +47,7 @@ Repository = "https://github.com/eaton-lab/ipyrad2"
 Issues = "https://github.com/eaton-lab/ipyrad2/issues"
 
 [project.scripts]
-ipyrad3 = "ipyrad2.cli:main"
-# ipyrad3-trim = "ipyrad3.trim.cli_trim:main"
+ipyrad2 = "ipyrad2.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

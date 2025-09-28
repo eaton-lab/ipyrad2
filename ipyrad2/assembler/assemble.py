@@ -33,6 +33,7 @@ from .loci import (
     build_locus_fasta_database,
     write_loci_and_stats_files,
 )
+from .write_seqs_hdf5 import write_seqs_hdf5
 
 
 def run_assembler(
@@ -167,7 +168,7 @@ def run_assembler(
         logger.info("assembling loci")
         build_locus_fasta_database(name, list(all_dict), reference, outdir, exclude_reference, masks)
 
-        logger.info("filtering and loci and stats")
+        logger.info("filtering and writing loci and stats")
         args = (
             list(all_dict), name, outdir, exclude_reference,
             min_locus_sample_coverage,
@@ -176,7 +177,21 @@ def run_assembler(
             max_locus_hetero_frequency,
             max_locus_variant_frequency,
         )
-        write_loci_and_stats_files(*args)
+        stats = write_loci_and_stats_files(*args)
+
+        # write seqs HDF5, snps HDF5, and final VCFs
+        logger.info("writing hdf5 database files")
+        write_seqs_hdf5(
+            name=name,
+            outdir=outdir,
+            snames=list(all_dict),
+            reference=reference,
+            exclude_reference=exclude_reference,
+            nloci=stats["nloci"],
+            nsites=stats["nsites"],
+        )
+
+        # write snps HDF5
 
 
 
