@@ -3,6 +3,7 @@
 Assemble RAD-seq datasets for evolutionary analysis.
 
 
+## Usage
 ```bash
 ipyrad -h
 ```
@@ -20,4 +21,19 @@ ipyrad map -d TRIMMED/*.fastq.gz -r REF.fa -o BAMs/ -c 10 -t 2
 
 # assemble loci and call variants
 ipyrad assemble -b BAMs/*.bam -r REF.fa -o OUT/ -m 4 -d 5 -c 10 -t 2
+```
+
+## Installation
+
+```bash
+# clone the development repo
+git clone ...
+
+# install dependencies
+cd ipyrad2/
+conda env create -f environment.yml -n ipyrad2
+conda activate
+
+# install local dev copy of ipyrad2
+pip install -e . --no-deps
 ```
