@@ -226,6 +226,7 @@ def run_trimmer(
                 phred_qscore_offset=phred_qscore_offset,
                 disable_adapter_trimming=disable_adapter_trimming,
                 disable_quality_filtering=disable_quality_filtering,
+                umi_tag_in_i5=umi_tag_in_i5,
                 threads=max(1, threads - 2),  # uses 2 I/O threads + requested threads
             )
             jobs[sname] = thview.apply(trim_sample_with_fastp, **kwargs)
