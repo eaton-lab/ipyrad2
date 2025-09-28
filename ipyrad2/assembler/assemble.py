@@ -59,17 +59,20 @@ def run_assembler(
     threads: int,
     force: bool,
     ):
-    # check outdir for existing and raise or remove
+    # check reference and outdir paths
+    reference = reference.expanduser().absolute()
+    outdir = outdir.expanduser().absolute()
     outdir.mkdir(exist_ok=True)
+
+    # check outdir for existing and raise or remove
     # ...
 
-    # parse names from bam files and get dicts of {name: Path, ...}
+    # check bam paths and get names dicts as {name: Path, ...}
+    logger.warning("1")
     bam_dict = get_name_to_fastq_dict(rad_bams, name_parse, skip_paired=True)
     wgs_dict = get_name_to_fastq_dict(wgs_bams, name_parse, skip_paired=True) if wgs_bams else {}
     bam_dict = {i: j[0] for (i, j) in bam_dict.items()}
     wgs_dict = {i: j[0] for (i, j) in wgs_dict.items()}
-    # bam_dict = {path.name.rsplit(".bam", 1)[0]: path for path in rad_bams}
-    # wgs_dict = {path.name.rsplit(".bam", 1)[0]: path for path in wgs_bams} if wgs_bams else {}
     all_dict = wgs_dict | bam_dict
 
     # ---------------------------------------------

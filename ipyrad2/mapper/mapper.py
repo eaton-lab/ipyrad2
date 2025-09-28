@@ -23,6 +23,25 @@ samtools markdup \
   aln.coord.bam
 samtools index aln.dedup.bam
 
+
+T=8
+
+# NEED TO TEST THIS CAN ALL BE PIPED THEN INCORPORATE IT...
+bwa mem -t "$T" ref.fa R1.fq.gz R2.fq.gz \
+| samtools view -bu -F 0x900 -@ "$T" \
+| samtools sort   -n -@ "$T" -o - \
+| samtools fixmate -m - - -@ "$T" \
+| samtools sort      -@ "$T" -o - \
+| samtools markdup   -@ "$T" - - \
+| tee dedup.bam \
+| samtools view -b -f 0x2 -q 20 -@ "$T" > final.bam
+
+samtools index -@ "$T" dedup.bam
+samtools index -@ "$T" final.bam
+
+# add to markdups if UMIs
+--barcode-rgx 'UMI_([ACGTN]+)' -@ "$T" - -
+
 """
 
 from typing import Tuple
@@ -70,11 +89,11 @@ def map_filter_sort(sname: str, fastqs: Tuple[Path, Path], reference: Path, outd
     bwa_cmd = [
         BIN_BWA, "mem",
         "-t", str(bwa_threads),
-        "-v", "1",             # less verbose
-        "-K", "50000000",      # stable chunk size
-        "-Y",                  # soft-clip supplementary
-        "-M",                  # Picard compatibility
-        "-R", f"@RG\\tID:{sname}\\tSM:{sname}\\tPL:ILLUMINA",
+        "-v", "1",                # less verbose.
+        "-K", "50000000",         # stable chunk size. Improves repeatability.
+        # "-Y",                   # soft-clip supplementary. Wouldn't hurt, but not necessary.
+        # "-M",                   # Picard compatibility. Not necessary, we use samtools fixmate for dups.
+        "-R", f"@RG\\tID:{sname}\\tSM:{sname}\\tPL:ILLUMINA",  # not currently used, since we provide custom -G to bcftools.
         str(reference),
         str(r1),
     ]
@@ -84,24 +103,31 @@ def map_filter_sort(sname: str, fastqs: Tuple[Path, Path], reference: Path, outd
     # drop unmapped + seconday + supplementary; require proper pair only if paired
     view_cmd = [
         BIN_SAMTOOLS, "view",
-        "-b",
-        "-u",
-        # "-F", "2308",
-        "-F", "0x400",      # add this to exclude optical/dups if marked.
-        "-F", "0x900",      # exclude seconday and supplemental.
+        "-b", "-u",         # stream uncompressed bam
+        # "-F", "0x400",    # exclude optical/dups if marked (nb: bcftools already ignores reads that are marked.)
+        "-F", "0x900",      # exclude secondary and supplemental.
         "-q", "20",         # only MAPQ≥20         # TODO: expose as param
         "-@", "1",
-    ] + (["-f", "0x2"] if paired else [])
+    ]
+
+    # [optional] do name sort and fixmate.
+    # ...
 
     # coordinate sorted command
     sort_cmd = [
         BIN_SAMTOOLS, "sort",
-        "-m", "50M",                # tune per-thread memory
+        "-m", "100M",                # tune per-thread memory
         "-T", str(tmp_prefix),
         "-O", "bam",
         "-o", str(tmp_bam),
         "-@", "1",
     ]
+
+    # mark dups in coordinate sorted fixmate bams
+    # ...
+
+    # final view
+     # + (["-f", "0x2"] if paired else [])
 
     print(f"@@DEBUG: cmd: {' '.join(map(str, bwa_cmd))}")
     print(f"@@DEBUG: cmd: {' '.join(map(str, view_cmd))}")
@@ -167,7 +193,7 @@ def index_ref_with_bwa(reference: Path) -> None:
     """
     # check that ref file exists
     if not reference.exists():
-        raise IOError(f"reference path {reference} does not exist.")
+        raise IPyradError(f"reference path {reference} does not exist.")
 
     # If reference sequence already exists then bail out of this func
     suffs = [".pac", ".ann", ".amb", ".0123", ".bwt.2bit.64"]  # bwa-mem2
@@ -177,11 +203,15 @@ def index_ref_with_bwa(reference: Path) -> None:
         logger.debug(f"reference is already bwa indexed: {reference}")
         return
 
+    # check that location of reference file is writable before trying to index.
+    if not os.access(reference.parent, os.W_OK | os.X_OK):
+        raise IPyradError("cannot index reference because you do not have write access to its directory.")
+
     # bwa index <reference_file>
     logger.info(f"indexing reference: {reference.name}")
     cmd = [str(BIN_BWA), "index", str(reference)]
     logger.debug(f"cmd: {' '.join(cmd)}")
-    with sp.Popen(cmd, stderr=sp.PIPE, stdout=None) as proc:
+    with sp.Popen(cmd, stderr=sp.PIPE, stdout=sp.DEVNULL) as proc:
         error = proc.communicate()[1].decode()
 
     # error handling for one type of error on stderr
@@ -206,11 +236,19 @@ def run_mapper(
     name_parse: Tuple[str, str] | None,
 ):
     # ------------------------------------------------------------
+    # check reference and outdir paths
+    reference = reference.expanduser().absolute()
+    outdir = outdir.expanduser().absolute()
+    outdir.mkdir(exist_ok=True)
+
     # parse dict of {name: (r1, r2)}
     fastq_dict = get_name_to_fastq_dict(fastqs, name_parse)
 
     # check outdir for existing and raise or remove
-    # ...
+    result_files = [outdir / f"{sname}.sorted.bam" for sname in fastq_dict]
+    if any(i.exists() for i in result_files):
+        if not force:
+            raise IPyradError(f"Bam files exist in outdir: e.g., {result_files[0]}. Use --force to overwrite.")
 
     # index the reference
     index_ref_with_bwa(reference)
@@ -248,19 +286,16 @@ def run_mapper(
 
 
 if __name__ == "__main__":
-
-    PATHS = sorted(Path("/tmp/").glob("test.trimmed.*.gz"))
-    REF = Path("/home/deren/Documents/tools/ipyrad2/examples/LiuLiu-genome/Pcr.genome.1.0.fasta")
-    assert REF.exists()
-    fastq_dict = get_fastq_tuples_dict_from_paths_list(PATHS)
-    fastqs = fastq_dict["test.trimmed.R"]
-    map_filter_sort(
-        "test",
-        fastqs,
-        REF,
-        "/tmp",
-        4,
-    )
-    # max_reads = int(500_000 / len(fastq_dict))
-    # logger.warning(max_reads)
-    # overhangs = find_re_overhangs(fastq_dict, max_reads)
+    pass
+    # PATHS = sorted(Path("/tmp/").glob("test.trimmed.*.gz"))
+    # REF = Path("/home/deren/Documents/tools/ipyrad2/examples/LiuLiu-genome/Pcr.genome.1.0.fasta")
+    # assert REF.exists()
+    # fastq_dict = get_fastq_tuples_dict_from_paths_list(PATHS)
+    # fastqs = fastq_dict["test.trimmed.R"]
+    # map_filter_sort(
+    #     "test",
+    #     fastqs,
+    #     REF,
+    #     "/tmp",
+    #     4,
+    # )
