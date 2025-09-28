@@ -63,6 +63,10 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
         help=("N reads to process between writing to disk. "
         "Larger values = faster, but uses more RAM. [default=1e7]")
     )
+    # tool.add_argument(
+    #     "-k", "--max-reads-kmer", metavar="int", type=intlike, default=500_000,
+    #     help="Maximum number of reads sampled across files to infer REs from kmers. [default=5e5]",
+    # )
     tool.add_argument(
         "-R", "--disable-infer-re-overhangs", action="store_true",
         help="Disable automated inference of restriction overhangs using kmer analysis.",

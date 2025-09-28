@@ -44,7 +44,7 @@ def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = 
         help="Maximum number of low quality bases. [default=5]",
     )
     tool.add_argument(
-        "-m", "--min-trimmed-length", metavar="int", type=int, default=35,
+        "-l", "--min-trimmed-length", metavar="int", type=int, default=35,
         help="Minimum length of retained trimmed reads. [default=35]",
     )
     tool.add_argument(
@@ -85,7 +85,7 @@ def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = 
     )
     tool.add_argument(
         "-f", "--force", action="store_true",
-        help="Overwrite if out dir contains fastq file with identical name.",
+        help="Overwrite .trimmed.fastq.gz files if they exist in outdir. Does not clear outdir.",
     )
     tool.add_argument(
         "-nx", "--name-delim", metavar="str", type=str, default=None,

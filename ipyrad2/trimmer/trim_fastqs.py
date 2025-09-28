@@ -22,6 +22,7 @@ from ..utils.parse_names import get_name_to_fastq_dict
 from ..utils.infer_re_overhang import infer_overhang
 from ..utils.cluster import Cluster
 from ..utils.progress import track_remote_jobs
+from ..utils.exceptions import IPyradError
 
 FASTP_BINARY = Path(sys.prefix) / "bin" / "fastp"
 ADAPTERS = Path(__file__).absolute().parent / "adapters.fa"
@@ -157,6 +158,7 @@ def trim_sample_with_fastp(
 
         # callback sent to logger.info on completion
         print(f"@@DEBUG: CMD: {' '.join(cmd)}", flush=True)
+        print(f"@@INFO: finished trimming {sname}", flush=True)
 
     # parse JSON stats
     with open(stats_json, 'r', encoding="utf-8") as indata:
@@ -181,6 +183,7 @@ def run_trimmer(
     threads: int,
     name_parse: Tuple[str, str] | None,
     umi_tag_in_i5: bool,
+    force: bool,
 ):
     # ------------------------------------------------------------
     # parse dict of {name: (r1, r2)}
@@ -188,7 +191,10 @@ def run_trimmer(
     fastq_dict = get_name_to_fastq_dict(fastqs, name_parse)
 
     # check outdir for existing and raise or remove
-    # ...
+    result_files = [outdir / f"{sname}.R1.trimmed.fastq.gz" for sname in fastq_dict]
+    if any(i.exists() for i in result_files):
+        if not force:
+            raise IPyradError(f"Trimmed fastqs exist in outdir: e.g., {result_files[0]}. Use --force to overwrite.")
 
     # ------------------------------------------------------------
     # infer restriction overhangs by kmer analysis

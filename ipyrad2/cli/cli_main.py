@@ -146,6 +146,7 @@ def command_line():
             threads=args.threads,
             name_parse=None if args.name_delim is None else (args.name_delim, args.name_index),
             umi_tag_in_i5=args.umi_tag_in_i5,
+            force=args.force,
         )
         sys.exit(0)
 

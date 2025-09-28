@@ -12,6 +12,7 @@ from typing import List, Tuple, Dict, Union, Iterable, Optional
 from pathlib import Path
 from collections import defaultdict
 from loguru import logger
+from .utils import IPyradError
 
 __all__ = [
     "get_paths_list_from_fastq_str",
@@ -26,6 +27,7 @@ def get_paths_list_from_fastq_str(fastq_paths: Union[Path, List[Path]]) -> List[
 
     This is used within `get_fastq_tuples_dict_from_paths_list`.
     """
+    logger.warning("3")
     expanded = []
     # ensure paths is a List[Path] but where the Path elements may be
     # regex path names that have not yet been expanded.
@@ -43,15 +45,18 @@ def get_paths_list_from_fastq_str(fastq_paths: Union[Path, List[Path]]) -> List[
 
     # for each Path in paths list expand into a list of Paths
     for path in paths:
+        # raise if path is a dir.
+        logger.warning(f"4 {path}")
+        if path.is_dir():
+            raise IPyradError(f"{path} is a dir. Use regex to select files in the dir (e.g., './path/*.fastq.gz')")
+
         # expand a regex operator to possibly match multiple files
         # such as paired-end files.
         try:
             fastqs = list(path.parent.glob(path.name))
             assert fastqs
         except (ValueError, AssertionError):
-            msg = f"No fastq data match input: {path}"
-            logger.error(msg)
-            raise ValueError(msg)
+            raise IPyradError(f"No fastq data match input: {path}")
         expanded.extend([Path(i).expanduser().resolve() for i in fastqs])
     return expanded
 
@@ -216,6 +221,7 @@ def get_name_to_fastq_dict(
     """Return {name: (Path, Path)} from on or more str path args."""
 
     # parse paths and names-to-path-pairs
+    logger.warning("2")
     paths = get_paths_list_from_fastq_str(fastqs)
     fastq_dict = pair_or_single_by_name_right_trim(paths, delim_index, skip_paired)
 
