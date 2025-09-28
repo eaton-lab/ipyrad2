@@ -68,7 +68,6 @@ def run_assembler(
     # ...
 
     # check bam paths and get names dicts as {name: Path, ...}
-    logger.warning("1")
     bam_dict = get_name_to_fastq_dict(rad_bams, name_parse, skip_paired=True)
     wgs_dict = get_name_to_fastq_dict(wgs_bams, name_parse, skip_paired=True) if wgs_bams else {}
     bam_dict = {i: j[0] for (i, j) in bam_dict.items()}

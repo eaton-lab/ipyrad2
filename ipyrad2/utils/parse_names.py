@@ -27,7 +27,6 @@ def get_paths_list_from_fastq_str(fastq_paths: Union[Path, List[Path]]) -> List[
 
     This is used within `get_fastq_tuples_dict_from_paths_list`.
     """
-    logger.warning("3")
     expanded = []
     # ensure paths is a List[Path] but where the Path elements may be
     # regex path names that have not yet been expanded.
@@ -46,7 +45,6 @@ def get_paths_list_from_fastq_str(fastq_paths: Union[Path, List[Path]]) -> List[
     # for each Path in paths list expand into a list of Paths
     for path in paths:
         # raise if path is a dir.
-        logger.warning(f"4 {path}")
         if path.is_dir():
             raise IPyradError(f"{path} is a dir. Use regex to select files in the dir (e.g., './path/*.fastq.gz')")
 
@@ -221,7 +219,6 @@ def get_name_to_fastq_dict(
     """Return {name: (Path, Path)} from on or more str path args."""
 
     # parse paths and names-to-path-pairs
-    logger.warning("2")
     paths = get_paths_list_from_fastq_str(fastqs)
     fastq_dict = pair_or_single_by_name_right_trim(paths, delim_index, skip_paired)
 
