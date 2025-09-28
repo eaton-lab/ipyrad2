@@ -19,11 +19,25 @@ BIN_BED = str(BIN / "bedtools")
 BIN_BCF = str(BIN / "bcftools")
 
 
+def samtools_index_reference(reference: Path, threads: int) -> None:
+    """Index reference with samtools."""
+    cmd = [BIN_SAM, "faidx", "--threads", str(threads)]
+    _ = sp.run(cmd, capture_output=True, check=True)
+    return
+
+
 def get_reference_sort_order(reference: Path, outdir: Path):
     """Get scaff order from sam indexed REF file.
     """
+    # destination file
     out_path = outdir / "REF_info.txt"
+
+    # write fai file if it doesn't exist
     fai_path = reference.with_suffix(reference.suffix + ".fai")
+    if not fai_path.exists():
+        samtools_index_reference(reference, 4)
+
+    # write REF_info file.
     cmd = ["cut", "-f", "1,2", str(fai_path)]
     with open(out_path, 'wb') as out:
         p = sp.Popen(cmd, stderr=sp.PIPE, stdout=out)

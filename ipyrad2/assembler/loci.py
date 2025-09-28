@@ -36,7 +36,7 @@ def write_sam_faidx(outdir: Path) -> Path:
     return fai_path
 
 
-def get_reference(outdir: Path, reference: Path) -> Path:
+def get_reference_in_loci_beds(outdir: Path, reference: Path) -> Path:
     """Write the reference sequence as a sample to the consensus folder
     for all loci windows.
     """

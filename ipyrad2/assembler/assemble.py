@@ -27,7 +27,7 @@ from .call_variants import (
 )
 from .loci import (
     write_sam_faidx,
-    get_reference,
+    get_reference_in_loci_bed,
     get_consensus,
     get_sample_masked_beds,
     build_locus_fasta_database,
@@ -150,7 +150,7 @@ def run_assembler(
         # ---------------------------------------------------------------
 
         write_sam_faidx(outdir)
-        get_reference(outdir, reference)
+        get_reference_in_loci_bed(outdir, reference)
 
         logger.info("building coverage masks")
         jobs = {}
