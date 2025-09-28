@@ -1,10 +1,10 @@
 
 # ipyrad
-Assemble RAD-seq datasets for evolutionary analysis.
-
+Integrative assembly and analysis of RAD-seq datasets
 
 ## Usage
 ```bash
+# help message for subcommand options
 ipyrad -h
 ```
 
