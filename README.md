@@ -10,15 +10,14 @@ ipyrad -h
 The core command-line arguments:
 ```bash
 # demultiplex reads by barcode/index to sample files
-ipyrad demux -d ... -b ... -o ... -c 10 -t 2
+ipyrad demux -d DATA/*.fastq.gz -b barcodes.tsv -o FASTQs/ -c 10 -t 2
 
-# trim reads demultiplex reads by barcode/index to sample files
-ipyrad trim -d ... -o ... -c 10 -t 2
+# quality, adapter, and restriction overhang trimming
+ipyrad trim -d FASTQs/*fastq.gz -o TRIMMED/ -c 10 -t 2
 
-# map reads to a reference genome to get filtered sorted bams
-ipyrad map -d ... -r ... -o ... -c 10 -t 2
+# map reads to reference genome to get filtered/sorted/marked bams
+ipyrad map -d TRIMMED/*.fastq.gz -r REF.fa -o BAMs/ -c 10 -t 2
 
-# assemble loci
-ipyrad assemble -b ... -r ... -o ... -m 4 -d 5 -c 10 -t 2
+# assemble loci and call variants
+ipyrad assemble -b BAMs/*.bam -r REF.fa -o OUT/ -m 4 -d 5 -c 10 -t 2
 ```
-
