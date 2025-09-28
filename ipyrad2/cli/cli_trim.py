@@ -97,6 +97,10 @@ def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = 
         "'ni'-th occurrence of substring 'nx', if valid. [default=1]",
     )
     tool.add_argument(
+        "-u", "--umi-tag-in-i5", action="store_true",
+        help="Move i5 indices into read names for marking PCR duplicates. *Only use if i5s contain UMIs.*",
+    )
+    tool.add_argument(
         "--logger", type=str, nargs="*",
         help=(
             "Logging info entered as one value for LOGLEVEL, or two values "

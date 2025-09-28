@@ -6,11 +6,12 @@
 import sys
 import argparse
 from .make_wide import make_wide
-# from .cli_demux import _setup_demux_subparser
+from .cli_demux import _setup_demux_subparser
 from .cli_trim import _setup_trim_subparser
 from .cli_map import _setup_map_subparser
 from .cli_assemble import _setup_assemble_subparser
 from .cli_wex import _setup_wex_subparser
+from ..demuxer import run_demuxer
 from ..trimmer import run_trimmer
 from ..mapper import run_mapper
 from ..assembler import run_assembler
@@ -18,8 +19,6 @@ from ..analysis.window_extracter import run_window_extracter
 from ..utils.logger import set_log_level
 from loguru import logger
 import ipyrad2 as ip
-
-logger = logger.bind(name="ipyrad")
 
 VERSION = str(ip.__version__)
 
@@ -66,7 +65,7 @@ def setup_parsers() -> argparse.ArgumentParser:
     subparser = parser.add_subparsers(help="sub-commands", dest="subcommand")
 
     # add subcommands
-    # _setup_demux_subparser(subparser, f"{HEADER}\nipyrad demux: demultiplex reads by index/barcode")
+    _setup_demux_subparser(subparser, f"{HEADER}\nipyrad demux: demultiplex pooled reads to sample files by index/barcode")
     _setup_trim_subparser(subparser, f"{HEADER}\nipyrad trim: trim for quality, adapters, and restriction overhangs")
     _setup_map_subparser(subparser, f"{HEADER}\nipyrad map: reference map, filter, and sort reads to bam files")
     _setup_assemble_subparser(subparser, f"{HEADER}\nipyrad assemble: delimit loci, call variants, and write outputs")
@@ -79,6 +78,7 @@ def main():
         command_line()
     except Exception as exc:
         logger.error(exc)
+        # sys.exit(1)
         raise
 
 
@@ -86,7 +86,7 @@ def command_line():
     parser = setup_parsers()
     args = parser.parse_args()
 
-    # set logging --------------------------------------------------
+    # LOGGING: -----------------------------------------------------
     if hasattr(args, "logger") and args.logger:
         if len(args.logger) > 1:
             set_log_level(args.logger[0], args.logger[1])
@@ -95,24 +95,23 @@ def command_line():
     else:
         set_log_level("INFO")
 
-    # DEMUX: demultiplexing job ------------------------------------
+    # DEMUX: -------------------------------------------------------
     if args.subcommand == "demux":
-        pass
-        # from ipyrad.demux.demux import Demux
-        # Demux(
-        #     fastq_paths=args.d,
-        #     barcodes_path=args.b,
-        #     outpath=args.o,
-        #     re1=args.re1,
-        #     re2=args.re2,
-        #     cores=args.c,
-        #     max_barcode_mismatch=args.m,
-        #     merge_technical_replicates=args.merge_technical_replicates,
-        #     chunksize=args.chunksize,
-        #     i7=args.i7,
-        # ).run()
+        logger.warning(vars(args))
+        run_demuxer(
+            fastqs=args.fastqs,
+            outdir=args.out,
+            barcodes=args.barcodes,
+            re1=args.restriction_overhang_1,
+            re2=args.restriction_overhang_2,
+            max_mismatch=args.max_mismatch,
+            chunksize=args.chunksize,
+            i7=args.i7,
+            disable_infer_re_overhangs=args.disable_infer_re_overhangs,
+            cores=args.cores,
+        )
 
-    # TRIM: ---------------------------------------------
+    # TRIM: -------------------------------------------------------
     if args.subcommand == "trim":
         logger.info("----- ipyrad trim: quality, adapter, and RE trimming -----")
         logger.info(f"CMD: ipyrad {' '.join(sys.argv[1:])}")
@@ -135,7 +134,7 @@ def command_line():
         )
         sys.exit(0)
 
-    # MAP: ---------------------------------------------
+    # MAP: --------------------------------------------------------
     if args.subcommand == "map":
         logger.info("----- ipyrad map: map, filter and sort reads to bams -----")
         logger.info(f"CMD: ipyrad {' '.join(sys.argv[1:])}")
@@ -150,7 +149,7 @@ def command_line():
         )
         sys.exit(0)
 
-    # ASSEMBLE: run assembly steps from json file ---------------------
+    # ASSEMBLE: ---------------------------------------------------
     if args.subcommand == "assemble":
         logger.info("----- ipyrad assemble: delimit loci and call variants -----")
         logger.info(f"CMD: ipyrad {' '.join(sys.argv[1:])}")
@@ -179,7 +178,7 @@ def command_line():
         )
         sys.exit(0)
 
-    # WEX: extract supermatrices
+    # WEX: --------------------------------------------------------
     if args.subcommand == "wex":
         logger.info("----- ipyrad assemble: extract supermatrix alignments -----")
         logger.info(f"CMD: ipyrad {' '.join(sys.argv[1:])}")

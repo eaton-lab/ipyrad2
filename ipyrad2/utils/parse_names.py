@@ -163,15 +163,14 @@ def pair_or_single_by_name_right_trim(
         # B) strip all suffixes
         b_strip = bucket_by_full_suffix_strip()
         if perfect_pairs(b_strip):
-            logger.debug("successfully paired samples")
+            logger.debug("successfully paired samples by suffix stripping")
             return to_pairs(b_strip)
 
         # C) right-trim (longest cut first)
-        # for cut in range(max_len, 0, -1):
-        for cut in range(0, max_len):
+        for cut in range(1, max_len + 1):
             b = bucket_by_cut(cut)
             if perfect_pairs(b):
-                logger.debug("successfully paired samples")
+                logger.debug("successfully paired samples by character stripping")
                 return to_pairs(b)
         logger.debug("pairing files by auto-detection failed, assuming data are R1 only")
 
@@ -221,7 +220,7 @@ def get_name_to_fastq_dict(
     fastq_dict = pair_or_single_by_name_right_trim(paths, delim_index, skip_paired)
 
     # log to user
-    logger.info("sample names parsed from file paths")
+    logger.info("names parsed from file paths")
     max_len = max(len(i) for i in fastq_dict)
     for key, val in fastq_dict.items():
         key_padded = key + " " * (max_len - len(key))
