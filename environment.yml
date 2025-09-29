@@ -5,14 +5,14 @@ channels:
   - bioconda
 dependencies:
   - python>=3.8
-  - ipython
   - loguru
-  - h5py
-  - toytree >=3.0.1
   - numba
-  - ipyparallel >= 8.0
+  - numpy
+  - pandas
+  - h5py
   - samtools
   - bedtools
   - bcftools
   - fastp
   - bwa-mem2
+  # - toytree >=3.0.1

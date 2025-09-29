@@ -9,12 +9,10 @@ requires-python = ">= 3.8"
 license = { file = "LICENSE.txt" }
 dependencies = [
     "loguru",
-    "h5py",
     "numba",
     "numpy",
-    "scipy",
     "pandas",
-    "ipyparallel >= 8.0",
+    "h5py",
 ]
 description = "Interactive assembly and analysis of RAD-seq data sets"
 readme = {file = "README.md", content-type = "text/markdown"}
