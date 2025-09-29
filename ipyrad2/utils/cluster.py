@@ -22,8 +22,6 @@ import ipyparallel
 
 # pylint: disable=invalid-name, abstract-method
 
-logger = logger.bind(name="ipyrad")
-
 
 class Cluster(ipyparallel.cluster.cluster.Cluster):
     """Custom superclass of ipyparallel cluster.
@@ -66,7 +64,7 @@ class Cluster(ipyparallel.cluster.cluster.Cluster):
     def __enter__(self):
         """Starts a new cluster and connects a client."""
         # log engine starter to info
-        logger.bind(name=self.logger_name, end="").info("Establishing parallel ipcluster: ")
+        logger.bind(end="").info("Establishing parallel ipcluster: ")
 
         # start cluster and wait for n engines to start
         self.start_cluster_sync(n=self.n)
@@ -74,7 +72,7 @@ class Cluster(ipyparallel.cluster.cluster.Cluster):
         client.wait_for_engines(n=self.n, block=True, interactive=False)
 
         # log engines started to same line of info
-        logger.bind(name=self.logger_name).opt(raw=True).info(f"{len(client)} engines\n")
+        logger.opt(raw=True).info(f"{len(client)} engines\n")
 
         # store client and start to log runtime at stoppage and close connection.
         self._context_client = client
@@ -100,11 +98,10 @@ class Cluster(ipyparallel.cluster.cluster.Cluster):
         # log runtime to info
         elapsed = int(time.time() - self._client_start_time)
         elapsed = str(timedelta(seconds=elapsed))
-        logger.bind(name=self.logger_name).info(
-            f"ipcluster stopped. Elapsed time: {elapsed}")
+        logger.info(f"ipcluster stopped. Elapsed time: {elapsed}")
 
         # raise traceback for any exceptions that occurred
-        log_traceback(*args)
+        # log_traceback(*args)
 
 
 def log_traceback(exc_type, exc_value, exc_traceback):

@@ -354,7 +354,6 @@ class WindowExtracter:
         # write stats
         self._write_stats(fnames, fseqarr, outfile)
 
-
     def _write_stats(self, fnames, fseqarr, outfile):
         """Write stats for the extracted windows."""
         stats_file = self.outdir / f"{self.name}.stats.tsv"

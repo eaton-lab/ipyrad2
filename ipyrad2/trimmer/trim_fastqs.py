@@ -20,9 +20,11 @@ import subprocess as sp
 from loguru import logger
 from ..utils.parse_names import get_name_to_fastq_dict
 from ..utils.infer_re_overhang import infer_overhang
-from ..utils.cluster import Cluster
-from ..utils.progress import track_remote_jobs
+# from ..utils.cluster import Cluster
+# from ..utils.progress import track_remote_jobs
 from ..utils.exceptions import IPyradError
+from ..utils.parallel import run_with_pool
+
 
 FASTP_BINARY = Path(sys.prefix) / "bin" / "fastp"
 ADAPTERS = Path(__file__).absolute().parent / "adapters.fa"
@@ -214,34 +216,51 @@ def run_trimmer(
     logger.info(f"using restriction site overhangs: {re1} {re2}")
 
     # ------------------------------------------------------------
-    #
-    with Cluster(cores) as ipyclient:
-        thview = ipyclient.load_balanced_view(ipyclient.ids[::threads])
-        jobs = {}
-        logger.info(f"trimming/filtering {len(fastq_dict)} inputs to {outdir}")
-        for sname, fastq_tuple in fastq_dict.items():
-            kwargs = dict(
-                fastqs=fastq_tuple,
-                sname=sname,
-                outdir=outdir,
-                restriction_overhangs=(re1, re2),
-                max_reads=max_reads,
-                min_trimmed_length=min_trimmed_length,
-                min_quality=min_quality,
-                max_low_quality_bases=max_low_quality_bases,
-                phred_qscore_offset=phred_qscore_offset,
-                disable_adapter_trimming=disable_adapter_trimming,
-                disable_quality_filtering=disable_quality_filtering,
-                umi_tag_in_i5=umi_tag_in_i5,
-                threads=max(1, threads - 2),  # uses 2 I/O threads + requested threads
-            )
-            jobs[sname] = thview.apply(trim_sample_with_fastp, **kwargs)
-        results = track_remote_jobs(jobs, ipyclient)
+    jobs = {}
+    logger.info(f"trimming/filtering {len(fastq_dict)} inputs to trimmed fastqs in {outdir}")
+    logger.info(f"running up to {cores} parallel jobs each using up to {threads} threads")
+    for sname, fastq_tuple in fastq_dict.items():
+        kwargs = dict(
+            fastqs=fastq_tuple,
+            sname=sname,
+            outdir=outdir,
+            restriction_overhangs=(re1, re2),
+            max_reads=max_reads,
+            min_trimmed_length=min_trimmed_length,
+            min_quality=min_quality,
+            max_low_quality_bases=max_low_quality_bases,
+            phred_qscore_offset=phred_qscore_offset,
+            disable_adapter_trimming=disable_adapter_trimming,
+            disable_quality_filtering=disable_quality_filtering,
+            umi_tag_in_i5=umi_tag_in_i5,
+            threads=max(1, threads - 2),  # uses 2 I/O threads + requested threads
+        )
+        jobs[sname] = kwargs
+    _ = run_with_pool(trim_sample_with_fastp, jobs, cores)
 
-        # write stats
-        results
-
-
+    # #
+    # with Cluster(cores) as ipyclient:
+    #     thview = ipyclient.load_balanced_view(ipyclient.ids[::threads])
+    #     jobs = {}
+    #     logger.info(f"trimming/filtering {len(fastq_dict)} inputs to {outdir}")
+    #     for sname, fastq_tuple in fastq_dict.items():
+    #         kwargs = dict(
+    #             fastqs=fastq_tuple,
+    #             sname=sname,
+    #             outdir=outdir,
+    #             restriction_overhangs=(re1, re2),
+    #             max_reads=max_reads,
+    #             min_trimmed_length=min_trimmed_length,
+    #             min_quality=min_quality,
+    #             max_low_quality_bases=max_low_quality_bases,
+    #             phred_qscore_offset=phred_qscore_offset,
+    #             disable_adapter_trimming=disable_adapter_trimming,
+    #             disable_quality_filtering=disable_quality_filtering,
+    #             umi_tag_in_i5=umi_tag_in_i5,
+    #             threads=max(1, threads - 2),  # uses 2 I/O threads + requested threads
+    #         )
+    #         jobs[sname] = thview.apply(trim_sample_with_fastp, **kwargs)
+    #     results = track_remote_jobs(jobs, ipyclient)
 
 
 if __name__ == "__main__":

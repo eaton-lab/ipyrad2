@@ -97,13 +97,7 @@ def command_line():
     args = parser.parse_args()
 
     # LOGGING: -----------------------------------------------------
-    if hasattr(args, "logger") and args.logger:
-        if len(args.logger) > 1:
-            set_log_level(args.logger[0], args.logger[1])
-        else:
-            set_log_level(args.logger[0])
-    else:
-        set_log_level("INFO")
+    set_log_level(args.log_level, args.log_file)
 
     # DEMUX: -------------------------------------------------------
     if args.subcommand == "demux":
@@ -162,6 +156,8 @@ def command_line():
             threads=args.threads,
             force=args.force,
             name_parse=None if args.name_delim is None else (args.name_delim, args.name_index),
+            umi_tag_in_i5=args.umi_tag_in_i5,
+            mark_duplicates=args.mark_duplicates,
         )
         sys.exit(0)
 

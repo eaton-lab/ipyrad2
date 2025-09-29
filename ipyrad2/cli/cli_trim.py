@@ -44,11 +44,11 @@ def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = 
         help="Maximum number of low quality bases. [default=5]",
     )
     tool.add_argument(
-        "-l", "--min-trimmed-length", metavar="int", type=int, default=35,
+        "-m", "--min-trimmed-length", metavar="int", type=int, default=35,
         help="Minimum length of retained trimmed reads. [default=35]",
     )
     tool.add_argument(
-        "-x", "--max-reads", metavar="int", type=intlike, default=35,
+        "-x", "--max-reads", metavar="int", type=intlike, default=None,
         help="Maximum number of reads per file (useful for testing or to normalize inputs). [default=None]"
     )
     tool.add_argument(
@@ -89,20 +89,26 @@ def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = 
     )
     tool.add_argument(
         "-nx", "--name-delim", metavar="str", type=str, default=None,
-        help="Set delim substring 'nx' to override auto name parsing from files. [default=None]"
+        help="Set name delim substring 'nx' to override auto name parsing from files. [default=None]"
     )
     tool.add_argument(
         "-ni", "--name-index", metavar="int", type=int, default=1,
-        help="Set delim index to split file names to keep substring left of the "
-        "'ni'-th occurrence of substring 'nx', if valid. [default=1]",
+        help="Set name delim index to keep substring left of the 'ni'-th substring 'nx', if valid [default=1]",
     )
     tool.add_argument(
         "-u", "--umi-tag-in-i5", action="store_true",
-        help="Move i5 indices into read names for marking PCR duplicates. *Only use if i5s contain UMIs.*",
+        help="Move i5 index into read name. Use if i5 contains UMIs for marking PCR duplicates.",
+    )
+    # tool.add_argument(
+    #     "--logger", type=str, nargs="*",
+    #     help=("Logging info entered as one value for LOGLEVEL, or two values "
+    #         "for LOGLEVEL LOGFILE; e.g., 'DEBUG' or 'DEBUG ipyrad.txt.'")
+    # )
+    tool.add_argument(
+        "-l", "--log-level", metavar="str", type=str, default="INFO",
+        help="Log level (DEBUG, INFO, WARN, ERROR) [default=INFO]",
     )
     tool.add_argument(
-        "--logger", type=str, nargs="*",
-        help=(
-            "Logging info entered as one value for LOGLEVEL, or two values "
-            "for LOGLEVEL LOGFILE; e.g., 'DEBUG' or 'DEBUG ipyrad.txt.'")
+        "-L", "--log-file", metavar="Path", type=Path,
+        help="Log file. Logging to stdout is also appended to this file. [default=None]."
     )
