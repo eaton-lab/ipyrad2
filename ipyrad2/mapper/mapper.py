@@ -16,8 +16,6 @@ import subprocess as sp
 from loguru import logger
 from ..utils.exceptions import IPyradError
 from ..utils.parse_names import get_name_to_fastq_dict
-# from ..utils.cluster import Cluster
-# from ..utils.progress import track_remote_jobs
 from ..utils.parallel import run_pipeline, run_with_pool
 
 
@@ -44,11 +42,8 @@ LOG_CMD3 = ("bwa-mem2 mem REF R1 R2 "
            "| samtools view -b -f 0x2 -q 20")
 
 
-def map_filter_sort_dedup(sname: str, fastqs: Tuple[Path, Path], reference: Path, outdir: Path, umi_tag_in_i5: bool, threads: int) -> Path:
+def map_filter_sort_mark(sname: str, fastqs: Tuple[Path, Path], reference: Path, outdir: Path, umi_tag_in_i5: bool, threads: int) -> Path:
     """Map reads to the reference to get a sorted bam.
-
-    TODO: test
-    TODO: test r1 only
     """
     if not reference.exists():
         raise IPyradError(f"reference_sequence not found: {reference}")
@@ -74,7 +69,7 @@ def map_filter_sort_dedup(sname: str, fastqs: Tuple[Path, Path], reference: Path
     mid_threads = max(1, int(nthreads / 2))
 
     # mapping command
-    bwa_cmd = [
+    cmd1 = [
         BIN_BWA, "mem",
         "-t", str(bwa_threads),
         "-v", "1",                # less verbose.
@@ -86,10 +81,10 @@ def map_filter_sort_dedup(sname: str, fastqs: Tuple[Path, Path], reference: Path
         str(r1),
     ]
     if r2:
-        bwa_cmd.append(str(r2))
+        cmd1.append(str(r2))
 
     # drop unmapped + seconday + supplementary; require proper pair only if paired
-    view_1_cmd = [
+    cmd2 = [
         BIN_SAMTOOLS, "view",
         "-b", "-u",         # stream uncompressed bam
         "-F", "0x900",      # exclude secondary and supplemental.
@@ -98,7 +93,7 @@ def map_filter_sort_dedup(sname: str, fastqs: Tuple[Path, Path], reference: Path
     ]
 
     # [optional] sort by name for fixmate and marking dups
-    sort_n_cmd = [
+    cmd3 = [
         BIN_SAMTOOLS, "sort",
         "-n",
         "-@", str(mid_threads),
@@ -108,7 +103,7 @@ def map_filter_sort_dedup(sname: str, fastqs: Tuple[Path, Path], reference: Path
     ]
 
     # [optional] fixmate checks and updates tags about pairing
-    fixmate_cmd = [
+    cmd4 = [
         BIN_SAMTOOLS, "fixmate",
         "-m",
         "-", "-",
@@ -116,7 +111,7 @@ def map_filter_sort_dedup(sname: str, fastqs: Tuple[Path, Path], reference: Path
     ]
 
     # coordinate sort command
-    sort_c_cmd = [
+    cmd5 = [
         BIN_SAMTOOLS, "sort",
         "-m", "50M",                # tune per-thread memory
         "-T", str(tmp_prefix),
@@ -126,16 +121,16 @@ def map_filter_sort_dedup(sname: str, fastqs: Tuple[Path, Path], reference: Path
     ]
 
     # mark dups in coordinate sorted fixmate bams
-    markdup_cmd = [
+    cmd6 = [
         BIN_SAMTOOLS, "markdup",
         "-@", str(mid_threads),
         "-", "-",
     ]
     if umi_tag_in_i5:
-        markdup_cmd.extend(["--barcode-rgx", "UMI_([ACGTN]+)"])
+        cmd6.extend(["--barcode-rgx", "UMI_([ACGTN]+)"])
 
     # final view
-    view_2_cmd = [
+    cmd7 = [
         BIN_SAMTOOLS, "view",
         "-b",
         "-f", "0x2",              # filter improperly paired
@@ -144,17 +139,13 @@ def map_filter_sort_dedup(sname: str, fastqs: Tuple[Path, Path], reference: Path
         "-o", str(tmp_bam),
     ]
 
-    cmds = [bwa_cmd, view_1_cmd, sort_n_cmd, fixmate_cmd, sort_c_cmd, view_2_cmd]
+    cmds = [cmd1, cmd2, cmd3, cmd4, cmd5, cmd6, cmd7]
     run_pipeline(cmds, tmp_bam)
     os.replace(tmp_bam, out_bam)
 
     # CSI index bam file
     cmd = [BIN_SAMTOOLS, "index", "-c", "--threads", str(threads), str(out_bam)]
-    res = sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.PIPE)
-    if res.returncode:
-        raise IPyradError(f"samtools index failed ({res.returncode}).\n{res.stderr.decode(errors='ignore')}")
-    # print(f"@@INFO: finished mapping/writing BAM data for {sname}")
-    # logger.debug(f"finished mapping/writing BAM data for {sname}")
+    run_pipeline([cmd])
     return out_bam
 
 
@@ -183,7 +174,7 @@ def map_filter_sort(sname: str, fastqs: Tuple[Path, Path], reference: Path, outd
     bwa_threads = max(1, nthreads - 1)
 
     # mapping command
-    bwa_cmd = [
+    cmd1 = [
         BIN_BWA, "mem",
         "-t", str(bwa_threads),
         "-v", "1",                # less verbose.
@@ -195,10 +186,10 @@ def map_filter_sort(sname: str, fastqs: Tuple[Path, Path], reference: Path, outd
         str(r1),
     ]
     if r2:
-        bwa_cmd.append(str(r2))
+        cmd1.append(str(r2))
 
     # drop unmapped + seconday + supplementary; require proper pair only if paired
-    view_cmd = [
+    cmd2 = [
         BIN_SAMTOOLS, "view",
         "-b", "-u",         # stream uncompressed bam
         # "-F", "0x400",    # exclude optical/dups if marked (nb: bcftools already ignores reads that are marked.)
@@ -208,7 +199,7 @@ def map_filter_sort(sname: str, fastqs: Tuple[Path, Path], reference: Path, outd
     ] + (["-f", "0x2"] if paired else [])
 
     # coordinate sorted command
-    sort_cmd = [
+    cmd3 = [
         BIN_SAMTOOLS, "sort",
         "-m", "100M",                # tune per-thread memory
         "-T", str(tmp_prefix),
@@ -216,38 +207,12 @@ def map_filter_sort(sname: str, fastqs: Tuple[Path, Path], reference: Path, outd
         "-o", str(tmp_bam),
         "-@", "1",
     ]
-
-    print(f"@@DEBUG: cmd: {' '.join(map(str, bwa_cmd))}")
-    print(f"@@DEBUG: cmd: {' '.join(map(str, view_cmd))}")
-    print(f"@@DEBUG: cmd: {' '.join(map(str, sort_cmd))}")
-
-    # Run pipeline and check *all* return codes with real stderr captured
-    with sp.Popen(bwa_cmd, stdout=sp.PIPE, stderr=sp.PIPE) as p1:
-        with sp.Popen(view_cmd, stdin=p1.stdout, stdout=sp.PIPE, stderr=sp.PIPE) as p2:
-            p1.stdout.close()
-            with sp.Popen(sort_cmd, stdin=p2.stdout, stdout=sp.DEVNULL, stderr=sp.PIPE) as p3:
-                p2.stdout.close()
-                _, err3 = p3.communicate()
-            _, err2 = p2.communicate()
-        _, err1 = p1.communicate()
-
-    # Check in reverse order to surface the first failing stage
-    if p3.returncode:
-        raise IPyradError(f"samtools sort failed ({p3.returncode}).\n{err3.decode(errors='ignore')}")
-    if p2.returncode:
-        raise IPyradError(f"samtools view failed ({p2.returncode}).\n{err2.decode(errors='ignore')}")
-    if p1.returncode:
-        raise IPyradError(f"bwa mem failed ({p1.returncode}).\n{err1.decode(errors='ignore')}")
-
-    # Atomic move
+    run_pipeline([cmd1, cmd2, cmd3])
     os.replace(tmp_bam, out_bam)
 
     # CSI index bam file
-    cmd = [BIN_SAMTOOLS, "index", "-c", "--threads", str(threads), str(out_bam)]
-    res = sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.PIPE)
-    if res.returncode:
-        raise IPyradError(f"samtools index failed ({res.returncode}).\n{res.stderr.decode(errors='ignore')}")
-    # print(f"@@INFO: finished mapping/writing BAM data for {sname}")
+    cmd1 = [BIN_SAMTOOLS, "index", "-c", "--threads", str(threads), str(out_bam)]
+    run_pipeline([cmd1])
     return out_bam
 
 
@@ -366,7 +331,10 @@ def run_mapper(
             threads=max(1, threads),
         )
         jobs[sname] = kwargs
-    bam_dict = run_with_pool(map_filter_sort_dedup, jobs, cores)
+    if mark_duplicates:
+        bam_dict = run_with_pool(map_filter_sort_mark, jobs, cores)
+    else:
+        bam_dict = run_with_pool(map_filter_sort, jobs, cores)
 
     # get bam file stats and write to a file
     jobs = {}
@@ -381,44 +349,6 @@ def run_mapper(
         for key in sorted(stats):
             out.write(f"{key}\t{stats[key]}\n")
         logger.info(f"mapping stats written to {handle}")
-    # # ------------------------------------------------------------
-    # with Cluster(cores) as ipyclient:
-    #     lbview = ipyclient.load_balanced_view()
-    #     thview = ipyclient.load_balanced_view(ipyclient.ids[::threads])
-    #     jobs = {}
-
-    #     if mark_duplicates:
-    #         logger.info(f"mapping/filtering/sorting {len(fastq_dict)} inputs to {outdir}")
-    #     else:
-    #         logger.info("...")
-
-    #     # run map, filter, sort
-    #     for sname, fastq_tuple in fastq_dict.items():
-    #         kwargs = dict(
-    #             fastqs=fastq_tuple,
-    #             sname=sname,
-    #             outdir=outdir,
-    #             reference=reference,
-    #             umi_tag_in_i5=umi_tag_in_i5,
-    #             threads=max(1, threads),
-    #         )
-    #         if mark_duplicates:
-    #             jobs[sname] = thview.apply(map_filter_sort_dedup, **kwargs)
-    #         else:
-    #             jobs[sname] = thview.apply(map_filter_sort, **kwargs)
-    #     bam_dict = track_remote_jobs(jobs, ipyclient)
-
-    #     # get bam file stats and write to a file
-    #     jobs = {}
-    #     for sname in bam_dict:
-    #         jobs[sname] = lbview.apply(count_mapped_reads, bam_dict[sname])
-    #     stats = track_remote_jobs(jobs, ipyclient)
-    #     handle = outdir / "ipyrad_map_stats.txt"
-    #     with open(handle, 'w') as out:
-    #         out.write("sample\tnreads_mapped\n")
-    #         for key in sorted(stats):
-    #             out.write(f"{key}\t{stats[key]}\n")
-    #     logger.info(f"mapping stats written to {handle}")
 
 
 if __name__ == "__main__":

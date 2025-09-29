@@ -77,9 +77,9 @@ def get_locus_and_snp_stats_in_loci_bed(outdir: Path, threads: int = 4):
 
     # get the number of loci beds
     cmd1 = ["wc", "-l", str(loci_bed)]
-    p1 = sp.Popen(cmd1, stdout=sp.PIPE)
+    _, out_nloci, _ = run_pipeline([cmd1])
 
-    # get the number of snps
+    # get the number of snps in the filtered VCF
     cmd2 = [
         BIN_BCF, "view",
         "-f", "PASS",
@@ -89,10 +89,9 @@ def get_locus_and_snp_stats_in_loci_bed(outdir: Path, threads: int = 4):
         str(vcf),
     ]
     cmd3 = ["wc", "-l"]
-    p2 = sp.Popen(cmd2, stdout=sp.PIPE, stderr=sp.DEVNULL)
-    p3 = sp.Popen(cmd3, stdin=p2.stdout, stdout=sp.PIPE, stderr=sp.PIPE)
+    _, out_nsnps, _ = run_pipeline([cmd2, cmd3])
 
-    # get the number of indels
+    # get the number of indels in the filtered VCF
     cmd4 = [
         BIN_BCF, "view",
         "-f", "PASS",
@@ -102,10 +101,9 @@ def get_locus_and_snp_stats_in_loci_bed(outdir: Path, threads: int = 4):
         str(vcf),
     ]
     cmd5 = ["wc", "-l"]
-    p4 = sp.Popen(cmd4, stdout=sp.PIPE, stderr=sp.DEVNULL)
-    p5 = sp.Popen(cmd5, stdin=p4.stdout, stdout=sp.PIPE, stderr=sp.PIPE)
+    _, out_nindels, _ = run_pipeline([cmd4, cmd5])
 
-    # get the number of raw variants
+    # get the number of snps+indels in pre-filterd VCF
     cmd6 = [
         BIN_BCF, "view",
         "-H",
@@ -114,34 +112,14 @@ def get_locus_and_snp_stats_in_loci_bed(outdir: Path, threads: int = 4):
         str(raw_vcf),
     ]
     cmd7 = ["wc", "-l"]
-    p6 = sp.Popen(cmd6, stdout=sp.PIPE, stderr=sp.DEVNULL)
-    p7 = sp.Popen(cmd7, stdin=p6.stdout, stdout=sp.PIPE, stderr=sp.PIPE)
+    _, out_nraw, _ = run_pipeline([cmd6, cmd7])
 
-    # parse result nloci
-    out, _ = p1.communicate()
-    nloci = int(out.decode().strip().split()[0])
-    if not nloci:
-        raise RuntimeError("No locus beds passed filtering. Considering lowering the min sample coverage.")
-
-    # parse nsnps
-    out, err = p3.communicate()
-    if p2.returncode:
-        raise RuntimeError(f"Error in {cmd1}: {err.decode()}")
-    nsnps = int(out.decode())
-
-    # parse indels
-    out, err = p5.communicate()
-    if p2.returncode:
-        raise RuntimeError(f"Error in {cmd1}: {err.decode()}")
-    nindels = int(out.decode())
-
-    # parse raw variants
-    out, err = p7.communicate()
-    if p2.returncode:
-        raise RuntimeError(f"Error in {cmd1}: {err.decode()}")
-    nvariants_raw = int(out.decode())
-
-    return {"nloci": nloci, "nvariants": nsnps + nindels, "nsnps": nsnps, "nindels": nindels, "nvariants_raw": nvariants_raw}
+    # convert to ints
+    nloci = int(out_nloci.decode().strip().split()[0])
+    nsnps = int(out_nsnps.decode().strip().split()[0])
+    nindels = int(out_nindels.decode().strip().split()[0])
+    nraw = int(out_nraw.decode().strip().split()[0])
+    return {"nloci": nloci, "nvariants": nsnps + nindels, "nsnps": nsnps, "nindels": nindels, "nvariants_raw": nraw}
 
 
 def get_chunked_loci_beds(outdir: Path, nchunks: int) -> List[Path]:
@@ -470,6 +448,9 @@ def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) ->
     if  indel_beds.stat().st_size == 0:
         logger.warning("no indels found, skipping indel resolving.")
         os.replace(vcf_dir / "snps.vcf.gz", out_vcf_gz)
+
+        cmdx = [BIN_BCF, "index", "-c", out_vcf_gz]
+        run_pipeline([cmdx])
         return out_vcf_gz
 
     # ----------------------------------------------------------

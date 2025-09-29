@@ -9,9 +9,8 @@ from pathlib import Path
 from loguru import logger
 from ..utils.parse_names import get_name_to_fastq_dict
 from ..utils.parallel import run_with_pool
-# from ..utils.cluster import Cluster
-# from ..utils.progress import track_remote_jobs
-from .delim_beds import (
+from ..utils.exceptions import IPyradError
+from .beds import (
     get_reference_sort_order,
     get_fragment_beds,
     get_fragment_coverage_beds,
@@ -19,7 +18,7 @@ from .delim_beds import (
     get_across_sample_loci_bed,
     get_sample_coverage_stats_in_loci_bed,
 )
-from .call_variants import (
+from .variants import (
     get_chunked_loci_beds,
     get_group_called_variants_in_vcf_chunks,
     get_concat_chunk_vcfs,
@@ -67,7 +66,12 @@ def run_assembler(
     outdir.mkdir(exist_ok=True)
 
     # check outdir for existing and raise or remove
-    # ...
+    if (outdir / f"{name}.loci.txt").exists():
+        if not force:
+            raise IPyradError(f"outfiles with prefix {name} already exist in {outdir}. Use --force to overwrite.")
+        else:
+            # collect relevant files and rm
+            pass
 
     # check bam paths and get names dicts as {name: Path, ...}
     bam_dict = get_name_to_fastq_dict(rad_bams, name_parse, skip_paired=True)
@@ -77,7 +81,7 @@ def run_assembler(
     all_dict = wgs_dict | bam_dict
 
     # ---------------------------------------------
-    logger.debug("... jobs ... threads")
+    logger.info(f"running up to {cores} parallel jobs each using up to {threads} threads")
     logger.debug("fetching reference scaffold order")
     get_reference_sort_order(reference, outdir)
 
@@ -115,6 +119,8 @@ def run_assembler(
     for sname, bam_file in all_dict.items():
         jobs[sname] = dict(bam_file=bam_file, outdir=outdir)
     results = run_with_pool(get_sample_coverage_stats_in_loci_bed, jobs, cores)
+    per_sample_locus_bed_coverage_stats = results
+    # logger.warning(per_sample_locus_bed_coverage_stats)
 
     logger.info("calling variants in locus beds")
     nchunks = max(4, int(cores / threads))
@@ -126,8 +132,6 @@ def run_assembler(
     results = run_with_pool(get_group_called_variants_in_vcf_chunks, jobs, cores)
     get_concat_chunk_vcfs(outdir, threads)
 
-    sys.exit(0)
-
     logger.info("filtering variants")
     get_filtered_vcf(outdir, min_sample_depth, min_gq, min_qual, max(4, threads))
 
@@ -136,129 +140,63 @@ def run_assembler(
 
     # optional: maybe wait til after locus filtering...
     stats = get_locus_and_snp_stats_in_loci_bed(outdir, max(4, threads))
-    print(stats)
+    logger.warning(stats)
 
+    logger.info("extracting reference sequence in locus beds")
+    write_sam_faidx(outdir)
+    get_reference_in_loci_beds(outdir, reference)
 
-    with Cluster(cores) as ipyclient:
-        # lbview = ipyclient.load_balanced_view()
-        thview = ipyclient.load_balanced_view(ipyclient.ids[::threads])
-        jobs = {}
-        logger.info(f"delimiting loci, calling variants, writing to {outdir}/")
+    logger.info("building coverage masks")
+    jobs = {}
+    for sname, bam_file in all_dict.items():
+        kwargs = dict(sname=sname, bam_file=bam_file, min_sample_depth=min_sample_depth, outdir=outdir)
+        jobs[sname] = kwargs
+    results = run_with_pool(get_sample_masked_beds, jobs, cores)
 
-        # ...
-        logger.debug("fetching reference scaffold order")
-        get_reference_sort_order(reference, outdir)
+    logger.info("extracting consensus sequences")
+    jobs = {}
+    for sname, bam_file in all_dict.items():
+        kwargs = dict(sname=sname, reference=reference, outdir=outdir, keep_insertions=False)
+        jobs[sname] = kwargs
+    results = run_with_pool(get_consensus, jobs, cores)
 
-        # ...
-        logger.info("delimiting sample coverage beds")
-        for sname, bam_file in bam_dict.items():
-            args = (sname, bam_file, outdir)
-            func = get_fragment_beds
-            jobs[sname] = thview.apply(func, *args)
-        results = track_remote_jobs(jobs, ipyclient)
+    logger.info("assembling loci")
+    logger.warning(list(all_dict))
+    build_locus_fasta_database(
+        name,
+        list(all_dict),
+        reference,
+        outdir,
+        exclude_reference,
+        masks,
+    )
 
-        # ...
-        for sname, bam_file in bam_dict.items():
-            args = (sname, reference, outdir)
-            func = get_fragment_coverage_beds
-            jobs[sname] = thview.apply(func, *args)
-        results = track_remote_jobs(jobs, ipyclient)
+    logger.info("filtering and writing loci and stats")
+    stats = write_loci_and_stats_files(
+        list(all_dict),
+        name,
+        outdir,
+        exclude_reference,
+        min_locus_sample_coverage,
+        min_locus_trim_sample_coverage,
+        min_locus_length,
+        max_locus_hetero_frequency,
+        max_locus_variant_frequency,
+    )
 
-        # ...
-        for sname, bam_file in bam_dict.items():
-            args = (sname, outdir)
-            func = get_fragment_merged_coverage_beds
-            jobs[sname] = thview.apply(func, *args)
-        results = track_remote_jobs(jobs, ipyclient)
+    # write seqs HDF5, snps HDF5, and final VCFs
+    logger.info("writing hdf5 database files")
+    write_seqs_hdf5(
+        name=name,
+        outdir=outdir,
+        snames=list(all_dict),
+        reference=reference,
+        exclude_reference=exclude_reference,
+        nloci=stats["nloci"],
+        nsites=stats["nsites"],
+    )
 
-        # ...
-        logger.info("delimiting shared coverage beds (loci)")
-        get_across_sample_loci_bed(
-            list(bam_dict),
-            min_locus_sample_coverage,
-            min_locus_merge_distance,
-            min_locus_length,
-            outdir,
-        )
-
-        # ---------------------------------------------------------------
-        # Maybe not necessary, we measure coverage on the filtered loci later.
-        logger.info("measuring sample locus coverage stats")
-        for sname, bam_file in all_dict.items():
-            args = (bam_file, outdir)
-            func = get_sample_coverage_stats_in_loci_bed
-            jobs[sname] = thview.apply(func, *args)
-        stats = track_remote_jobs(jobs, ipyclient)
-        # print(stats)
-
-        # split loci bed into chunks
-        logger.info("calling variants in locus beds")
-        locus_chunks = get_chunked_loci_beds(outdir, max(4, int(cores / threads)))
-        for chunk in locus_chunks:
-            args = (outdir, reference, list(all_dict.values()), chunk, max(4, threads))
-            func = get_group_called_variants_in_vcf_chunks
-            jobs[sname] = thview.apply(func, *args)
-        track_remote_jobs(jobs, ipyclient)
-        get_concat_chunk_vcfs(outdir, threads)
-
-        logger.info("filtering variants")
-        get_filtered_vcf(outdir, min_sample_depth, min_gq, min_qual, max(4, threads))
-
-        logger.info("resolving indels and snps")
-        get_vcf_with_indels_resolved(outdir, reference, max(4, threads))
-
-        # optional: maybe wait til after locus filtering...
-        stats = get_locus_and_snp_stats_in_loci_bed(outdir, max(4, threads))
-        print(stats)
-        # ---------------------------------------------------------------
-
-        write_sam_faidx(outdir)
-        get_reference_in_loci_beds(outdir, reference)
-
-        logger.info("building coverage masks")
-        jobs = {}
-        for sname, bam_file in all_dict.items():
-            args = (sname, bam_file, min_sample_depth, outdir)
-            func = get_sample_masked_beds
-            jobs[sname] = thview.apply(func, *args)
-        track_remote_jobs(jobs, ipyclient)
-
-        logger.info("extracting consensus sequences")
-        jobs = {}
-        for sname, bam_file in all_dict.items():
-            args = (sname, reference, outdir, False)
-            func = get_consensus
-            jobs[sname] = thview.apply(func, *args)
-        track_remote_jobs(jobs, ipyclient)
-
-        logger.info("assembling loci")
-        build_locus_fasta_database(name, list(all_dict), reference, outdir, exclude_reference, masks)
-
-        logger.info("filtering and writing loci and stats")
-        args = (
-            list(all_dict), name, outdir, exclude_reference,
-            min_locus_sample_coverage,
-            min_locus_trim_sample_coverage,
-            min_locus_length,
-            max_locus_hetero_frequency,
-            max_locus_variant_frequency,
-        )
-        stats = write_loci_and_stats_files(*args)
-
-        # write seqs HDF5, snps HDF5, and final VCFs
-        logger.info("writing hdf5 database files")
-        write_seqs_hdf5(
-            name=name,
-            outdir=outdir,
-            snames=list(all_dict),
-            reference=reference,
-            exclude_reference=exclude_reference,
-            nloci=stats["nloci"],
-            nsites=stats["nsites"],
-        )
-
-        # write snps HDF5
-
+    # write snps HDF5
 
 
 

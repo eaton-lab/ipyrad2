@@ -11,13 +11,14 @@
 from typing import List, Tuple, Dict
 import re
 import sys
-import shlex
 from pathlib import Path
 from collections import Counter
 import subprocess as sp
 import numpy as np
+from loguru import logger
 from ..utils.seqs import comp
 from ..utils.jit_funcs import snp_count_numba, max_heteros_count_numba
+from ..utils.parallel import run_pipeline
 
 BIN = Path(sys.prefix) / "bin"
 BIN_SAM = str(BIN / "samtools")
@@ -73,66 +74,86 @@ def get_consensus(sname: str, reference: Path, outdir: Path, keep_insertions: bo
     log_dir = outdir / "logs"
     log_dir.mkdir(exist_ok=True)
 
-    # error logs
-    e1 = open(log_dir / "faidx.err", "wb")
-    e2 = open(log_dir / "consensus.err", "wb")
-    e3 = open(log_dir / "tr1.err", "wb")
-    # e4 = open(log_dir / "tr2.err", "wb")
+    cmd1 = [BIN_SAM, "faidx", str(reference), "-r", str(loci)]
+    cmd2 = [
+        BIN_BCF, "consensus",
+        "-f", "-",               # read sliced FASTA from stdin
+        "-s", f"{sname}",  # sample to apply
+        "-M", "N",               # write N for missing genotypes
+        "--mask", str(mask_bed), # mask zero/low-coverage intervals to N
+        "--mask-with", "N",
+        "--mark-del", "-",
+        "--mark-ins", "lc" if keep_insertions else "+",
+        "--regions-overlap", "1",# apply variants overlapping slice edges
+        str(vcf_gz)
+    ]
+    cmd3 = ['tr', '-d', "'+'"]
+    run_pipeline([cmd1, cmd2, cmd3], out_fasta)
 
-    # run pipeline
-    with open(out_fasta, "wb") as OUT:
-        # extract ref fasta region
-        cmd = [BIN_SAM, "faidx", str(reference), "-r", str(loci)]
-        p1 = sp.Popen(cmd, stdout=sp.PIPE, stderr=e1)
-
-        # insert sample variants and mask zero-cov regions
-        cmd = [
-            BIN_BCF, "consensus",
-            "-f", "-",               # read sliced FASTA from stdin
-            "-s", f"{sname}",  # sample to apply
-            "-M", "N",               # write N for missing genotypes
-            "--mask", str(mask_bed), # mask zero/low-coverage intervals to N
-            "--mask-with", "N",
-            "--mark-del", "-",
-            "--mark-ins", "lc" if keep_insertions else "+",
-            "--regions-overlap", "1",# apply variants overlapping slice edges
-            str(vcf_gz)
-        ]
-        p2 = sp.Popen(cmd, stdin=p1.stdout, stdout=sp.PIPE, stderr=e2)
-
-        # force to be upper case (seq is modified from ref which may have lowercase)
-        # cmd = ['tr', '[:lower:]', '[:upper:]']
-        # p3 = sp.Popen(cmd, stdin=p2.stdout, stdout=sp.PIPE, stderr=e3)
-
-        # remove '+' insertions characters if present
-        cmd = ['tr', '-d', "'+'"]
-        p3 = sp.Popen(cmd, stdin=p2.stdout, stdout=OUT, stderr=e3)
-
-        # wait to finish
-        if p1.stdout:
-            p1.stdout.close()   # allow p1 to get SIGPIPE if p2 exits
-        if p2.stdout:
-            p2.stdout.close()   # allow p2 to get SIGPIPE if p3 exits
-        if p3.stdout:
-            p3.stdout.close()   # allow p3 to get SIGPIPE if p3 exits
-        # rc4 = p4.wait()
-        rc3 = p3.wait()
-        rc2 = p2.wait()
-        rc1 = p1.wait()
-    e1.close()
-    e2.close()
-    e3.close()
-    # e4.close()
-    if any(i != 0 for i in (rc1, rc2, rc3)):
-        raise RuntimeError(
-            # f"Consensus pipeline failed: samtools faidx={rc1}, bcftools consensus={rc2}. "
-            f"Consensus pipeline failed: samtools faidx={rc1}, bcftools consensus={rc2}, tr={rc3}. "
-            f"Logs in {log_dir}"
-        )
+    # warn if there is no data for a sample.
+    if not out_fasta.stat().st_size:
+        logger.warning(f"sample {sname} has no data passed filtering and should be dropped.")
     return out_fasta
 
+    # # run pipeline
+    # error logs
+    # e1 = open(log_dir / "faidx.err", "wb")
+    # e2 = open(log_dir / "consensus.err", "wb")
+    # e3 = open(log_dir / "tr1.err", "wb")
+    # # e4 = open(log_dir / "tr2.err", "wb")
+    # with open(out_fasta, "wb") as OUT:
+    #     # extract ref fasta region
+    #     cmd = [BIN_SAM, "faidx", str(reference), "-r", str(loci)]
+    #     p1 = sp.Popen(cmd, stdout=sp.PIPE, stderr=e1)
 
-def get_sample_masked_beds(sname: str, bam: Path, min_sample_depth: int, outdir: Path) -> Path:
+    #     # insert sample variants and mask zero-cov regions
+    #     cmd = [
+    #         BIN_BCF, "consensus",
+    #         "-f", "-",               # read sliced FASTA from stdin
+    #         "-s", f"{sname}",  # sample to apply
+    #         "-M", "N",               # write N for missing genotypes
+    #         "--mask", str(mask_bed), # mask zero/low-coverage intervals to N
+    #         "--mask-with", "N",
+    #         "--mark-del", "-",
+    #         "--mark-ins", "lc" if keep_insertions else "+",
+    #         "--regions-overlap", "1",# apply variants overlapping slice edges
+    #         str(vcf_gz)
+    #     ]
+    #     p2 = sp.Popen(cmd, stdin=p1.stdout, stdout=sp.PIPE, stderr=e2)
+
+    #     # force to be upper case (seq is modified from ref which may have lowercase)
+    #     # cmd = ['tr', '[:lower:]', '[:upper:]']
+    #     # p3 = sp.Popen(cmd, stdin=p2.stdout, stdout=sp.PIPE, stderr=e3)
+
+    #     # remove '+' insertions characters if present
+    #     cmd = ['tr', '-d', "'+'"]
+    #     p3 = sp.Popen(cmd, stdin=p2.stdout, stdout=OUT, stderr=e3)
+
+    #     # wait to finish
+    #     if p1.stdout:
+    #         p1.stdout.close()   # allow p1 to get SIGPIPE if p2 exits
+    #     if p2.stdout:
+    #         p2.stdout.close()   # allow p2 to get SIGPIPE if p3 exits
+    #     if p3.stdout:
+    #         p3.stdout.close()   # allow p3 to get SIGPIPE if p3 exits
+    #     # rc4 = p4.wait()
+    #     rc3 = p3.wait()
+    #     rc2 = p2.wait()
+    #     rc1 = p1.wait()
+    # e1.close()
+    # e2.close()
+    # e3.close()
+    # # e4.close()
+    # if any(i != 0 for i in (rc1, rc2, rc3)):
+    #     raise RuntimeError(
+    #         # f"Consensus pipeline failed: samtools faidx={rc1}, bcftools consensus={rc2}. "
+    #         f"Consensus pipeline failed: samtools faidx={rc1}, bcftools consensus={rc2}, tr={rc3}. "
+    #         f"Logs in {log_dir}"
+    #     )
+    # return out_fasta
+
+
+def get_sample_masked_beds(sname: str, bam_file: Path, min_sample_depth: int, outdir: Path) -> Path:
     """Write bed files to mask <min_depth or filtered sites per sample.
 
     Where is the mask used?
@@ -149,55 +170,13 @@ def get_sample_masked_beds(sname: str, bam: Path, min_sample_depth: int, outdir:
 
     # write bedgraph w/ zeros (-bga) and do NOT pair fragments (-pc)
     # otherwise it paints coverage into the inserts.
-    cmd1 = [BIN_BED, "genomecov", "-ibam", str(bam), "-bga"] #, "-pc"]
+    cmd1 = [BIN_BED, "genomecov", "-ibam", str(bam_file), "-bga"] #, "-pc"]
     cmd2 = ["awk", "-v", f"MIN={min_sample_depth}", 'BEGIN{OFS="\t"} $4<MIN {print $1,$2,$3}']
     cmd3 = [BIN_BED, "intersect", "-a", "-", "-b", str(loci_bed)]
     cmd4 = [BIN_BED, "sort", "-i", "-"]
     cmd5 = [BIN_BED, "merge", "-i", "-"]
 
-    # stderr logs to avoid PIPE backpressure
-    logdir = outdir / "logs"
-    logdir.mkdir(exist_ok=True)
-    e1 = open(logdir / f"{sname}.genomecov.err", "wb")
-    e2 = open(logdir / f"{sname}.awk.err", "wb")
-    e3 = open(logdir / f"{sname}.intersect.err", "wb")
-    e4 = open(logdir / f"{sname}.bedsort.err", "wb")
-    e5 = open(logdir / f"{sname}.bedmerge.err", "wb")
-
-    with open(out_path, "wb") as OUT:
-        p1 = sp.Popen(cmd1, stdout=sp.PIPE, stderr=e1)
-        p2 = sp.Popen(cmd2, stdin=p1.stdout, stdout=sp.PIPE, stderr=e2)
-        p1.stdout.close()
-
-        p3 = sp.Popen(cmd3, stdin=p2.stdout, stdout=sp.PIPE, stderr=e3)
-        p2.stdout.close()
-
-        p4 = sp.Popen(cmd4, stdin=p3.stdout, stdout=sp.PIPE, stderr=e4)
-        p3.stdout.close()
-
-        p5 = sp.Popen(cmd5, stdin=p4.stdout, stdout=OUT, stderr=e5)
-        p4.stdout.close()
-
-        rc5 = p5.wait()
-        rc4 = p4.wait()
-        rc3 = p3.wait()
-        rc2 = p2.wait()
-        rc1 = p1.wait()
-
-    # close logs
-    for fh in (e1, e2, e3, e4, e5):
-        try:
-            fh.close()
-        except Exception:
-            pass
-
-    if any(rc != 0 for rc in (rc1, rc2, rc3, rc4, rc5)):
-        cmds = "\n".join(shlex.join(c) for c in (cmd1, cmd2, cmd3, cmd4, cmd5))
-        raise RuntimeError(
-            f"zero-depth BED pipeline failed: "
-            f"genomecov={rc1}, awk={rc2}, intersect={rc3}, sort={rc4}, merge={rc5}\n"
-            f"Commands:\n{cmds}\nLogs: {logdir}"
-        )
+    run_pipeline([cmd1, cmd2, cmd3, cmd4, cmd5], out_path)
     return out_path
 
 
@@ -277,7 +256,7 @@ def build_locus_fasta_database(
     """..."""
     # get sorted consensus fastas with reference on top
     consensus_dir = outdir / "consensus_seqs"
-    fastas = sorted(consensus_dir / f"{i}.consensus.fa" for i in snames)
+    fastas = [consensus_dir / f"{i}.consensus.fa" for i in sorted(snames)]
 
     # insert reference as first sample unless explicitly excluded
     if not exclude_reference:
@@ -285,6 +264,7 @@ def build_locus_fasta_database(
         fastas = [reference_fa] + fastas
 
     # get names
+    # TODO: what if names don't match internal BAM name?
     snames = [i.name.rsplit(".consensus.fa")[0] for i in fastas]
 
     # file paths
