@@ -12,7 +12,7 @@ import signal
 import subprocess as sp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-
+from .parallel import setup_loguru_worker
 
 # ---------- Worker-side (signal-safe; kills subprocess groups) ----------
 
@@ -50,13 +50,14 @@ def _worker_signal_handler(signum, _frame) -> None:
     raise SystemExit(128 + signum)
 
 
-def _init_worker_with_pid(pid_queue: "mp.queues.Queue") -> None:
+def _init_worker_with_pid(pid_queue: "mp.queues.Queue", log_level: str) -> None:
     """initialization function to store pids and register killer."""
     pid_queue.put(os.getpid())
     signal.signal(signal.SIGINT, _worker_signal_handler)
     signal.signal(signal.SIGTERM, _worker_signal_handler)
     atexit.register(_kill_all_children)
 
+    setup_loguru_worker(log_level)
 
 
 # ---------- Pipeline runner (supports optional outfile) ----------

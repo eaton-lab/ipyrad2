@@ -19,9 +19,7 @@ from pathlib import Path
 import subprocess as sp
 from loguru import logger
 from ..utils.parse_names import get_name_to_fastq_dict
-from ..utils.infer_re_overhang import infer_overhang
-# from ..utils.cluster import Cluster
-# from ..utils.progress import track_remote_jobs
+from ..utils.kmers import infer_overhang
 from ..utils.exceptions import IPyradError
 from ..utils.parallel import run_with_pool
 

@@ -32,8 +32,8 @@ def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = 
         help="One or more paths to fastq data files (regex allowed; e.g., './data/*.fastq.gz')",
     )
     tool.add_argument(
-        "-o", "--out", metavar="Path", type=Path, default="./trimmed",
-        help="Directory to write results. Created if it doesn't exist. [default=./trimmed]",
+        "-o", "--out", metavar="Path", type=Path, default="./TRIMMED",
+        help="Directory to write results. Created if it doesn't exist. [default=TRIMMED]",
     )
     tool.add_argument(
         "-q", "--min-quality", metavar="int", type=int, default=20,

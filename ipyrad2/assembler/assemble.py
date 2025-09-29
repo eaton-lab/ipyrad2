@@ -4,11 +4,13 @@
 """
 
 from typing import List, Tuple
+import sys
 from pathlib import Path
 from loguru import logger
 from ..utils.parse_names import get_name_to_fastq_dict
-from ..utils.cluster import Cluster
-from ..utils.progress import track_remote_jobs
+from ..utils.parallel import run_with_pool
+# from ..utils.cluster import Cluster
+# from ..utils.progress import track_remote_jobs
 from .delim_beds import (
     get_reference_sort_order,
     get_fragment_beds,
@@ -75,6 +77,68 @@ def run_assembler(
     all_dict = wgs_dict | bam_dict
 
     # ---------------------------------------------
+    logger.debug("... jobs ... threads")
+    logger.debug("fetching reference scaffold order")
+    get_reference_sort_order(reference, outdir)
+
+    logger.info("delimiting sample coverage beds")
+    jobs = {}
+    for sname, bam_file in bam_dict.items():
+        kwargs = dict(sname=sname, bam_file=bam_file, outdir=outdir)
+        jobs[sname] = kwargs
+    results = run_with_pool(get_fragment_beds, jobs, cores)
+
+    jobs = {}
+    for sname, bam_file in bam_dict.items():
+        kwargs = dict(sname=sname, reference=reference, outdir=outdir)
+        jobs[sname] = kwargs
+    results = run_with_pool(get_fragment_coverage_beds, jobs, cores)
+
+    jobs = {}
+    for sname, bam_file in bam_dict.items():
+        kwargs = dict(sname=sname, outdir=outdir)
+        jobs[sname] = kwargs
+    results = run_with_pool(get_fragment_merged_coverage_beds, jobs, cores)
+
+    logger.info("delimiting shared coverage beds (loci)")
+    get_across_sample_loci_bed(
+        list(bam_dict),
+        min_locus_sample_coverage,
+        min_locus_merge_distance,
+        min_locus_length,
+        outdir,
+    )
+
+    # Maybe not necessary, we measure coverage on the filtered loci later.
+    logger.info("measuring sample locus coverage stats")
+    jobs = {}
+    for sname, bam_file in all_dict.items():
+        jobs[sname] = dict(bam_file=bam_file, outdir=outdir)
+    results = run_with_pool(get_sample_coverage_stats_in_loci_bed, jobs, cores)
+
+    logger.info("calling variants in locus beds")
+    nchunks = max(4, int(cores / threads))
+    locus_chunks = get_chunked_loci_beds(outdir, nchunks)
+    jobs = {}
+    for chunk in locus_chunks:
+        kwargs = dict(outdir=outdir, reference=reference, bams=list(all_dict.values()), chunk=chunk, threads=max(4, threads))
+        jobs[sname] = kwargs
+    results = run_with_pool(get_group_called_variants_in_vcf_chunks, jobs, cores)
+    get_concat_chunk_vcfs(outdir, threads)
+
+    sys.exit(0)
+
+    logger.info("filtering variants")
+    get_filtered_vcf(outdir, min_sample_depth, min_gq, min_qual, max(4, threads))
+
+    logger.info("resolving indels and snps")
+    get_vcf_with_indels_resolved(outdir, reference, max(4, threads))
+
+    # optional: maybe wait til after locus filtering...
+    stats = get_locus_and_snp_stats_in_loci_bed(outdir, max(4, threads))
+    print(stats)
+
+
     with Cluster(cores) as ipyclient:
         # lbview = ipyclient.load_balanced_view()
         thview = ipyclient.load_balanced_view(ipyclient.ids[::threads])

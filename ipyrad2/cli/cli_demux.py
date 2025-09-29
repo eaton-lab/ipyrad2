@@ -32,8 +32,8 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
         help="One or more paths to fastq data files (regex allowed; e.g., './data/*.fastq.gz')",
     )
     tool.add_argument(
-        "-o", "--out", metavar="Path", type=Path, default="./demux",
-        help="Directory to write results. Created if it doesn't exist. [default=./demux]",
+        "-o", "--out", metavar="Path", type=Path, default="./DEMUX",
+        help="Directory to write results. Created if it doesn't exist. [default=DEMUX]",
     )
     tool.add_argument(
         "-b", "--barcodes", metavar="Path", type=Path, required=True,
@@ -87,11 +87,19 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
         help="Number of cores for parallelization",
     )
     tool.add_argument(
-        "--logger", type=str, nargs="*", default=("INFO", None),
-        help=(
-            "Logging info entered as one value for LOGLEVEL, or two values "
-            "for LOGLEVEL LOGFILE; e.g., 'DEBUG' or 'DEBUG ipyrad.txt.'")
+        "-l", "--log-level", metavar="str", type=str, default="INFO",
+        help="Log level (DEBUG, INFO, WARN, ERROR) [default=INFO]",
     )
+    tool.add_argument(
+        "-L", "--log-file", metavar="Path", type=Path,
+        help="Log file. Logging to stdout is also appended to this file. [default=None]."
+    )
+    # tool.add_argument(
+    #     "--logger", type=str, nargs="*", default=("INFO", None),
+    #     help=(
+    #         "Logging info entered as one value for LOGLEVEL, or two values "
+    #         "for LOGLEVEL LOGFILE; e.g., 'DEBUG' or 'DEBUG ipyrad.txt.'")
+    # )
     # TOO RISKY perhaps, make the user remove existing dir themselves?
     # tool.add_argument(
     #     "--force", "-f", action="store_true",

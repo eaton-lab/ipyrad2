@@ -57,6 +57,7 @@ import sys
 import shlex
 from pathlib import Path
 import subprocess as sp
+from ..utils.parallel import run_pipeline, run_with_pool
 
 BIN = Path(sys.prefix) / "bin"
 BIN_SAM = str(BIN / "samtools")
@@ -390,9 +391,180 @@ def get_filtered_vcf(outdir: Path, min_read_depth: int, min_gq: int, min_qual: i
 
 
 def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) -> Path:
+    """Resolve overlapping snps and indels. Keep indel type when overlapping.
+
+    If no indels are present then it just renames the vcf.
+
+    Steps:
+      1) norm -m -both
+      2) split to snps or indels
+      3) make indel.regions.bed from REF/ALT lengths
+      4) drop conflicting SNPs
+      5) concat + sort
+      6) collapse biallelic back to multiallelic + sort
     """
-    Reproduce the exact shell pipeline you provided, using subprocess pipelines,
-    and clean up all temporary files. Leaves only `out_vcf_gz` and its .csi.
+    ref_fa = Path(reference)
+    in_vcf_gz = outdir / "vcfs" / "loci.filtered.vcf.gz"
+    out_vcf_gz = outdir / "vcfs" / "variants.resolved.vcf.gz"
+    vcf_dir = outdir / "vcfs"
+    bed_dir = outdir / "beds"
+
+    # ------------------------------------------------------------
+    # 1) Normalize & decompose to primitives
+    cmd1 = [
+        BIN_BCF, "norm",
+        "-f", str(ref_fa),
+        "-m", "-both",
+        "--threads", str(threads),
+        "-W",
+        "-Oz", "-o", str(vcf_dir / "norm.vcf.gz"),
+        str(in_vcf_gz),
+    ]
+    run_pipeline(cmd1)
+
+    # ------------------------------------------------------------
+    # 2) Split into SNPs vs. INDELs
+    cmd1 = [
+        BIN_BCF, "view",
+        "-v", "snps",
+        "-Oz", "-o", str(vcf_dir / "snps.vcf.gz"),
+        "--threads", str(threads),
+        "-W",
+        str(vcf_dir / "norm.vcf.gz"),
+    ]
+    cmd2 = [
+        BIN_BCF, "view",
+        "-v", "indels",
+        "-Oz", "-o", str(vcf_dir / "indels.vcf.gz"),
+        "--threads", str(threads),
+        "-W",
+        str(vcf_dir / "norm.vcf.gz"),
+    ]
+    run_pipeline([cmd1, cmd2], )
+
+    # -----------------------------------------------------------
+    # 3) Build an indel-affected BED (0-based, half-open)
+    # bcftools query | awk (length-based) | sort | bedtools merge > bed
+    awk_prog = (
+        r'BEGIN{OFS="\t"}'
+        r'{chrom=$1; pos0=$2; ref=$4; n=split($5,alts,",");'
+        r' for(i=1;i<=n;i++){alt=alts[i];'
+        r'  if(length(ref)>length(alt)){print chrom, pos0, pos0+length(ref);} '
+        r'  else if(length(alt)>length(ref)){print chrom, pos0, pos0+1;} '
+        r' }}'
+    )
+    cmd1 = [
+        BIN_BCF, "query",
+        "-f", r"%CHROM\t%POS0\t%POS\t%REF\t%ALT\n",
+        str(vcf_dir / "indels.vcf.gz"),
+    ]
+    cmd2 = ["awk", awk_prog]
+    cmd3 = ["sort", "-k1,1", "-k2,2n", "-T", str(vcf_dir)]
+    cmd4 = [BIN_BED, "merge", "-i", "-"]
+
+    # run pipeline
+    run_pipeline()
+
+
+
+    # ----------------------------------------------------------
+    # 4) drop the conflicting SNPs
+    cmd1 = [
+        BIN_BCF, "view",
+        "-T", f"^{str(bed_dir / 'indel.regions.bed')}",
+        "-Oz", "-o", str(vcf_dir / "snps.clean.vcf.gz"),
+        "--threads", str(threads),
+        "-W",
+        str(vcf_dir / "snps.vcf.gz"),
+    ]
+    sp.run(cmd1, check=True)
+
+    # ----------------------------------------------------------
+    # 6) keep REF rows but avoid duplicate POS lines
+    # Build variant.pos.bed = 1-bp windows of SNP positions + indel anchors
+    # We stream both queries into a single sort|uniq pipeline.
+    cmd1 = ["sort", "-k1,1", "-k2,2n", "-T", str(vcf_dir)]
+    cmd2 = ["uniq"]
+
+    # get indel positions to rm variants from
+    variant_pos_bed = bed_dir / "variant.pos.bed"
+    with open(variant_pos_bed, "w") as o2:
+        # open processors waiting on stdin
+        sort_p = sp.Popen(cmd1, stdin=sp.PIPE, stdout=sp.PIPE, text=True)
+        uniq_p = sp.Popen(cmd2, stdin=sort_p.stdout, stdout=o2, text=True)
+
+        # iterate over each file to feed it in
+        vfiles = [vcf_dir / "snps.clean.vcf.gz", vcf_dir / "indels.vcf.gz"]
+        for vcf_file in vfiles:
+            # Write both files into sort_p stdin
+            cmd_ = [BIN_BCF, "query", "-f", r"%CHROM\t%POS0\t%POS\n", str(vcf_file)]
+            q2 = sp.run(cmd_, check=True, capture_output=True, text=True)
+            sort_p.stdin.write(q2.stdout)
+
+        # wait for sort and uniq processes to finish
+        sort_p.stdin.close()
+        rc_sort = sort_p.wait()
+        rc_uniq = uniq_p.wait()
+
+        # check for errors
+        if rc_sort != 0 or rc_uniq != 0:
+            raise RuntimeError("Failed to create variant.pos.bed")
+
+    # ----------------------------------------------------------
+    # 7) Recombine (refs + clean SNPs + indels) and sort
+    cmd1 = [
+        BIN_BCF, "concat",
+        "-a",
+        "-Oz", "-o", str(vcf_dir / "combined.vcf.gz"),
+        "--threads", str(threads),
+        # str(vcf_dir / "refs.clean.vcf.gz"),
+        str(vcf_dir / "snps.clean.vcf.gz"),
+        str(vcf_dir / "indels.vcf.gz"),
+    ]
+    cmd2 = [
+        BIN_BCF, "sort",
+        "-Oz", "-o", str(vcf_dir / "combined.sorted.vcf.gz"),
+        "-T", str(vcf_dir),
+        "-W",
+        str(vcf_dir / "combined.vcf.gz"),
+    ]
+    sp.run(cmd1, check=True, capture_output=True)
+    sp.run(cmd2, check=True, capture_output=True)
+
+    # 8) Collapse biallelic records at same POS back to multi-allelic; sort & index
+    cmd1 = [
+        BIN_BCF, "norm",
+        "-m", "+both",
+        "-Oz", "-o", str(vcf_dir / "combined.multi.vcf.gz"),
+        "--threads", str(threads),
+        str(vcf_dir / "combined.sorted.vcf.gz"),
+    ]
+    cmd2 = [
+        BIN_BCF, "sort",
+        "-Oz", "-o", str(out_vcf_gz),
+        "-W",
+        str(vcf_dir / "combined.multi.vcf.gz")
+    ]
+    sp.run(cmd1, check=True, capture_output=True)
+    sp.run(cmd2, check=True, capture_output=True)
+
+    # clean up
+    # for path in vcf_dir.glob("*.vcf.gz"):
+    #     if path.name != out_vcf_gz.name:
+    #         if path.exists():
+    #             print(f'removing {path}')
+    #             path.unlink()
+    #         ipath = path.with_suffix(path.suffix + ".csi")
+    #         if ipath.exists():
+    #             print(f'removing {ipath}')
+    #             ipath.unlink()
+    return out_vcf_gz
+
+
+def old_get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) -> Path:
+    """Resolve overlapping snps and indels. Keep indel type when overlapping.
+
+    If no indels are present then it just renames the vcf.
 
     Steps:
       1) norm -m -both

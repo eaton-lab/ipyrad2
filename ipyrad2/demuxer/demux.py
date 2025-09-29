@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from loguru import logger
 import pandas as pd
 from pandas.errors import ParserError
-from ipyrad2.utils.infer_re_overhang import infer_overhang
+from ipyrad2.utils.kmers import infer_overhang
 from ipyrad2.utils.parse_names import get_name_to_fastq_dict
 from ipyrad2.utils.seqs import AMBIGS, BADCHARS
 from ipyrad2.utils.exceptions import IPyradError

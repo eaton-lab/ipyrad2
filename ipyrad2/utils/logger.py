@@ -34,8 +34,6 @@ import sys
 from pathlib import Path
 from loguru import logger
 
-LOGGERS = [0]
-
 
 def formatter(record):
     """Custom formatter that allows for progress bar."""
@@ -51,15 +49,16 @@ def formatter(record):
 
 def color_support():
     """Check for color support in stderr as a notebook or terminal/tty."""
+    return sys.stderr.isatty()
     # check if we're in IPython/jupyter
-    try:
-        import IPython
-        tty1 = bool(IPython.get_ipython())
-    except ImportError:
-        tty1 = False
-    # check if we're in a terminal
-    tty2 = sys.stderr.isatty()
-    return tty1 or tty2
+    # try:
+    #     import IPython
+    #     tty1 = bool(IPython.get_ipython())
+    # except ImportError:
+    #     tty1 = False
+    # # check if we're in a terminal
+    # tty2 = sys.stderr.isatty()
+    # return tty1 or tty2
 
 
 def set_log_level(log_level: str = "DEBUG", log_file: Optional[Path] = None):
@@ -76,8 +75,7 @@ def set_log_level(log_level: str = "DEBUG", log_file: Optional[Path] = None):
         level=log_level,
         colorize=color_support(),
         format=formatter,
-        enqueue=False,
-        # filter=lambda record: record["extra"].get("to_file", True),
+        enqueue=True,
     )
     # optionally log to file
     if log_file:
@@ -89,31 +87,33 @@ def set_log_level(log_level: str = "DEBUG", log_file: Optional[Path] = None):
             level=log_level,
             colorize=False,
             format=formatter,
-            # filter=lambda record: record["extra"].get("to_file", False),
             enqueue=True,
             rotation="50 MB",
         )
     return logger
 
 
-def get_logger(log_level: str = "INFO"):
-    set_log_level(log_level)
-    return logger.bind(name="ipyrad")
+def setup_loguru_worker(log_level: str) -> None:
+    """initialized on parallel Worker processes."""
+    from loguru import logger
+    import sys
 
+    logger.remove()
+    logger.add(
+        sys.stderr,
+        level=log_level,
+        colorize=color_support(),
+        format=formatter,
+        enqueue=False,
+    )
 
 
 if __name__ == "__main__":
 
-    import ipyrad as ip
-    ip.set_log_level("DEBUG")
-    logger.bind(name="ipyrad").info("THIS IS A TEST.")
+    from ipyrad2.utils.logger import set_log_level
 
-    # with capture_logs("INFO") as cap:
-    #     logger.bind(name="ipyrad").debug("Hello")
-    #     logger.bind(name="ipyrad").info("Hello2")
-    # print(f"Captured: {cap}")
+    set_log_level("DEBUG")
+    logger.info("THIS IS A TEST.")
 
-    # ...
-    ip.set_log_level("DEBUG")
-    log = get_logger()
-    log.info("HI")
+    set_log_level("DEBUG")
+    logger.debug("HI")

@@ -42,8 +42,8 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="Prefix name for output files. [default=assembly]",
     )
     tool.add_argument(
-        "-o", "--out", metavar="Path", type=Path, default="./outfiles",
-        help="Directory for results and stat files. Created if it doesn't exist. [default=./outfiles]",
+        "-o", "--out", metavar="Path", type=Path, default="./OUT",
+        help="Directory for results and stat files. Created if it doesn't exist. [default=./OUT]",
     )
     tool.add_argument(
         "-q", "--min-gq", metavar="int", type=int, default=20,
@@ -68,15 +68,13 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="Min num samples with non-N calls for trimming locus edges. Must be <= '-m'. [default=4]",
     )
     tool.add_argument(
-        "-l", "--min-locus-length", metavar="int", type=int, default=25,
+        "-z", "--min-locus-length", metavar="int", type=int, default=25,
         help="Min length of locus after trimming. [default=25]",
     )
-    # locus beds could overlap and still be relatively short, there are
-    # better ways to do this probably...
-    tool.add_argument(
-        "-L", "--max-locus-length", metavar="int", type=int, default=None,
-        help="Max length of locus (to prevent overlapping locus beds). [default=None]",
-    )
+    # tool.add_argument(
+    #     "-L", "--max-locus-length", metavar="int", type=int, default=None,
+    #     help="Max length of locus (to prevent overlapping locus beds). [default=None]",
+    # )
     tool.add_argument(
         "-g", "--min-locus-merge-distance", metavar="int", type=int, default=300,
         help="Merge locus beds if they overlap within nbases. [default=300]",
@@ -115,16 +113,17 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
     )
     tool.add_argument(
         "-nx", "--name-delim", metavar="str", type=str, default=None,
-        help="Set delim substring 'nx' to override auto name parsing from files. [default=None]"
+        help="Set name delim substring 'nx' to override auto name parsing from files. [default=None]"
     )
     tool.add_argument(
         "-ni", "--name-index", metavar="int", type=int, default=1,
-        help="Set delim index to split file names to keep substring left of the "
-        "'ni'-th occurrence of substring 'nx', if valid. [default=1]",
+        help="Set name delim index to keep substring left of the 'ni'-th substring 'nx', if valid [default=1]",
     )
     tool.add_argument(
-        "--logger", type=str, nargs="*",
-        help=(
-            "Logging info entered as one value for LOGLEVEL, or two values "
-            "for LOGLEVEL LOGFILE; e.g., 'DEBUG' or 'DEBUG ipyrad.txt.'")
+        "-l", "--log-level", metavar="str", type=str, default="INFO",
+        help="Log level (DEBUG, INFO, WARN, ERROR) [default=INFO]",
+    )
+    tool.add_argument(
+        "-L", "--log-file", metavar="Path", type=Path,
+        help="Log file. Logging to stdout is also appended to this file. [default=None]."
     )

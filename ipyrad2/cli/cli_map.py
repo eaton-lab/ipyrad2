@@ -33,8 +33,8 @@ def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = N
         help="Directory to write trimmed read files. Will be created if it doesn't exist.",
     )
     tool.add_argument(
-        "-o", "--out", metavar="Path", type=Path, default="./trimmed",
-        help="Directory to write trimmed read files. Will be created if it doesn't exist.",
+        "-o", "--out", metavar="Path", type=Path, default="./MAPPED",
+        help="Directory to write trimmed read files. Will be created if it doesn't exist. [default=MAPPED]",
     )
     # tool.add_argument(
     #     "-i", "--imap", metavar="Path", type=Path,
