@@ -121,7 +121,7 @@ def run_assembler(
     locus_chunks = get_chunked_loci_beds(outdir, nchunks)
     jobs = {}
     for chunk in locus_chunks:
-        kwargs = dict(outdir=outdir, reference=reference, bams=list(all_dict.values()), chunk=chunk, threads=max(4, threads))
+        kwargs = dict(outdir=outdir, reference=reference, bam_files=list(all_dict.values()), locus_chunk=chunk, threads=max(4, threads))
         jobs[sname] = kwargs
     results = run_with_pool(get_group_called_variants_in_vcf_chunks, jobs, cores)
     get_concat_chunk_vcfs(outdir, threads)

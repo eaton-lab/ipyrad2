@@ -87,9 +87,8 @@ def main():
         sys.exit(1)
     # raise with traceback
     except Exception as exc:
-        logger.error(exc)
-        # sys.exit(1)
-        raise
+        logger.exception("Unexpected error: see traceback below.")
+        raise exc
 
 
 def command_line():

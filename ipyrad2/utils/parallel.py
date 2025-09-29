@@ -12,7 +12,7 @@ import signal
 import subprocess as sp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from .parallel import setup_loguru_worker
+from .logger import setup_loguru_worker
 
 # ---------- Worker-side (signal-safe; kills subprocess groups) ----------
 
@@ -50,14 +50,14 @@ def _worker_signal_handler(signum, _frame) -> None:
     raise SystemExit(128 + signum)
 
 
-def _init_worker_with_pid(pid_queue: "mp.queues.Queue", log_level: str) -> None:
+def _init_worker_with_pid(pid_queue: "mp.queues.Queue") -> None:
     """initialization function to store pids and register killer."""
     pid_queue.put(os.getpid())
     signal.signal(signal.SIGINT, _worker_signal_handler)
     signal.signal(signal.SIGTERM, _worker_signal_handler)
     atexit.register(_kill_all_children)
 
-    setup_loguru_worker(log_level)
+    setup_loguru_worker()
 
 
 # ---------- Pipeline runner (supports optional outfile) ----------
@@ -158,7 +158,7 @@ def run_pipeline(cmds: List[Sequence[str]], outfile: Optional[Path] = None) -> T
 # ---------- Parent-side wrapper (always uses 'spawn'; no option exposed) ----------
 
 
-def run_with_pool(func: Callable[[Any], Any], jobs: Dict[Any, Any], max_workers: int | None = None) -> List[Any]:
+def run_with_pool(func: Callable[[Any], Any], jobs: Dict[Any, Any], log_level: str, max_workers: int | None = None) -> List[Any]:
     """
     Execute func(**job) over 'jobs' on a ProcessPoolExecutor.
     - Ctrl-C in parent: SIGTERM then SIGKILL to workers; workers kill their child procs.
@@ -231,35 +231,7 @@ def run_with_pool(func: Callable[[Any], Any], jobs: Dict[Any, Any], max_workers:
     return results
 
 
-def test_func(a, b):
-    # time.sleep(2)
-    raise ValueError("x")
-    return a + b
-
-
 if __name__ == "__main__":
+    pass
 
-    from loguru import logger
 
-    jobs = {
-        "A": {"cmds": [["ls", "-l"], ["wc"]]},
-        "B": {"cmds": [["ls", "-l"]], "outfile": Path("/tmp/test.txt")},
-    }
-    res = run_with_pool(run_pipeline, jobs, 4)
-    print(res)
-
-    jobs = {
-        "A": {"a": 3, "b": 4},
-        "B": {"a": 3, "b": 8},
-    }
-    try:
-        res = run_with_pool(test_func, jobs, 4)
-        print(res)
-    except KeyboardInterrupt:
-        print('stopped gracefully')
-    except ValueError as exc:
-        logger.error(exc)
-    except Exception as exc:
-        logger.exception(exc)
-
-    print(run_pipeline([["ls", "-l"], ["wc"]]))

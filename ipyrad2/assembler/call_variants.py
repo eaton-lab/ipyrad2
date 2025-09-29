@@ -57,7 +57,8 @@ import sys
 import shlex
 from pathlib import Path
 import subprocess as sp
-from ..utils.parallel import run_pipeline, run_with_pool
+from loguru import logger
+from ..utils.parallel import run_pipeline
 
 BIN = Path(sys.prefix) / "bin"
 BIN_SAM = str(BIN / "samtools")
@@ -408,6 +409,7 @@ def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) ->
     out_vcf_gz = outdir / "vcfs" / "variants.resolved.vcf.gz"
     vcf_dir = outdir / "vcfs"
     bed_dir = outdir / "beds"
+    indel_beds = bed_dir / 'indel.regions.bed'
 
     # ------------------------------------------------------------
     # 1) Normalize & decompose to primitives
@@ -420,7 +422,7 @@ def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) ->
         "-Oz", "-o", str(vcf_dir / "norm.vcf.gz"),
         str(in_vcf_gz),
     ]
-    run_pipeline(cmd1)
+    run_pipeline([cmd1])
 
     # ------------------------------------------------------------
     # 2) Split into SNPs vs. INDELs
@@ -440,7 +442,8 @@ def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) ->
         "-W",
         str(vcf_dir / "norm.vcf.gz"),
     ]
-    run_pipeline([cmd1, cmd2], )
+    run_pipeline([cmd1])
+    run_pipeline([cmd2])
 
     # -----------------------------------------------------------
     # 3) Build an indel-affected BED (0-based, half-open)
@@ -461,54 +464,59 @@ def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) ->
     cmd2 = ["awk", awk_prog]
     cmd3 = ["sort", "-k1,1", "-k2,2n", "-T", str(vcf_dir)]
     cmd4 = [BIN_BED, "merge", "-i", "-"]
+    run_pipeline([cmd1, cmd2, cmd3, cmd4], indel_beds)
 
-    # run pipeline
-    run_pipeline()
-
-
+    # if indel beds is empty then just keep and rename the snps.vcf.gz
+    if  indel_beds.stat().st_size == 0:
+        logger.warning("no indels found, skipping indel resolving.")
+        os.replace(vcf_dir / "snps.vcf.gz", out_vcf_gz)
+        return out_vcf_gz
 
     # ----------------------------------------------------------
     # 4) drop the conflicting SNPs
     cmd1 = [
         BIN_BCF, "view",
-        "-T", f"^{str(bed_dir / 'indel.regions.bed')}",
+        "-T", f"^{str(indel_beds)}",
         "-Oz", "-o", str(vcf_dir / "snps.clean.vcf.gz"),
         "--threads", str(threads),
         "-W",
         str(vcf_dir / "snps.vcf.gz"),
     ]
-    sp.run(cmd1, check=True)
+    run_pipeline([cmd1])
 
     # ----------------------------------------------------------
     # 6) keep REF rows but avoid duplicate POS lines
     # Build variant.pos.bed = 1-bp windows of SNP positions + indel anchors
     # We stream both queries into a single sort|uniq pipeline.
-    cmd1 = ["sort", "-k1,1", "-k2,2n", "-T", str(vcf_dir)]
-    cmd2 = ["uniq"]
+    # cmd1a = [BIN_BCF, "query", "-f", r"%CHROM\t%POS0\t%POS\n", str(vcf_dir / "snps.clean.vcf.gz")]
+    # cmd1b = [BIN_BCF, "query", "-f", r"%CHROM\t%POS0\t%POS\n", str(vcf_file)]
+    # cmd2 = ["sort", "-k1,1", "-k2,2n", "-T", str(vcf_dir)]
+    # cmd3 = ["uniq"]
+    # run_pipeline([cmd1, cmd2, cmd3], bed_dir / "variant.pos.bed")
 
-    # get indel positions to rm variants from
-    variant_pos_bed = bed_dir / "variant.pos.bed"
-    with open(variant_pos_bed, "w") as o2:
-        # open processors waiting on stdin
-        sort_p = sp.Popen(cmd1, stdin=sp.PIPE, stdout=sp.PIPE, text=True)
-        uniq_p = sp.Popen(cmd2, stdin=sort_p.stdout, stdout=o2, text=True)
+    # # get indel positions to rm variants from
+    # variant_pos_bed = bed_dir / "variant.pos.bed"
+    # with open(variant_pos_bed, "w") as o2:
+    #     # open processors waiting on stdin
+    #     sort_p = sp.Popen(cmd1, stdin=sp.PIPE, stdout=sp.PIPE, text=True)
+    #     uniq_p = sp.Popen(cmd2, stdin=sort_p.stdout, stdout=o2, text=True)
 
-        # iterate over each file to feed it in
-        vfiles = [vcf_dir / "snps.clean.vcf.gz", vcf_dir / "indels.vcf.gz"]
-        for vcf_file in vfiles:
-            # Write both files into sort_p stdin
-            cmd_ = [BIN_BCF, "query", "-f", r"%CHROM\t%POS0\t%POS\n", str(vcf_file)]
-            q2 = sp.run(cmd_, check=True, capture_output=True, text=True)
-            sort_p.stdin.write(q2.stdout)
+    #     # iterate over each file to feed it in
+    #     vfiles = [vcf_dir / "snps.clean.vcf.gz", vcf_dir / "indels.vcf.gz"]
+    #     for vcf_file in vfiles:
+    #         # Write both files into sort_p stdin
+    #         cmd_ = [BIN_BCF, "query", "-f", r"%CHROM\t%POS0\t%POS\n", str(vcf_file)]
+    #         q2 = sp.run(cmd_, check=True, capture_output=True, text=True)
+    #         sort_p.stdin.write(q2.stdout)
 
-        # wait for sort and uniq processes to finish
-        sort_p.stdin.close()
-        rc_sort = sort_p.wait()
-        rc_uniq = uniq_p.wait()
+    #     # wait for sort and uniq processes to finish
+    #     sort_p.stdin.close()
+    #     rc_sort = sort_p.wait()
+    #     rc_uniq = uniq_p.wait()
 
-        # check for errors
-        if rc_sort != 0 or rc_uniq != 0:
-            raise RuntimeError("Failed to create variant.pos.bed")
+    #     # check for errors
+    #     if rc_sort != 0 or rc_uniq != 0:
+    #         raise RuntimeError("Failed to create variant.pos.bed")
 
     # ----------------------------------------------------------
     # 7) Recombine (refs + clean SNPs + indels) and sort
@@ -517,7 +525,6 @@ def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) ->
         "-a",
         "-Oz", "-o", str(vcf_dir / "combined.vcf.gz"),
         "--threads", str(threads),
-        # str(vcf_dir / "refs.clean.vcf.gz"),
         str(vcf_dir / "snps.clean.vcf.gz"),
         str(vcf_dir / "indels.vcf.gz"),
     ]
@@ -528,8 +535,8 @@ def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) ->
         "-W",
         str(vcf_dir / "combined.vcf.gz"),
     ]
-    sp.run(cmd1, check=True, capture_output=True)
-    sp.run(cmd2, check=True, capture_output=True)
+    run_pipeline([cmd1])
+    run_pipeline([cmd2])
 
     # 8) Collapse biallelic records at same POS back to multi-allelic; sort & index
     cmd1 = [
@@ -545,19 +552,19 @@ def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) ->
         "-W",
         str(vcf_dir / "combined.multi.vcf.gz")
     ]
-    sp.run(cmd1, check=True, capture_output=True)
-    sp.run(cmd2, check=True, capture_output=True)
+    run_pipeline([cmd1])
+    run_pipeline([cmd2])
 
     # clean up
-    # for path in vcf_dir.glob("*.vcf.gz"):
-    #     if path.name != out_vcf_gz.name:
-    #         if path.exists():
-    #             print(f'removing {path}')
-    #             path.unlink()
-    #         ipath = path.with_suffix(path.suffix + ".csi")
-    #         if ipath.exists():
-    #             print(f'removing {ipath}')
-    #             ipath.unlink()
+    for path in vcf_dir.glob("*.vcf.gz"):
+        if path.name != out_vcf_gz.name:
+            if path.exists():
+                print(f'removing {path}')
+                path.unlink()
+            ipath = path.with_suffix(path.suffix + ".csi")
+            if ipath.exists():
+                print(f'removing {ipath}')
+                ipath.unlink()
     return out_vcf_gz
 
 

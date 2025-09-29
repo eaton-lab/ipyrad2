@@ -75,7 +75,8 @@ def set_log_level(log_level: str = "DEBUG", log_file: Optional[Path] = None):
         level=log_level,
         colorize=color_support(),
         format=formatter,
-        enqueue=True,
+        enqueue=False,
+        # traceback=True,
     )
     # optionally log to file
     if log_file:
@@ -93,7 +94,7 @@ def set_log_level(log_level: str = "DEBUG", log_file: Optional[Path] = None):
     return logger
 
 
-def setup_loguru_worker(log_level: str) -> None:
+def setup_loguru_worker() -> None:
     """initialized on parallel Worker processes."""
     from loguru import logger
     import sys
@@ -101,19 +102,12 @@ def setup_loguru_worker(log_level: str) -> None:
     logger.remove()
     logger.add(
         sys.stderr,
-        level=log_level,
+        level="WARNING",  # hard coded, only used for reporting warnings & errors
         colorize=color_support(),
         format=formatter,
-        enqueue=False,
+        enqueue=True,
     )
 
 
 if __name__ == "__main__":
-
-    from ipyrad2.utils.logger import set_log_level
-
-    set_log_level("DEBUG")
-    logger.info("THIS IS A TEST.")
-
-    set_log_level("DEBUG")
-    logger.debug("HI")
+    pass
