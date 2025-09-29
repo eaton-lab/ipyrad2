@@ -3,14 +3,14 @@
 
 import argparse
 from pathlib import Path
-from .make_wide import make_wide, intlike
+from .make_wide import make_wide
 
 
 EPILOG = """\
 Examples
 --------
 $ ipyrad assemble --bams BAMs/*.bam --ref REF --out OUT -m 4 -d 5 -q 20
-$ ipyrad assemble -b BAMs/a*.bam -w BAMS/b*.bam --ref REF --out OUT -m 4 -d 5 -q 20
+$ ipyrad assemble -b BAMs/a*.bam -B BAMS/b*.bam --ref REF --out OUT -m 4 -d 5 -q 20
 """
 
 
@@ -30,7 +30,7 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="Bam files from RAD-type data. These samples are used to delimit locus beds. (regex allowed; e.g., './bam/{a,b}*.bam')",
     )
     tool.add_argument(
-        "-w", "--wgs-bams", metavar="Path", type=Path, nargs="*",
+        "-B", "--wgs-bams", metavar="Path", type=Path, nargs="*",
         help="Optional bam files from WGS-type data. These samples are not used to delimit locus beds, but will have variants called within the RAD locus beds. (regex allowed; e.g., './bam/{a,b}*.bam')",
     )
     tool.add_argument(
@@ -100,12 +100,12 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="Do not include the reference sequence as a sample in outputs",
     )
     tool.add_argument(
-        "-c", "--cores", metavar="int", type=int, default=4,
-        help="Number of cores available for processing. [default=4]",
+        "-w", "--workers", metavar="int", type=int, default=2,
+        help="N concurrent workers (jobs) to parallelize. [default=4]",
     )
     tool.add_argument(
-        "-t", "--threads", metavar="int", type=int, default=2,
-        help="Number of threads (e.g., -c 4 -t 2 will run 2 2-threaded jobs). [default=2]",
+        "-t", "--threads", metavar="int", type=int, default=4,
+        help="N threads per worker (e.g., -w 2 -t 4 uses up to 8 threads). [default=2]",
     )
     tool.add_argument(
         "-f", "--force", action="store_true",

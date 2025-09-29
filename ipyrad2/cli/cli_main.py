@@ -100,7 +100,9 @@ def command_line():
 
     # DEMUX: -------------------------------------------------------
     if args.subcommand == "demux":
+        logger.info("---------------------------------------------------------")
         logger.info("----- ipyrad demux: demultiplexing reads to samples -----")
+        logger.info("---------------------------------------------------------")
         logger.info(f"CMD: ipyrad {' '.join(sys.argv[1:])}")
         run_demuxer(
             fastqs=args.fastqs,
@@ -113,7 +115,7 @@ def command_line():
             i7=args.i7,
             disable_infer_re_overhangs=args.disable_infer_re_overhangs,
             merge_technical_replicates=args.merge_technical_replicates,
-            cores=args.cores,
+            workers=args.workers,
             max_reads=args.max_reads,
         )
         sys.exit(0)
@@ -135,7 +137,7 @@ def command_line():
             disable_infer_re_overhangs=args.disable_infer_re_overhangs,
             disable_adapter_trimming=args.disable_adapter_trimming,
             disable_quality_filtering=args.disable_quality_filtering,
-            cores=args.cores,
+            workers=args.workers,
             threads=args.threads,
             name_parse=None if args.name_delim is None else (args.name_delim, args.name_index),
             umi_tag_in_i5=args.umi_tag_in_i5,
@@ -151,7 +153,7 @@ def command_line():
             fastqs=args.fastqs,
             reference=args.reference,
             outdir=args.out,
-            cores=args.cores,
+            workers=args.workers,
             threads=args.threads,
             force=args.force,
             name_parse=None if args.name_delim is None else (args.name_delim, args.name_index),
@@ -162,7 +164,9 @@ def command_line():
 
     # ASSEMBLE: ---------------------------------------------------
     if args.subcommand == "assemble":
+        logger.info("-----------------------------------------------------------")
         logger.info("----- ipyrad assemble: delimit loci and call variants -----")
+        logger.info("-----------------------------------------------------------")
         logger.info(f"CMD: ipyrad {' '.join(sys.argv[1:])}")
         run_assembler(
             rad_bams=args.rad_bams,
@@ -182,7 +186,7 @@ def command_line():
             populations=args.populations,
             masks=args.masks,
             exclude_reference=args.exclude_reference,
-            cores=args.cores,
+            workers=args.workers,
             threads=args.threads,
             force=args.force,
             name_parse=None if args.name_delim is None else (args.name_delim, args.name_index),
@@ -191,7 +195,9 @@ def command_line():
 
     # WEX: --------------------------------------------------------
     if args.subcommand == "wex":
+        logger.info("-----------------------------------------------------------")
         logger.info("----- ipyrad assemble: extract supermatrix alignments -----")
+        logger.info("-----------------------------------------------------------")
         logger.info(f"CMD: ipyrad {' '.join(sys.argv[1:])}")
         run_window_extracter(
             data=args.data,

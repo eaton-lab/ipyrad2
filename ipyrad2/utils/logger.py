@@ -102,7 +102,7 @@ def setup_loguru_worker() -> None:
     logger.remove()
     logger.add(
         sys.stderr,
-        level="WARNING",  # hard coded, only used for reporting warnings & errors
+        level="DEBUG",  # hard coded, only used for reporting warnings & errors
         colorize=color_support(),
         format=formatter,
         enqueue=True,

@@ -179,7 +179,7 @@ def run_trimmer(
     disable_infer_re_overhangs: bool,
     disable_adapter_trimming: bool,
     disable_quality_filtering: bool,
-    cores: int,
+    workers: int,
     threads: int,
     name_parse: Tuple[str, str] | None,
     umi_tag_in_i5: bool,
@@ -216,7 +216,7 @@ def run_trimmer(
     # ------------------------------------------------------------
     jobs = {}
     logger.info(f"trimming/filtering {len(fastq_dict)} inputs to trimmed fastqs in {outdir}")
-    logger.info(f"running up to {cores} parallel jobs each using up to {threads} threads")
+    logger.info(f"running up to {workers} parallel jobs each using up to {threads} threads")
     for sname, fastq_tuple in fastq_dict.items():
         kwargs = dict(
             fastqs=fastq_tuple,
@@ -234,31 +234,8 @@ def run_trimmer(
             threads=max(1, threads - 2),  # uses 2 I/O threads + requested threads
         )
         jobs[sname] = kwargs
-    _ = run_with_pool(trim_sample_with_fastp, jobs, cores)
+    _ = run_with_pool(trim_sample_with_fastp, jobs, workers)
 
-    # #
-    # with Cluster(cores) as ipyclient:
-    #     thview = ipyclient.load_balanced_view(ipyclient.ids[::threads])
-    #     jobs = {}
-    #     logger.info(f"trimming/filtering {len(fastq_dict)} inputs to {outdir}")
-    #     for sname, fastq_tuple in fastq_dict.items():
-    #         kwargs = dict(
-    #             fastqs=fastq_tuple,
-    #             sname=sname,
-    #             outdir=outdir,
-    #             restriction_overhangs=(re1, re2),
-    #             max_reads=max_reads,
-    #             min_trimmed_length=min_trimmed_length,
-    #             min_quality=min_quality,
-    #             max_low_quality_bases=max_low_quality_bases,
-    #             phred_qscore_offset=phred_qscore_offset,
-    #             disable_adapter_trimming=disable_adapter_trimming,
-    #             disable_quality_filtering=disable_quality_filtering,
-    #             umi_tag_in_i5=umi_tag_in_i5,
-    #             threads=max(1, threads - 2),  # uses 2 I/O threads + requested threads
-    #         )
-    #         jobs[sname] = thview.apply(trim_sample_with_fastp, **kwargs)
-    #     results = track_remote_jobs(jobs, ipyclient)
 
 
 if __name__ == "__main__":

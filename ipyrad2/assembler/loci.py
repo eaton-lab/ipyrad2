@@ -95,63 +95,6 @@ def get_consensus(sname: str, reference: Path, outdir: Path, keep_insertions: bo
         logger.warning(f"sample {sname} has no data passed filtering and should be dropped.")
     return out_fasta
 
-    # # run pipeline
-    # error logs
-    # e1 = open(log_dir / "faidx.err", "wb")
-    # e2 = open(log_dir / "consensus.err", "wb")
-    # e3 = open(log_dir / "tr1.err", "wb")
-    # # e4 = open(log_dir / "tr2.err", "wb")
-    # with open(out_fasta, "wb") as OUT:
-    #     # extract ref fasta region
-    #     cmd = [BIN_SAM, "faidx", str(reference), "-r", str(loci)]
-    #     p1 = sp.Popen(cmd, stdout=sp.PIPE, stderr=e1)
-
-    #     # insert sample variants and mask zero-cov regions
-    #     cmd = [
-    #         BIN_BCF, "consensus",
-    #         "-f", "-",               # read sliced FASTA from stdin
-    #         "-s", f"{sname}",  # sample to apply
-    #         "-M", "N",               # write N for missing genotypes
-    #         "--mask", str(mask_bed), # mask zero/low-coverage intervals to N
-    #         "--mask-with", "N",
-    #         "--mark-del", "-",
-    #         "--mark-ins", "lc" if keep_insertions else "+",
-    #         "--regions-overlap", "1",# apply variants overlapping slice edges
-    #         str(vcf_gz)
-    #     ]
-    #     p2 = sp.Popen(cmd, stdin=p1.stdout, stdout=sp.PIPE, stderr=e2)
-
-    #     # force to be upper case (seq is modified from ref which may have lowercase)
-    #     # cmd = ['tr', '[:lower:]', '[:upper:]']
-    #     # p3 = sp.Popen(cmd, stdin=p2.stdout, stdout=sp.PIPE, stderr=e3)
-
-    #     # remove '+' insertions characters if present
-    #     cmd = ['tr', '-d', "'+'"]
-    #     p3 = sp.Popen(cmd, stdin=p2.stdout, stdout=OUT, stderr=e3)
-
-    #     # wait to finish
-    #     if p1.stdout:
-    #         p1.stdout.close()   # allow p1 to get SIGPIPE if p2 exits
-    #     if p2.stdout:
-    #         p2.stdout.close()   # allow p2 to get SIGPIPE if p3 exits
-    #     if p3.stdout:
-    #         p3.stdout.close()   # allow p3 to get SIGPIPE if p3 exits
-    #     # rc4 = p4.wait()
-    #     rc3 = p3.wait()
-    #     rc2 = p2.wait()
-    #     rc1 = p1.wait()
-    # e1.close()
-    # e2.close()
-    # e3.close()
-    # # e4.close()
-    # if any(i != 0 for i in (rc1, rc2, rc3)):
-    #     raise RuntimeError(
-    #         # f"Consensus pipeline failed: samtools faidx={rc1}, bcftools consensus={rc2}. "
-    #         f"Consensus pipeline failed: samtools faidx={rc1}, bcftools consensus={rc2}, tr={rc3}. "
-    #         f"Logs in {log_dir}"
-    #     )
-    # return out_fasta
-
 
 def get_sample_masked_beds(sname: str, bam_file: Path, min_sample_depth: int, outdir: Path) -> Path:
     """Write bed files to mask <min_depth or filtered sites per sample.

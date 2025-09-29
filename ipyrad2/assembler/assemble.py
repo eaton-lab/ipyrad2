@@ -7,10 +7,10 @@ from typing import List, Tuple
 import sys
 from pathlib import Path
 from loguru import logger
-from ..utils.parse_names import get_name_to_fastq_dict
 from ..utils.parallel import run_with_pool
 from ..utils.exceptions import IPyradError
 from .beds import (
+    get_name_from_bam,
     get_reference_sort_order,
     get_fragment_beds,
     get_fragment_coverage_beds,
@@ -56,7 +56,7 @@ def run_assembler(
     masks: List[str] | None,
     exclude_reference: bool,
     name_parse: Tuple[str, int] | None,
-    cores: int,
+    workers: int,
     threads: int,
     force: bool,
     ):
@@ -72,16 +72,31 @@ def run_assembler(
         else:
             # collect relevant files and rm
             pass
+            # for n in ["vcfs", "beds", "consensus_seqs"]:
+            #     odir = outdir / n
+            #     if odir.exists():
+            #         shutil.rmtree(odir)
 
     # check bam paths and get names dicts as {name: Path, ...}
-    bam_dict = get_name_to_fastq_dict(rad_bams, name_parse, skip_paired=True)
-    wgs_dict = get_name_to_fastq_dict(wgs_bams, name_parse, skip_paired=True) if wgs_bams else {}
-    bam_dict = {i: j[0] for (i, j) in bam_dict.items()}
-    wgs_dict = {i: j[0] for (i, j) in wgs_dict.items()}
+    bam_dict = {}
+    if rad_bams:
+        for bam_file in rad_bams:
+            bam_dict[get_name_from_bam(bam_file)] = bam_file.expanduser().absolute()
+    assert bam_dict, "..."
+    logger.info(f"loaded {len(bam_dict)} RAD samples") # : {sorted(bam_dict)}")
+
+    wgs_dict = {}
+    if wgs_bams:
+        for bam_file in wgs_bams:
+            wgs_dict[get_name_from_bam(bam_file)] = bam_file.expanduser().absolute()
+    if wgs_dict:
+        logger.info(f"loaded {len(wgs_dict)} WGS samples") # : {sorted(wgs_dict)}")
+
+    # all samples
     all_dict = wgs_dict | bam_dict
 
     # ---------------------------------------------
-    logger.info(f"running up to {cores} parallel jobs each using up to {threads} threads")
+    logger.info(f"running up to {workers} parallel jobs each using up to {threads} threads")
     logger.debug("fetching reference scaffold order")
     get_reference_sort_order(reference, outdir)
 
@@ -90,19 +105,19 @@ def run_assembler(
     for sname, bam_file in bam_dict.items():
         kwargs = dict(sname=sname, bam_file=bam_file, outdir=outdir)
         jobs[sname] = kwargs
-    results = run_with_pool(get_fragment_beds, jobs, cores)
+    results = run_with_pool(get_fragment_beds, jobs, workers)
 
     jobs = {}
     for sname, bam_file in bam_dict.items():
         kwargs = dict(sname=sname, reference=reference, outdir=outdir)
         jobs[sname] = kwargs
-    results = run_with_pool(get_fragment_coverage_beds, jobs, cores)
+    results = run_with_pool(get_fragment_coverage_beds, jobs, workers)
 
     jobs = {}
     for sname, bam_file in bam_dict.items():
         kwargs = dict(sname=sname, outdir=outdir)
         jobs[sname] = kwargs
-    results = run_with_pool(get_fragment_merged_coverage_beds, jobs, cores)
+    results = run_with_pool(get_fragment_merged_coverage_beds, jobs, workers)
 
     logger.info("delimiting shared coverage beds (loci)")
     get_across_sample_loci_bed(
@@ -114,22 +129,24 @@ def run_assembler(
     )
 
     # Maybe not necessary, we measure coverage on the filtered loci later.
-    logger.info("measuring sample locus coverage stats")
-    jobs = {}
-    for sname, bam_file in all_dict.items():
-        jobs[sname] = dict(bam_file=bam_file, outdir=outdir)
-    results = run_with_pool(get_sample_coverage_stats_in_loci_bed, jobs, cores)
-    per_sample_locus_bed_coverage_stats = results
-    # logger.warning(per_sample_locus_bed_coverage_stats)
+    # logger.info("measuring sample locus coverage stats")
+    # jobs = {}
+    # for sname, bam_file in all_dict.items():
+    #     jobs[sname] = dict(bam_file=bam_file, outdir=outdir)
+    # results = run_with_pool(get_sample_coverage_stats_in_loci_bed, jobs, workers)
+    # locus_bed_coverage_stats = results
 
+    # ------------------------------------------------------------------
+    # ---- VARIANT CALLING ---------------------------------------------
+    # ------------------------------------------------------------------
     logger.info("calling variants in locus beds")
-    nchunks = max(4, int(cores / threads))
+    nchunks = max(4, int(workers / threads))
     locus_chunks = get_chunked_loci_beds(outdir, nchunks)
     jobs = {}
     for chunk in locus_chunks:
         kwargs = dict(outdir=outdir, reference=reference, bam_files=list(all_dict.values()), locus_chunk=chunk, threads=max(4, threads))
-        jobs[sname] = kwargs
-    results = run_with_pool(get_group_called_variants_in_vcf_chunks, jobs, cores)
+        jobs[chunk] = kwargs
+    results = run_with_pool(get_group_called_variants_in_vcf_chunks, jobs, workers)
     get_concat_chunk_vcfs(outdir, threads)
 
     logger.info("filtering variants")
@@ -142,6 +159,9 @@ def run_assembler(
     stats = get_locus_and_snp_stats_in_loci_bed(outdir, max(4, threads))
     logger.warning(stats)
 
+    # ------------------------------------------------------------------
+    # ---- CONSENSUS CALLING -------------------------------------------
+    # ------------------------------------------------------------------
     logger.info("extracting reference sequence in locus beds")
     write_sam_faidx(outdir)
     get_reference_in_loci_beds(outdir, reference)
@@ -151,17 +171,19 @@ def run_assembler(
     for sname, bam_file in all_dict.items():
         kwargs = dict(sname=sname, bam_file=bam_file, min_sample_depth=min_sample_depth, outdir=outdir)
         jobs[sname] = kwargs
-    results = run_with_pool(get_sample_masked_beds, jobs, cores)
+    results = run_with_pool(get_sample_masked_beds, jobs, workers)
 
     logger.info("extracting consensus sequences")
     jobs = {}
     for sname, bam_file in all_dict.items():
         kwargs = dict(sname=sname, reference=reference, outdir=outdir, keep_insertions=False)
         jobs[sname] = kwargs
-    results = run_with_pool(get_consensus, jobs, cores)
+    results = run_with_pool(get_consensus, jobs, workers)
 
+    # ------------------------------------------------------------------
+    # ---- LOCUS BUILDING ----------------------------------------------
+    # ------------------------------------------------------------------
     logger.info("assembling loci")
-    logger.warning(list(all_dict))
     build_locus_fasta_database(
         name,
         list(all_dict),
@@ -197,6 +219,10 @@ def run_assembler(
     )
 
     # write snps HDF5
+
+
+    #
+    # logger.info(locus_bed_coverage_stats)
 
 
 

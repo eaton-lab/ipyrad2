@@ -1,11 +1,10 @@
 #!/usr/bin/env python
 
-"""Map, filter, sort, reads to BAM and delimit RAD locus beds.
-
+"""Map, filter, sort, mark BAMs.
 
 Example
 -------
-map-delim --fastqs-rad ... --fastqs-wgs ... --ref REF --max-reads ... --min-samp-cov 4 --min-read-depth ...
+map --fastqs DATA --ref REF -out MAP
 """
 
 from typing import Tuple
@@ -283,7 +282,7 @@ def run_mapper(
     fastqs: Tuple[Path, Path],
     outdir: Path,
     reference: Path,
-    cores: int,
+    workers: int,
     threads: int,
     force: bool,
     mark_duplicates: bool,
@@ -319,7 +318,7 @@ def run_mapper(
 
     # run map, filter, sort
     logger.info(f"mapping and filtering {len(fastq_dict)} inputs to bams in {outdir}")
-    logger.info(f"running up to {cores} parallel jobs each using up to {threads} threads")
+    logger.info(f"running up to {workers} parallel jobs each using up to {threads} threads")
     jobs = {}
     for sname, fastq_tuple in fastq_dict.items():
         kwargs = dict(
@@ -332,15 +331,15 @@ def run_mapper(
         )
         jobs[sname] = kwargs
     if mark_duplicates:
-        bam_dict = run_with_pool(map_filter_sort_mark, jobs, cores)
+        bam_dict = run_with_pool(map_filter_sort_mark, jobs, workers)
     else:
-        bam_dict = run_with_pool(map_filter_sort, jobs, cores)
+        bam_dict = run_with_pool(map_filter_sort, jobs, workers)
 
     # get bam file stats and write to a file
     jobs = {}
     for sname, bam_file in bam_dict.items():
         jobs[sname] = dict(bam_file=bam_file)
-    stats = run_with_pool(count_mapped_reads, jobs, cores)
+    stats = run_with_pool(count_mapped_reads, jobs, workers)
 
     # write stats
     handle = outdir / "ipyrad_map_stats.txt"

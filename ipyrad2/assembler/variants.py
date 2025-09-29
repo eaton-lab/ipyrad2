@@ -54,7 +54,6 @@ nindels_in_nvariants_filtered
 from typing import List
 import os
 import sys
-import shlex
 from pathlib import Path
 import subprocess as sp
 from loguru import logger
@@ -153,8 +152,6 @@ def get_group_called_variants_in_vcf_chunks(outdir: Path, reference: Path, bam_f
     # file paths
     vcf_dir = outdir / "vcfs"
     vcf_dir.mkdir(parents=True, exist_ok=True)
-    log_dir = outdir / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
     out_vcf_gz = vcf_dir / locus_chunk.with_suffix(".vcf.gz").name
 
     # divide threads
@@ -182,35 +179,13 @@ def get_group_called_variants_in_vcf_chunks(outdir: Path, reference: Path, bam_f
         # "-W",  # index after concatenating
         "-G", "-",
         # "-G", str(groups_file),
-        "-Oz",
-        "-o", str(out_vcf_gz),
+        "-Ou",
         "--threads", str(threads_call),
     ]
-
-    # run cmds 1 and 2 and report errors
-    e1 = open(log_dir / "mpileup.err", "wb")
-    e2 = open(log_dir / "call.err", "wb")
-    try:
-        p1 = sp.Popen(cmd1, stdout=sp.PIPE, stderr=e1)
-        p2 = sp.Popen(cmd2, stdin=p1.stdout, stdout=sp.DEVNULL, stderr=e2)
-        if p1.stdout:
-            p1.stdout.close()  # allow SIGPIPE to p1 if p2 dies
-        rc2 = p2.wait()
-        rc1 = p1.wait()
-
-    finally:
-        for fh in (e1, e2):
-            try:
-                fh.close()
-            except Exception:
-                pass
-
-    if any(rc != 0 for rc in (rc1, rc2)):
-        cmds = "\n".join(shlex.join(c) for c in (cmd1, cmd2))
-        raise RuntimeError(
-            f"bcftools pipeline failed: mpileup={rc1}, call={rc2}\n"
-            f"Commands were:\n{cmds}\nLogs in: {log_dir}"
-        )
+    cmd3 = [
+        BIN_BCF, "view", "-v", "snps,indels", "-Oz", "-o", str(out_vcf_gz),
+    ]
+    run_pipeline([cmd1, cmd2, cmd3])
     return out_vcf_gz
 
 
@@ -222,7 +197,7 @@ def get_concat_chunk_vcfs(outdir: Path, threads: int):
     """
     vcf_dir = outdir / "vcfs"
     out_vcf_gz = vcf_dir / "loci.raw.vcf.gz"
-    chunk_vcfs = vcf_dir.glob("chunk-*.vcf.gz")
+    chunk_vcfs = list(vcf_dir.glob("chunk-*.vcf.gz"))
     sorted_vcfs = sorted(chunk_vcfs, key=lambda x: int(x.name.split(".")[0].split("-")[-1]))
 
     # build command
@@ -232,17 +207,12 @@ def get_concat_chunk_vcfs(outdir: Path, threads: int):
         "-Oz", "-o", str(out_vcf_gz),
         "-W",
     ] + [str(i) for i in sorted_vcfs]
-
-    # run command
-    proc = sp.Popen(cmd, stdout=sp.DEVNULL, stderr=sp.STDOUT)
-    _, err = proc.communicate()
-    if proc.returncode:
-        raise RuntimeError(f"Error in {cmd}: {err.decode()}")
+    run_pipeline([cmd])
 
     # clean up tmp chunk files
-    for chunk in sorted_vcfs:
-        if chunk.exists():
-            chunk.unlink()
+    # for chunk in sorted_vcfs:
+    #     if chunk.exists():
+    #         chunk.unlink()
     return out_vcf_gz
 
 
@@ -259,8 +229,6 @@ def get_filtered_vcf(outdir: Path, min_read_depth: int, min_gq: int, min_qual: i
     in_vcf_gz = outdir / "vcfs" / "loci.raw.vcf.gz"
     out_vcf_gz = outdir / "vcfs" / "loci.filtered.vcf.gz"
     out_vcf_tmp = out_vcf_gz.with_suffix(out_vcf_gz.suffix + ".tmp")
-    log_dir = outdir / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
 
     dp_min: int = min_read_depth                   # DP<X (pser sample DP)
     gq_min: int = min_gq                           # GQ<X (per-sample GQ)
@@ -313,53 +281,13 @@ def get_filtered_vcf(outdir: Path, min_read_depth: int, min_gq: int, min_qual: i
         "-",
     ]
 
-    e1 = open(log_dir / f"{out_vcf_gz.stem}.setgt.err", "wb")
-    p1 = sp.Popen(cmd1, stdout=sp.PIPE, stderr=e1)
-
-    e2 = open(log_dir / f"{out_vcf_gz.stem}.filter.err", "wb")
-    p2 = sp.Popen(cmd2, stdin=p1.stdout, stdout=sp.PIPE, stderr=e2)
-    if p1.stdout:
-        p1.stdout.close()
-
-    e3 = open(log_dir / f"{out_vcf_gz.stem}.filltags.err", "wb")
-    p3 = sp.Popen(cmd3, stdin=p2.stdout, stdout=sp.PIPE, stderr=e3)
-    if p2.stdout:
-        p2.stdout.close()
-
-    e4 = open(log_dir / f"{out_vcf_gz.stem}.annotate.err", "wb")
-    p4 = sp.Popen(cmd4, stdin=p3.stdout, stdout=sp.PIPE, stderr=e4)
-    if p3.stdout:
-        p3.stdout.close()
-
-    # ---- wait in downstream->upstream order ----
-    rc4 = p4.wait()
-    rc3 = p3.wait()
-    rc2 = p2.wait()
-    rc1 = p1.wait()
-
-    # ---- close logs ----
-    for fh in (e1, e2, e3, e4):
-        try:
-            fh.close()
-        except Exception:
-            pass
-
-    # ---- error reporting ----
-    bad = [(name, rc, cmd) for name, rc, cmd in (
-        ("setGT/genotype", rc1, cmd1),
-        ("filter",         rc2, cmd2),
-        ("fill-tags",      rc3, cmd3),
-        ("annotate",       rc4, cmd4),
-    ) if rc != 0]
-
-    if bad:
-        import shlex
-        detail = "\n".join(f"{n} rc={rc} :: $ {shlex.join(c)}" for n, rc, c in bad)
-        raise RuntimeError(f"bcftools pipeline failed:\n{detail}\nLogs in: {log_dir}")
+    # run the pipeline
+    run_pipeline([cmd1, cmd2, cmd3, cmd4])
 
     # ---- finalize & index ----
     os.replace(out_vcf_tmp, out_vcf_gz)
-    sp.run([BIN_BCF, "index", "-f", "-c", str(out_vcf_gz)], check=True)
+    cmd = [BIN_BCF, "index", "-f", "-c", str(out_vcf_gz)]
+    run_pipeline([cmd])
 
     # clean up by removing raw SNPs file
     # if in_vcf_gz.exists():
@@ -466,40 +394,6 @@ def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) ->
     run_pipeline([cmd1])
 
     # ----------------------------------------------------------
-    # 6) keep REF rows but avoid duplicate POS lines
-    # Build variant.pos.bed = 1-bp windows of SNP positions + indel anchors
-    # We stream both queries into a single sort|uniq pipeline.
-    # cmd1a = [BIN_BCF, "query", "-f", r"%CHROM\t%POS0\t%POS\n", str(vcf_dir / "snps.clean.vcf.gz")]
-    # cmd1b = [BIN_BCF, "query", "-f", r"%CHROM\t%POS0\t%POS\n", str(vcf_file)]
-    # cmd2 = ["sort", "-k1,1", "-k2,2n", "-T", str(vcf_dir)]
-    # cmd3 = ["uniq"]
-    # run_pipeline([cmd1, cmd2, cmd3], bed_dir / "variant.pos.bed")
-
-    # # get indel positions to rm variants from
-    # variant_pos_bed = bed_dir / "variant.pos.bed"
-    # with open(variant_pos_bed, "w") as o2:
-    #     # open processors waiting on stdin
-    #     sort_p = sp.Popen(cmd1, stdin=sp.PIPE, stdout=sp.PIPE, text=True)
-    #     uniq_p = sp.Popen(cmd2, stdin=sort_p.stdout, stdout=o2, text=True)
-
-    #     # iterate over each file to feed it in
-    #     vfiles = [vcf_dir / "snps.clean.vcf.gz", vcf_dir / "indels.vcf.gz"]
-    #     for vcf_file in vfiles:
-    #         # Write both files into sort_p stdin
-    #         cmd_ = [BIN_BCF, "query", "-f", r"%CHROM\t%POS0\t%POS\n", str(vcf_file)]
-    #         q2 = sp.run(cmd_, check=True, capture_output=True, text=True)
-    #         sort_p.stdin.write(q2.stdout)
-
-    #     # wait for sort and uniq processes to finish
-    #     sort_p.stdin.close()
-    #     rc_sort = sort_p.wait()
-    #     rc_uniq = uniq_p.wait()
-
-    #     # check for errors
-    #     if rc_sort != 0 or rc_uniq != 0:
-    #         raise RuntimeError("Failed to create variant.pos.bed")
-
-    # ----------------------------------------------------------
     # 7) Recombine (refs + clean SNPs + indels) and sort
     cmd1 = [
         BIN_BCF, "concat",
@@ -540,11 +434,11 @@ def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) ->
     for path in vcf_dir.glob("*.vcf.gz"):
         if path.name != out_vcf_gz.name:
             if path.exists():
-                print(f'removing {path}')
+                logger.warning(f'removing {path}')
                 path.unlink()
             ipath = path.with_suffix(path.suffix + ".csi")
             if ipath.exists():
-                print(f'removing {ipath}')
+                logger.warning(f'removing {ipath}')
                 ipath.unlink()
     return out_vcf_gz
 

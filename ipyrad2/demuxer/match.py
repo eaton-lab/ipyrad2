@@ -37,7 +37,7 @@ class BarMatching:
     """: ..."""
     outdir: Path
     """: ..."""
-    cores: int
+    workers: int
     """: ..."""
     chunksize: int
     """: Number of reads to store in memory before writing to disk."""
@@ -135,7 +135,7 @@ class BarMatching:
         to prevent duplication of the Memory usage here on every CPU.
         Example here: https://stackoverflow.com/questions/65980183/processpoolexecutor-on-shared-dataset-and-multiple-arguments
         """
-        with ProcessPoolExecutor(max_workers=self.cores) as pool:
+        with ProcessPoolExecutor(max_workers=self.workers) as pool:
             total = 0
             for read1s, read2s in self._iter_matched_chunks():
                 nprocessed = min(self.chunksize, sum(len(i) for i in read1s.values()))

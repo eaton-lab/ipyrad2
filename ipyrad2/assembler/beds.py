@@ -18,6 +18,12 @@ BIN_BED = str(BIN / "bedtools")
 BIN_BCF = str(BIN / "bcftools")
 
 
+def get_name_from_bam(bam_file: Path) -> str:
+    cmd = [BIN_SAM, "samples", bam_file]
+    _, out, _ = run_pipeline([cmd])
+    return out.decode().strip().split()[0]
+
+
 def samtools_index_reference(reference: Path, threads: int) -> None:
     """Index reference with samtools."""
     cmd = [BIN_SAM, "faidx", "--threads", str(threads)]
@@ -25,7 +31,7 @@ def samtools_index_reference(reference: Path, threads: int) -> None:
     return
 
 
-def get_reference_sort_order(reference: Path, outdir: Path):
+def get_reference_sort_order(reference: Path, outdir: Path) -> Path:
     """Get scaff order from sam indexed REF file.
     """
     # destination file
@@ -38,7 +44,7 @@ def get_reference_sort_order(reference: Path, outdir: Path):
 
     # write REF_info file.
     cmd = ["cut", "-f", "1,2", str(fai_path)]
-    run_pipeline([cmd])
+    run_pipeline([cmd], out_path)
     return out_path
 
 

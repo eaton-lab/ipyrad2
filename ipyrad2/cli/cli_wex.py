@@ -5,20 +5,20 @@
 
 import argparse
 from pathlib import Path
-from .make_wide import make_wide, intlike, floatlike
+from .make_wide import make_wide
 
 
 EPILOG = r"""
 Examples
 --------
-$ ipyrad window-extracter -d seqs.hdf5 --print-scaffold-table
-$ ipyrad window-extracter -d seqs.hdf5 -o OUT/ -n TEST -m 10
-$ ipyrad window-extracter -d seqs.hdf5 -o OUT/ -w Chr1
-$ ipyrad window-extracter -d seqs.hdf5 -o OUT/ -w Chr1 Chr2 Chr3
-$ ipyrad window-extracter -d seqs.hdf5 -o OUT/ -w 'Chr\d+'  # note single-quotes for '\'
-$ ipyrad window-extracter -d seqs.hdf5 -o OUT/ -w Chr[1-9]
-$ ipyrad window-extracter -d seqs.hdf5 -o OUT/ -w Chr1:1-1000
-$ ipyrad window-extracter -d seqs.hdf5 -o OUT/ -i POPs.txt -g MINs.txt
+$ ipyrad wex -d seqs.hdf5 --print-scaffold-table
+$ ipyrad wex -d seqs.hdf5 -o OUT/ -n TEST -m 10
+$ ipyrad wex -d seqs.hdf5 -o OUT/ -w Chr1
+$ ipyrad wex -d seqs.hdf5 -o OUT/ -w Chr1 Chr2 Chr3
+$ ipyrad wex -d seqs.hdf5 -o OUT/ -w 'Chr\d+'  # note single-quotes for '\'
+$ ipyrad wex -d seqs.hdf5 -o OUT/ -w Chr[1-9]
+$ ipyrad wex -d seqs.hdf5 -o OUT/ -w Chr1:1-1000
+$ ipyrad wex -d seqs.hdf5 -o OUT/ -i POPs.txt -g MINs.txt
 """
 
 
@@ -93,8 +93,10 @@ def _setup_wex_subparser(subparsers: argparse._SubParsersAction, header: str = N
         help="Overwrite existing output files with identical names.",
     )
     tool.add_argument(
-        "--logger", type=str, nargs="*",
-        help=(
-            "Logging info entered as one value for LOGLEVEL, or two values "
-            "for LOGLEVEL LOGFILE; e.g., 'DEBUG' or 'DEBUG ipyrad.txt.'")
+        "-l", "--log-level", metavar="str", type=str, default="INFO",
+        help="Log level (DEBUG, INFO, WARN, ERROR) [default=INFO]",
+    )
+    tool.add_argument(
+        "-L", "--log-file", metavar="Path", type=Path,
+        help="Log file. Logging to stdout is also appended to this file. [default=None]."
     )

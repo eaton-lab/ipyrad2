@@ -76,12 +76,12 @@ def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = 
         help="Disable adapter trimming.",
     )
     tool.add_argument(
-        "-c", "--cores", metavar="int", type=int, default=4,
-        help="Number of cores available for processing. [default=4]",
+        "-w", "--workers", metavar="int", type=int, default=2,
+        help="N concurrent workers (jobs) to parallelize. [default=4]",
     )
     tool.add_argument(
-        "-t", "--threads", metavar="int", type=int, default=2,
-        help="Number of threads (e.g., -c 4 -t 2 will run 2 2-threaded jobs). [default=2]",
+        "-t", "--threads", metavar="int", type=int, default=4,
+        help="N threads per worker (e.g., -w 2 -t 4 uses up to 8 threads). [default=2]",
     )
     tool.add_argument(
         "-f", "--force", action="store_true",

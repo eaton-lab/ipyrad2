@@ -47,7 +47,7 @@ class Demux:
     """: Overhang on read2 from restriction digestion + ligation. Inferred if None."""
     max_mismatch: int
     """: Max number of mismatches between barcodes. Checked for conflict."""
-    cores: int
+    workers: int
     """: max number of parallel workers."""
     chunksize: int
     """: max number of reads to process between writing to disk."""
@@ -514,7 +514,7 @@ def barmatch(fastq_tuple, demux_obj):
         cuts2=demux_obj._cuts2,
         merge_technical_replicates=demux_obj.merge_technical_replicates,
         outdir=demux_obj.outdir,
-        cores=demux_obj.cores,
+        workers=demux_obj.workers,
         chunksize=demux_obj.chunksize,
         max_reads=demux_obj.max_reads,
     )
@@ -567,7 +567,7 @@ if __name__ == "__main__":
         barcodes=DATA / "barcode*.csv",
         outdir="/tmp/DEMUX",
         max_mismatch=0,
-        cores=4,
+        workers=4,
         chunksize=int(1e7),
         re1="ATCGG",
         re2="CGATCC",
@@ -626,7 +626,7 @@ if __name__ == "__main__":
         fastqs="../../pedtest/Pedicularis_plate1_R*.fastq.gz",
         outdir="../../pedtest/demux_2024-3-16",
         max_barcode_mismatch=1,
-        cores=7,
+        workers=7,
         chunksize=1e6,
         # re1="ATCGG",
         # re2="CGATCC",

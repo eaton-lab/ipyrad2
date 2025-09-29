@@ -39,6 +39,8 @@ import numpy as np
 import pandas as pd
 import h5py
 from loguru import logger
+from ..utils.exceptions import IPyradError
+
 
 NEXHEADER = """#nexus
 begin data;
@@ -66,14 +68,11 @@ class WindowExtracter:
         stdout: bool,
         force: bool,
     ):
-        # rmincov must be float
-        assert windows, "must select one or more windows."
-
         # store params
         self.data = data
         self.name = name
         self.outdir = Path(outdir).expanduser().absolute()
-        self.windows = [windows] if isinstance(windows, str) else list(windows)
+        self.windows = [] if windows is None else [windows] if isinstance(windows, str) else list(windows)
         self.exclude = set(exclude if exclude else [])
         self.imap = imap
         self.minmap = minmap
@@ -118,8 +117,10 @@ class WindowExtracter:
         # if imap was provided, then (1) check the names; (2) apply a
         # min value to each group from minmap; or (3) raise errors.
         else:
-            assert self.minmap is not None, "must provide a minmap when using imap."
-            assert set(self.minmap) == set(self.imap), "imap and minmap keys must match"
+            if self.minmap is None:
+                raise IPyradError("must provide a minmap when using imap.")
+            if set(self.minmap) != set(self.imap):
+                raise IPyradError("imap and minmap keys must match.")
             self._imap = self.imap.copy()
             self._minmap = {}
             for key in self._imap:
@@ -157,6 +158,10 @@ class WindowExtracter:
         """Check each window for a matching scaffold name, and position within its bounds."""
         windows: Dict[str, List[Tuple(int, int)]] = {}
 
+        # rmincov must be float
+        if not self.windows:
+            raise IPyradError("must select one or more windows.")
+
         # set names in index for easy fetching
         t = self.scaffold_table.set_index("scaffold_name")
 
@@ -166,7 +171,8 @@ class WindowExtracter:
             # sub-scaffold window
             if ":" in window:
                 scaff, region = window.split(":")
-                assert region.count("-") == 1, f"malformatted window '{window}'. Must be {{scaff}} or {{scaff}}:{{start}}-{{end}}"
+                if region.count("-") != 1:
+                    raise IPyradError(f"malformatted window '{window}'. Must be {{scaff}} or {{scaff}}:{{start}}-{{end}}")
                 start, end = [int(i) for i in region.split("-")]
                 if scaff not in windows:
                     windows[scaff] = [(start, end)]
@@ -174,7 +180,7 @@ class WindowExtracter:
                     # check for overlap with other windows
                     for (s, e) in windows[scaff].items():
                         if (start < e) & (end > start):
-                            raise RuntimeError(f"windows cannot be overlapping. {window} & {windows}")
+                            raise IPyradError(f"windows cannot overlap. {window} & {windows}")
                     windows[scaff] = [(start, end)]
 
             # full scaffold window
@@ -186,7 +192,7 @@ class WindowExtracter:
                         length = int(t.loc[scaff, "scaffold_length"])
                         windows[scaff] = [(0, length)]
                     else:
-                        raise RuntimeError(f"windows cannot be overlapping. {window} & {windows}")
+                        raise IPyradError(f"windows cannot overlap. {window} & {windows}")
 
         # log to INFO and DEBUG
         logger.debug(f"windows: {windows}")
@@ -236,7 +242,7 @@ class WindowExtracter:
 
         # if no windows then raise error
         if not phy_windows:
-            raise ValueError("Selected windows contain zero data in the assembly. Try larger/different windows.")
+            raise IPyradError("Selected windows contain zero data in the assembly. Try larger/different windows.")
 
         # extract sequences
         with h5py.File(self.data, 'r') as io5:
@@ -266,7 +272,7 @@ class WindowExtracter:
             mask += np.sum(pop_arr != 78, axis=0) <= pop_mincov
         seqs = seqs[:, np.invert(mask)]
         if not seqs.size:
-            raise ValueError("Selected windows contain zero data after filtering for coverage.")
+            raise IPyradError("Selected windows contain zero data after filtering for coverage.")
 
         # get list of ordered names remaining in the array
         fnames = []
@@ -276,7 +282,7 @@ class WindowExtracter:
             fnames.append(self.snames[sidx])
         # todo: log.debug the dropped samples
         if not fnames:
-            raise ValueError("No samples passed max_sample_missing filter.")
+            raise IPyradError("No samples passed max_sample_missing filter.")
         return fnames, seqs
 
     def _write_to_phy(self) -> None:
