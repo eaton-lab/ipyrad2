@@ -94,7 +94,7 @@ def set_log_level(log_level: str = "DEBUG", log_file: Optional[Path] = None):
     return logger
 
 
-def setup_loguru_worker() -> None:
+def setup_loguru_worker(log_level: str) -> None:
     """initialized on parallel Worker processes."""
     from loguru import logger
     import sys
@@ -102,7 +102,7 @@ def setup_loguru_worker() -> None:
     logger.remove()
     logger.add(
         sys.stderr,
-        level="DEBUG",  # hard coded, only used for reporting warnings & errors
+        level=log_level,
         colorize=color_support(),
         format=formatter,
         enqueue=True,

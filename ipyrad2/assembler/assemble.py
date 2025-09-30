@@ -100,6 +100,9 @@ def run_assembler(
     logger.debug("fetching reference scaffold order")
     get_reference_sort_order(reference, outdir)
 
+    # ------------------------------------------------------------------
+    # ---- LOCUS DELIMITING --------------------------------------------
+    # ------------------------------------------------------------------
     logger.info("delimiting sample coverage beds")
     jobs = {}
     for sname, bam_file in bam_dict.items():
@@ -218,8 +221,11 @@ def run_assembler(
         nsites=stats["nsites"],
     )
 
-    # write snps HDF5
+    # ------------------------------------------------------------------
+    # ---- DATABASE WRITING --------------------------------------------
+    # ------------------------------------------------------------------
 
+    # write snps HDF5
 
     #
     # logger.info(locus_bed_coverage_stats)

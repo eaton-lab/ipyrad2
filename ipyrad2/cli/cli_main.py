@@ -122,7 +122,9 @@ def command_line():
 
     # TRIM: -------------------------------------------------------
     if args.subcommand == "trim":
+        logger.info("----------------------------------------------------------")
         logger.info("----- ipyrad trim: quality, adapter, and RE trimming -----")
+        logger.info("----------------------------------------------------------")
         logger.info(f"CMD: ipyrad {' '.join(sys.argv[1:])}")
         run_trimmer(
             fastqs=args.fastqs,
@@ -139,15 +141,19 @@ def command_line():
             disable_quality_filtering=args.disable_quality_filtering,
             workers=args.workers,
             threads=args.threads,
-            name_parse=None if args.name_delim is None else (args.name_delim, args.name_index),
+            delim_str=args.delim_str,
+            delim_idx=args.delim_idx,
             umi_tag_in_i5=args.umi_tag_in_i5,
             force=args.force,
+            log_level=args.log_level,
         )
         sys.exit(0)
 
     # MAP: --------------------------------------------------------
     if args.subcommand == "map":
+        logger.info("----------------------------------------------------------")
         logger.info("----- ipyrad map: map, filter and sort reads to bams -----")
+        logger.info("----------------------------------------------------------")
         logger.info(f"CMD: ipyrad {' '.join(sys.argv[1:])}")
         run_mapper(
             fastqs=args.fastqs,
@@ -156,9 +162,10 @@ def command_line():
             workers=args.workers,
             threads=args.threads,
             force=args.force,
-            name_parse=None if args.name_delim is None else (args.name_delim, args.name_index),
             umi_tag_in_i5=args.umi_tag_in_i5,
             mark_duplicates=args.mark_duplicates,
+            delim_str=args.delim_str,
+            delim_idx=args.delim_idx,
         )
         sys.exit(0)
 
@@ -195,9 +202,9 @@ def command_line():
 
     # WEX: --------------------------------------------------------
     if args.subcommand == "wex":
-        logger.info("-----------------------------------------------------------")
-        logger.info("----- ipyrad assemble: extract supermatrix alignments -----")
-        logger.info("-----------------------------------------------------------")
+        logger.info("-------------------------------------------------------")
+        logger.info("----- ipyrad wex: extract alignments from windows -----")
+        logger.info("-------------------------------------------------------")
         logger.info(f"CMD: ipyrad {' '.join(sys.argv[1:])}")
         run_window_extracter(
             data=args.data,

@@ -14,7 +14,7 @@ from pathlib import Path
 import subprocess as sp
 from loguru import logger
 from ..utils.exceptions import IPyradError
-from ..utils.parse_names import get_name_to_fastq_dict
+from ..utils.names import get_name_to_fastq_dict
 from ..utils.parallel import run_pipeline, run_with_pool
 
 
@@ -287,7 +287,8 @@ def run_mapper(
     force: bool,
     mark_duplicates: bool,
     umi_tag_in_i5: bool,
-    name_parse: Tuple[str, str] | None,
+    delim_str: str | None,
+    delim_idx: int,
 ):
     # ------------------------------------------------------------
     # check reference and outdir paths
@@ -296,7 +297,7 @@ def run_mapper(
     outdir.mkdir(exist_ok=True)
 
     # parse dict of {name: (r1, r2)}
-    fastq_dict = get_name_to_fastq_dict(fastqs, name_parse)
+    fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx)
 
     # check outdir for existing and raise or remove
     result_files = [outdir / f"{sname}.sorted.bam" for sname in fastq_dict]

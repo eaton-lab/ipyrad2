@@ -12,42 +12,20 @@ Example
 python trim_fastqs.py FQs ...
 """
 
-from typing import Dict, Tuple, List
+from typing import Tuple, List
 import sys
 import json
 from pathlib import Path
-import subprocess as sp
 from loguru import logger
-from ..utils.parse_names import get_name_to_fastq_dict
-from ..utils.kmers import infer_overhang
+# from ..utils.parse_names import get_name_to_fastq_dict
+from ..utils.names import get_name_to_fastq_dict
+from ..utils.kmers import get_overhang_from_kmers
 from ..utils.exceptions import IPyradError
-from ..utils.parallel import run_with_pool
+from ..utils.parallel import run_with_pool, run_pipeline
 
 
 FASTP_BINARY = Path(sys.prefix) / "bin" / "fastp"
 ADAPTERS = Path(__file__).absolute().parent / "adapters.fa"
-
-
-def infer_re_overhangs(fastq_dict: Dict[str, Tuple[Path, Path]], max_reads: int) -> None:
-    """Infer re overhang from kmer analysis and compare w/ params setting.
-    """
-    logger.info("inferring restriction site overhangs from kmer analysis")
-
-    # parse first restriction overhang
-    read_r1s = [i[0] for i in fastq_dict.values()]
-    re1 = infer_overhang(read_r1s, max_reads=max_reads)
-    logger.debug(f"inferred R1 restriction overhang as: {re1}")
-
-    # parse second restriction overhang
-    read_r2s = [i[1] for i in fastq_dict.values()]
-    if all(i.exists() for i in read_r2s):
-        re2 = infer_overhang(read_r2s, max_reads=max_reads)
-        logger.debug(f"inferred R2 restriction overhang as: {re2}")
-    elif not any(i.exists() for i in read_r2s):
-        re2 = ""
-    else:
-        raise ValueError("restriction sites could not be inferred for read2")
-    return re1, re2
 
 
 def check_user_re_overhangs(kmer_overhangs: Tuple[str, str], user_overhangs: Tuple[str, str]) -> None:
@@ -86,8 +64,6 @@ def trim_sample_with_fastp(
 ):
     """Run FASTP and return: {stats} (r1, r2)
     """
-    outdir = Path(outdir).expanduser().absolute()
-    outdir.mkdir(exist_ok=True)
     out1 = outdir / f"{sname}.R1.trimmed.fastq.gz"
     out2 = outdir / f"{sname}.R2.trimmed.fastq.gz"
     stats_html = outdir / f"{sname}.stats.html"
@@ -144,21 +120,9 @@ def trim_sample_with_fastp(
         cmd.extend("-Q")
 
     # run the command in subprocess
-    with sp.Popen(cmd, stderr=sp.STDOUT, stdout=sp.PIPE) as proc:
-        out, _ = proc.communicate()
-        if proc.returncode:
-            out = out.decode()
-            print(
-                "@@ERROR: "
-                f"\nCMD: {' '.join(cmd)}"
-                f"\nerr: {out}",
-                flush=True
-            )
-            raise ValueError(out)
-
-        # callback sent to logger.info on completion
-        print(f"@@DEBUG: CMD: {' '.join(cmd)}", flush=True)
-        print(f"@@INFO: finished trimming {sname}", flush=True)
+    logger.debug(f"CMD: {' '.join(cmd)}")
+    run_pipeline([cmd])
+    logger.info(f"finished trimmming {sname}")
 
     # parse JSON stats
     with open(stats_json, 'r', encoding="utf-8") as indata:
@@ -181,14 +145,16 @@ def run_trimmer(
     disable_quality_filtering: bool,
     workers: int,
     threads: int,
-    name_parse: Tuple[str, str] | None,
+    delim_str: str | None,
+    delim_idx: int,
     umi_tag_in_i5: bool,
     force: bool,
+    log_level: str,
 ):
     # ------------------------------------------------------------
     # parse dict of {name: (r1, r2)}
     # fastq_dict = get_fastq_tuples_dict_from_paths_list(fastqs)
-    fastq_dict = get_name_to_fastq_dict(fastqs, name_parse)
+    fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx)
 
     # check outdir for existing and raise or remove
     result_files = [outdir / f"{sname}.R1.trimmed.fastq.gz" for sname in fastq_dict]
@@ -199,23 +165,22 @@ def run_trimmer(
     # ------------------------------------------------------------
     # infer restriction overhangs by kmer analysis
     if not disable_infer_re_overhangs:
-        max_reads_per_sample = int(max_reads_kmer / len(fastq_dict))
-        re1, re2 = infer_re_overhangs(fastq_dict, max_reads_per_sample)
-
-        # if user also entered REs then check them here.
+        re1 = get_overhang_from_kmers([i[0] for i in fastq_dict.values()], 20, 100_000, workers)
+        re2 = get_overhang_from_kmers([i[1] for i in fastq_dict.values()], 20, 100_000, workers)
+        logger.info(f"restriction site overhangs inferred by kmer analysis = {re1} {re2}")
+        # allow user override but warn if it doesn't match inferred.
         if restriction_overhangs:
             check_user_re_overhangs((re1, re2), restriction_overhangs)
             re1, re2 = restriction_overhangs
     elif restriction_overhangs:
         re1, re2 = restriction_overhangs
     else:
-        logger.warning("not trimming restriction site overhangs")
         re1, re2 = ("", "")
-    logger.info(f"using restriction site overhangs: {re1} {re2}")
+    logger.info(f"restriction site overhangs set to {re1} {re2}")
 
     # ------------------------------------------------------------
     jobs = {}
-    logger.info(f"trimming/filtering {len(fastq_dict)} inputs to trimmed fastqs in {outdir}")
+    logger.info(f"trimming/filtering {len(fastq_dict)} inputs with 'fastp' and writing to {outdir}")
     logger.info(f"running up to {workers} parallel jobs each using up to {threads} threads")
     for sname, fastq_tuple in fastq_dict.items():
         kwargs = dict(
@@ -234,7 +199,7 @@ def run_trimmer(
             threads=max(1, threads - 2),  # uses 2 I/O threads + requested threads
         )
         jobs[sname] = kwargs
-    _ = run_with_pool(trim_sample_with_fastp, jobs, workers)
+    _ = run_with_pool(trim_sample_with_fastp, jobs, log_level, workers)
 
 
 

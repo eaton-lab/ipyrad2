@@ -170,11 +170,14 @@ def pair_or_single_by_name_right_trim(
             return to_pairs(b_strip)
 
         # C) right-trim (longest cut first)
+        hits = []
         for cut in range(1, max_len + 1):
             b = bucket_by_cut(cut)
             if perfect_pairs(b):
-                logger.debug("successfully paired samples by character stripping")
-                return to_pairs(b)
+                hits.append(b)
+        if hits:
+            logger.debug("successfully paired samples by character stripping")
+            return to_pairs(min(hits, key=lambda x: len(list(x)[0])))
         logger.debug("pairing files by auto-detection failed, assuming data are R1 only")
 
     # ===== Single-end fallback =====

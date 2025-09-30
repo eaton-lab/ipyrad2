@@ -88,22 +88,17 @@ def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = 
         help="Overwrite .trimmed.fastq.gz files if they exist in outdir. Does not clear outdir.",
     )
     tool.add_argument(
-        "-nx", "--name-delim", metavar="str", type=str, default=None,
-        help="Set name delim substring 'nx' to override auto name parsing from files. [default=None]"
+        "-dx", "--delim-str", metavar="str", type=str, default=None,
+        help="Set delim substring 'dx' to override name parsing from files. [default=None]"
     )
     tool.add_argument(
-        "-ni", "--name-index", metavar="int", type=int, default=1,
-        help="Set name delim index to keep substring left of the 'ni'-th substring 'nx', if valid [default=1]",
+        "-di", "--delim-idx", metavar="int", type=int, default=1,
+        help="Set delim index. Extracts substring left of the 'di'-th 'dx' in filename. [default=1]",
     )
     tool.add_argument(
         "-u", "--umi-tag-in-i5", action="store_true",
         help="Move i5 index into read name. Use if i5 contains UMIs for marking PCR duplicates.",
     )
-    # tool.add_argument(
-    #     "--logger", type=str, nargs="*",
-    #     help=("Logging info entered as one value for LOGLEVEL, or two values "
-    #         "for LOGLEVEL LOGFILE; e.g., 'DEBUG' or 'DEBUG ipyrad.txt.'")
-    # )
     tool.add_argument(
         "-l", "--log-level", metavar="str", type=str, default="INFO",
         help="Log level (DEBUG, INFO, WARN, ERROR) [default=INFO]",

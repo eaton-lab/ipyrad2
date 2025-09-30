@@ -50,14 +50,14 @@ def _worker_signal_handler(signum, _frame) -> None:
     raise SystemExit(128 + signum)
 
 
-def _init_worker_with_pid(pid_queue: "mp.queues.Queue") -> None:
+def _init_worker_with_pid(pid_queue: "mp.queues.Queue", log_level: str) -> None:
     """initialization function to store pids and register killer."""
     pid_queue.put(os.getpid())
     signal.signal(signal.SIGINT, _worker_signal_handler)
     signal.signal(signal.SIGTERM, _worker_signal_handler)
     atexit.register(_kill_all_children)
 
-    setup_loguru_worker()
+    setup_loguru_worker(log_level)
 
 
 # ---------- Pipeline runner (supports optional outfile) ----------
@@ -187,7 +187,7 @@ def run_with_pool(func: Callable[[Any], Any], jobs: Dict[Any, Any], log_level: s
             max_workers=max_workers,
             mp_context=ctx,
             initializer=_init_worker_with_pid,
-            initargs=(pid_queue,),
+            initargs=(pid_queue, log_level),
         ) as ex:
             fut2idx = {ex.submit(func, **kwargs): key for key, kwargs in jobs.items()}
             for fut in as_completed(fut2idx):

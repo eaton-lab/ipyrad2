@@ -4,7 +4,6 @@
 
 TODO
 ----
-- keep paired option or only auto-detect?
 - Try to speed up using 1 core for reading, 1 for processing, and N for
 writing/compressing, all while restricting the size of queued reads waiting
 to be written, based on this approach:
@@ -21,7 +20,7 @@ from dataclasses import dataclass, field
 from loguru import logger
 import pandas as pd
 from pandas.errors import ParserError
-from ipyrad2.utils.kmers import infer_overhang
+from ipyrad2.utils.kmers import get_overhang_from_kmers
 from ipyrad2.utils.parse_names import get_name_to_fastq_dict
 from ipyrad2.utils.seqs import AMBIGS, BADCHARS
 from ipyrad2.utils.exceptions import IPyradError
@@ -230,9 +229,12 @@ class Demux:
         """Use kmer analysis to detect restriction overhangs in sequences."""
         read1s = [i[0] for i in self._filenames_to_fastqs.values()]
         read2s = [i[1] for i in self._filenames_to_fastqs.values()]
-        max_reads = int(200_000 / len(read1s))
-        infer_cut1 = infer_overhang(read1s, max_len=20, max_reads=max_reads, anchored=False)
-        infer_cut2 = infer_overhang(read2s, max_len=20, max_reads=max_reads, anchored=False)
+
+        # max_reads = int(200_000 / len(read1s))
+        # infer_cut1 = infer_overhang(read1s, max_len=20, max_reads=max_reads, anchored=False)
+        # infer_cut2 = infer_overhang(read2s, max_len=20, max_reads=max_reads, anchored=False)
+        infer_cut1 = get_overhang_from_kmers(read1s, 20, 100_000, self.workers)
+        infer_cut2 = get_overhang_from_kmers(read2s, 20, 100_000, self.workers)
 
         if self.re1:
             if self.re1 != infer_cut1:

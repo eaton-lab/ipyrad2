@@ -41,12 +41,12 @@ def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = N
     #     help="Optional file with sample\tgroup to assign samples to read groups.",
     # )
     tool.add_argument(
-        "-m", "--mark-duplicates", action="store_true",
-        help="Mark PCR duplicates. Only use for WGS data or RAD with i5 UMI tags.",
+        "-m", "--mark-dups-by-coords", action="store_true",
+        help="Mark PCR duplicates by coordinates. Only use for WGS data.",
     )
     tool.add_argument(
-        "-u", "--umi-tag-in-i5", action="store_true",
-        help="Use UMI tags in names (see ipyrad trim option) when marking duplicates.",
+        "-u", "--mark-dups-by-umis", action="store_true",
+        help="Mark PCR duplicates by UMIs. Only use with i5 tags (see ipyrad trim -u).",
     )
     tool.add_argument(
         "-w", "--workers", metavar="int", type=int, default=2,
@@ -61,12 +61,12 @@ def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = N
         help="Overwrite if out dir contains fastq file with identical name.",
     )
     tool.add_argument(
-        "-nx", "--name-delim", metavar="str", type=str,
-        help="Set name delim substring 'nx' to override auto name parsing from files. [default=None]"
+        "-dx", "--delim-str", metavar="str", type=str, default=None,
+        help="Set delim substring 'dx' to override name parsing from files. [default=None]"
     )
     tool.add_argument(
-        "-ni", "--name-index", metavar="int", type=int, default=1,
-        help="Set name delim index to keep substring left of the 'ni'-th substring 'nx', if valid [default=1]",
+        "-di", "--delim-idx", metavar="int", type=int, default=1,
+        help="Set delim index. Extracts substring left of the 'di'-th 'dx' in filename. [default=1]",
     )
     tool.add_argument(
         "-l", "--log-level", metavar="str", type=str, default="INFO",
@@ -76,9 +76,3 @@ def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = N
         "-L", "--log-file", metavar="Path", type=Path,
         help="Log file. Logging to stdout is also appended to this file. [default=None]."
     )
-    # tool.add_argument(
-    #     "--logger", type=str, nargs="*",
-    #     help=(
-    #         "Logging info entered as one value for LOGLEVEL, or two values "
-    #         "for LOGLEVEL LOGFILE; e.g., 'DEBUG' or 'DEBUG ipyrad.txt.'")
-    # )
