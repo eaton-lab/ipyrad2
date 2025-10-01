@@ -70,7 +70,7 @@ def choose_chunk_cols(
     return cols
 
 
-def write_seqs_hdf5_2(
+def write_seqs_hdf5(
     name: str,
     outdir: Path,
     snames: List[str],

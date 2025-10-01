@@ -453,14 +453,25 @@ def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) ->
     return out_vcf_gz
 
 
-def get_assembly_vcf(outdir: Path, name: str, reference: Path, threads: int) -> Path:
-
-    in_vcf_gz = outdir / "vcfs" / "variants.resolved.vcf.gz"
-    in_vcf_gz = outdir / f"{name}.vcf.gz"
+def write_vcf(name: str, outdir: Path, threads: int) -> Path:
+    """Get the final VCF filtered by the final BED file to remove
+    filtered loci or trimmed edges.
+    """
     loci_bed = outdir / f"{name}.bed"
-    pass
+    out_vcf_gz = outdir / f"{name}.vcf.gz"
+    in_vcf_gz = outdir / "tmpdir" / "vcfs" / "variants.resolved.vcf.gz"
 
-
+    cmd = [
+        BIN_BCF, "view",
+        "-T", str(loci_bed),
+        "-Oz", "-o", str(out_vcf_gz),
+        "--threads", str(threads),
+        "-f", "PASS",
+        "-V", "indels",
+         str(in_vcf_gz),
+    ]
+    run_pipeline([cmd])
+    return out_vcf_gz
 
 
 

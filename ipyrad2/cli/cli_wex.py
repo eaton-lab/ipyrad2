@@ -17,6 +17,7 @@ $ ipyrad wex -d seqs.hdf5 -o OUT/ -w Chr1
 $ ipyrad wex -d seqs.hdf5 -o OUT/ -w Chr1 Chr2 Chr3
 $ ipyrad wex -d seqs.hdf5 -o OUT/ -w 'Chr\d+'  # note single-quotes for '\'
 $ ipyrad wex -d seqs.hdf5 -o OUT/ -w Chr[1-9]
+$ ipyrad wex -d seqs.hdf5 -o OUT/ -w Ag.*Chr1
 $ ipyrad wex -d seqs.hdf5 -o OUT/ -w Chr1:1-1000
 $ ipyrad wex -d seqs.hdf5 -o OUT/ -i POPs.txt -g MINs.txt
 """

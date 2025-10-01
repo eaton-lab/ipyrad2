@@ -26,6 +26,7 @@ from .variants import (
     get_filtered_vcf,
     get_vcf_with_indels_resolved,
     get_locus_and_snp_stats_in_loci_bed,
+    write_vcf,
 )
 from .loci import (
     write_sam_faidx,
@@ -35,7 +36,8 @@ from .loci import (
     build_locus_fasta_database,
     write_loci_and_stats_files,
 )
-from .write_seqs_hdf5 import write_seqs_hdf5_2  # write_seqs_hdf5,
+from .write_seqs import write_seqs_hdf5
+from .write_snps import write_snps_hdf5
 
 
 def run_assembler(
@@ -110,6 +112,8 @@ def run_assembler(
 
     # all samples
     all_dict = wgs_dict | bam_dict
+    snames = sorted(all_dict)
+    all_dict = {i: all_dict[i] for i in snames}
 
     # ---------------------------------------------
     logger.info(f"running up to {workers} parallel jobs each using up to {threads} threads")
@@ -124,19 +128,19 @@ def run_assembler(
     for sname, bam_file in bam_dict.items():
         kwargs = dict(sname=sname, bam_file=bam_file, threads=threads, outdir=tmpdir)
         jobs[sname] = (get_fragment_beds, kwargs)
-    results = run_with_pool(jobs, log_level, workers)
+    results = run_with_pool(jobs, log_level, cores)
 
     jobs = {}
     for sname, bam_file in bam_dict.items():
         kwargs = dict(sname=sname, reference=reference, outdir=tmpdir)
         jobs[sname] = (get_fragment_coverage_beds, kwargs)
-    results = run_with_pool(jobs, log_level, workers)              # single-threaded
+    results = run_with_pool(jobs, log_level, cores)              # single-threaded
 
     jobs = {}
     for sname, bam_file in bam_dict.items():
         kwargs = dict(sname=sname, outdir=tmpdir)
         jobs[sname] = (get_fragment_merged_coverage_beds, kwargs)
-    results = run_with_pool(jobs, log_level, workers)              # single-threaded
+    results = run_with_pool(jobs, log_level, cores)              # single-threaded
 
     logger.info("delimiting shared coverage beds (loci)")
     get_across_sample_loci_bed(
@@ -162,23 +166,23 @@ def run_assembler(
     # ---- VARIANT CALLING ---------------------------------------------
     # ------------------------------------------------------------------
     logger.info("calling variants in locus beds")
-    nchunks = max(4, int(workers / threads))
+    nchunks = max(4, int(workers / threads) * 2)
     locus_chunks = get_chunked_loci_beds(tmpdir, nchunks)
     jobs = {}
     for chunk in locus_chunks:
         kwargs = dict(outdir=tmpdir, reference=reference, bam_files=list(all_dict.values()), locus_chunk=chunk, threads=threads)
         jobs[chunk] = (get_group_called_variants_in_vcf_chunks, kwargs)
-    results = run_with_pool(jobs, log_level, workers)      # multithreaded jobs.
+    results = run_with_pool(jobs, log_level, workers)   # multithreaded jobs.
     get_concat_chunk_vcfs(tmpdir, threads)
 
     logger.info("filtering variants")
-    get_filtered_vcf(tmpdir, min_sample_depth, min_gq, min_qual, threads)
+    get_filtered_vcf(tmpdir, min_sample_depth, min_gq, min_qual, cores)
 
     logger.info("resolving indels and snps")
-    get_vcf_with_indels_resolved(tmpdir, reference, threads)
+    get_vcf_with_indels_resolved(tmpdir, reference, cores)
 
     # optional: maybe wait til after locus filtering...
-    stats = get_locus_and_snp_stats_in_loci_bed(tmpdir, threads)
+    stats = get_locus_and_snp_stats_in_loci_bed(tmpdir, cores)
     logger.warning(stats)
 
     # ------------------------------------------------------------------
@@ -208,7 +212,7 @@ def run_assembler(
     logger.info("assembling loci")
     build_locus_fasta_database(
         name,
-        list(all_dict),
+        snames,
         reference,
         tmpdir,
         exclude_reference,
@@ -221,7 +225,7 @@ def run_assembler(
     logger.info("writing outfiles (.loci, .hdf5, .bed, .stats_*)")
     jobs = {
         "loci": (write_loci_and_stats_files, dict(
-            snames=list(all_dict),
+            snames=snames,
             name=name,
             outdir=outdir,
             exclude_reference=exclude_reference,
@@ -231,22 +235,10 @@ def run_assembler(
             max_locus_hetero_frequency=max_locus_hetero_frequency,
             max_locus_variant_frequency=max_locus_variant_frequency,
         )),
-        # "seqs": (write_seqs_hdf5, dict(
-        #     name=name,
-        #     outdir=outdir,
-        #     snames=list(all_dict),
-        #     reference=reference,
-        #     exclude_reference=exclude_reference,
-        #     min_locus_sample_coverage=min_locus_sample_coverage,
-        #     min_locus_trim_sample_coverage=min_locus_sample_coverage,
-        #     min_locus_length=min_locus_length,
-        #     max_locus_hetero_frequency=max_locus_hetero_frequency,
-        #     max_locus_variant_frequency=max_locus_variant_frequency,
-        # )),
-        "seqs2": (write_seqs_hdf5_2, dict(
+        "seqs2": (write_seqs_hdf5, dict(
             name=name,
             outdir=outdir,
-            snames=list(all_dict),
+            snames=snames,
             reference=reference,
             exclude_reference=exclude_reference,
             min_locus_sample_coverage=min_locus_sample_coverage,
@@ -255,13 +247,18 @@ def run_assembler(
             max_locus_hetero_frequency=max_locus_hetero_frequency,
             max_locus_variant_frequency=max_locus_variant_frequency,
         ))
-        # write snps HDF5
     }
     run_with_pool(jobs, log_level, workers)
 
-    # write the final filtered VCF
-    # get_assembly_vcf()
-    # write_snps_hdf5()
+    # get the final vcf file
+    logger.info("writing variants file (.vcf.gz)")
+    vcf_gz = write_vcf(name, outdir, threads)
+
+    # add snps dataset to the database file
+    logger.info("writing snps database (.hdf5)")
+    write_snps_hdf5(name, outdir, list(all_dict), reference, vcf_gz, )
+
+    # final stats stuff?
 
     # shutil.rmtree(tmpdir)
 

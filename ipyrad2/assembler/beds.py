@@ -64,7 +64,7 @@ def get_fragment_beds(sname: str, bam_file: Path, threads: int, outdir: Path) ->
 
     # Pipeline commands
     # 1) name-group for -bedpe (stdout)
-    cmd1 = [BIN_SAM, "collate", "-u", "-@", str(threads), "-O", str(bam_file)]
+    cmd1 = [BIN_SAM, "collate", "-u", "-@", str(threads), "-O", str(bam_file), "-T", str(outdir / f"{sname}")]
 
     # 2) paired-end to BEDPE
     cmd2 = [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]
