@@ -155,7 +155,8 @@ def get_group_called_variants_in_vcf_chunks(outdir: Path, reference: Path, bam_f
 
     # divide threads
     threads_mpileup = max(1, threads // 2)
-    threads_call = max(1, threads - threads_mpileup)
+    threads_call = max(1, threads - threads_mpileup - 1)
+    threads_view = 1
 
     # get genotype likelihoods at all sites in Region with decent mapping.
     cmd1 = [
@@ -182,7 +183,10 @@ def get_group_called_variants_in_vcf_chunks(outdir: Path, reference: Path, bam_f
         "--threads", str(threads_call),
     ]
     cmd3 = [
-        BIN_BCF, "view", "-v", "snps,indels", "-Oz", "-o", str(out_vcf_gz),
+        BIN_BCF, "view",
+        "-v", "snps,indels",
+        "--threads", str(threads_view),
+        "-Oz", "-o", str(out_vcf_gz),
     ]
     run_pipeline([cmd1, cmd2, cmd3])
     return out_vcf_gz
@@ -309,7 +313,6 @@ def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) ->
       5) concat + sort
       6) collapse biallelic back to multiallelic + sort
     """
-    ref_fa = Path(reference)
     in_vcf_gz = outdir / "vcfs" / "loci.filtered.vcf.gz"
     out_vcf_gz = outdir / "vcfs" / "variants.resolved.vcf.gz"
     vcf_dir = outdir / "vcfs"
@@ -320,7 +323,7 @@ def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) ->
     # 1) decompose multi-allelic and indels into extra lines
     cmd1 = [
         BIN_BCF, "norm",
-        "-f", str(ref_fa),
+        "-f", str(reference),
         "-m", "-both",
         "--threads", str(threads),
         "-W",
@@ -427,7 +430,6 @@ def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) ->
     cmd1 = [
         BIN_BCF, "norm",
         "-m", "+both",
-        # "-Oz", "-o", str(vcf_dir / "combined.multi.vcf.gz"),
         "--threads", str(threads),
         str(vcf_dir / "combined.sorted.vcf.gz"),
     ]
@@ -435,226 +437,31 @@ def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) ->
         BIN_BCF, "sort",
         "-Oz", "-o", str(out_vcf_gz),
         "-W",
-        str(vcf_dir / "combined.multi.vcf.gz")
     ]
     run_pipeline([cmd1, cmd2])
-    # run_pipeline([cmd1])
-    # run_pipeline([cmd2])
 
     # clean up
     for path in vcf_dir.glob("*.vcf.gz"):
         if path.name != out_vcf_gz.name:
             if path.exists():
-                logger.warning(f'removing {path}')
+                # logger.warning(f'removing {path}')
                 path.unlink()
             ipath = path.with_suffix(path.suffix + ".csi")
             if ipath.exists():
-                logger.warning(f'removing {ipath}')
+                # logger.warning(f'removing {ipath}')
                 ipath.unlink()
     return out_vcf_gz
 
 
-# def old_get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) -> Path:
-#     """Resolve overlapping snps and indels. Keep indel type when overlapping.
+def get_assembly_vcf(outdir: Path, name: str, reference: Path, threads: int) -> Path:
 
-#     If no indels are present then it just renames the vcf.
+    in_vcf_gz = outdir / "vcfs" / "variants.resolved.vcf.gz"
+    in_vcf_gz = outdir / f"{name}.vcf.gz"
+    loci_bed = outdir / f"{name}.bed"
+    pass
 
-#     Steps:
-#       1) norm -m -both
-#       2) split to snps or indels
-#       3) make indel.regions.bed from REF/ALT lengths
-#       4) drop conflicting SNPs
-#       5) concat + sort
-#       6) collapse biallelic back to multiallelic + sort
-#     """
-#     ref_fa = Path(reference)
-#     in_vcf_gz = outdir / "vcfs" / "loci.filtered.vcf.gz"
-#     out_vcf_gz = outdir / "vcfs" / "variants.resolved.vcf.gz"
-#     vcf_dir = outdir / "vcfs"
-#     bed_dir = outdir / "beds"
-#     log_dir = outdir / "logs"
-#     log_dir.mkdir(parents=True, exist_ok=True)
 
-#     # ------------------------------------------------------------
-#     # 1) Normalize & decompose to primitives
-#     cmd1 = [
-#         BIN_BCF, "norm",
-#         "-f", str(ref_fa),
-#         "-m", "-both",
-#         "--threads", str(threads),
-#         "-W",
-#         "-Oz", "-o", str(vcf_dir / "norm.vcf.gz"),
-#         str(in_vcf_gz),
-#     ]
-#     sp.run(cmd1, check=True, capture_output=True)
 
-#     # ------------------------------------------------------------
-#     # 2) Split into SNPs, INDELs, and REF rows
-#     cmd1 = [
-#         BIN_BCF, "view",
-#         "-v", "snps",
-#         "-Oz", "-o", str(vcf_dir / "snps.vcf.gz"),
-#         "--threads", str(threads),
-#         "-W",
-#         str(vcf_dir / "norm.vcf.gz"),
-#     ]
-#     sp.run(cmd1, check=True)
-#     cmd2 = [
-#         BIN_BCF, "view",
-#         "-v", "indels",
-#         "-Oz", "-o", str(vcf_dir / "indels.vcf.gz"),
-#         "--threads", str(threads),
-#         "-W",
-#         str(vcf_dir / "norm.vcf.gz"),
-#     ]
-#     sp.run(cmd2, check=True)
-
-#     # -----------------------------------------------------------
-#     # 3) Build an indel-affected BED (0-based, half-open)
-#     # bcftools query | awk (length-based) | sort | bedtools merge > bed
-#     awk_prog = (
-#         r'BEGIN{OFS="\t"}'
-#         r'{chrom=$1; pos0=$2; ref=$4; n=split($5,alts,",");'
-#         r' for(i=1;i<=n;i++){alt=alts[i];'
-#         r'  if(length(ref)>length(alt)){print chrom, pos0, pos0+length(ref);} '
-#         r'  else if(length(alt)>length(ref)){print chrom, pos0, pos0+1;} '
-#         r' }}'
-#     )
-#     cmd1 = [
-#         BIN_BCF, "query",
-#         "-f", r"%CHROM\t%POS0\t%POS\t%REF\t%ALT\n",
-#         str(vcf_dir / "indels.vcf.gz"),
-#     ]
-#     cmd2 = ["awk", awk_prog]
-#     cmd3 = ["sort", "-k1,1", "-k2,2n", "-T", str(vcf_dir)]
-#     cmd4 = [BIN_BED, "merge", "-i", "-"]
-
-#     # run pipeline
-#     e1 = open(log_dir / "query.err", "wb")
-#     p1 = sp.Popen(cmd1, stdout=sp.PIPE, stderr=e1)
-
-#     e2 = open(log_dir / "awk.err", "wb")
-#     p2 = sp.Popen(cmd2, stdin=p1.stdout, stdout=sp.PIPE, stderr=e2)
-#     if p1.stdout:
-#         p1.stdout.close()
-
-#     e3 = open(log_dir / "sort.err", "wb")
-#     p3 = sp.Popen(cmd3, stdin=p2.stdout, stdout=sp.PIPE, stderr=e3)
-#     if p2.stdout:
-#         p2.stdout.close()
-
-#     o4 = open(bed_dir / "indel.regions.bed", "wb")
-#     e4 = open(log_dir / "merge.err", "wb")
-#     p4 = sp.Popen(cmd4, stdin=p3.stdout, stdout=o4, stderr=e4)
-#     if p3.stdout:
-#         p3.stdout.close()
-
-#     # wait for jobs to finish
-#     r4 = p4.wait()
-#     r3 = p3.wait()
-#     r2 = p2.wait()
-#     r1 = p1.wait()
-#     for fh in (e1, e2, e3, e4, 4):
-#         try:
-#             fh.close()
-#         except Exception:
-#             pass
-#     # collect errors
-#     if any(rc != 0 for rc in (r1, r2, r3, r4)):
-#         raise RuntimeError(f"Error. See logs in {log_dir}")
-
-#     # ----------------------------------------------------------
-#     # 4) drop the conflicting SNPs
-#     cmd1 = [
-#         BIN_BCF, "view",
-#         "-T", f"^{str(bed_dir / 'indel.regions.bed')}",
-#         "-Oz", "-o", str(vcf_dir / "snps.clean.vcf.gz"),
-#         "--threads", str(threads),
-#         "-W",
-#         str(vcf_dir / "snps.vcf.gz"),
-#     ]
-#     sp.run(cmd1, check=True)
-
-#     # ----------------------------------------------------------
-#     # 6) keep REF rows but avoid duplicate POS lines
-#     # Build variant.pos.bed = 1-bp windows of SNP positions + indel anchors
-#     # We stream both queries into a single sort|uniq pipeline.
-#     cmd1 = ["sort", "-k1,1", "-k2,2n", "-T", str(vcf_dir)]
-#     cmd2 = ["uniq"]
-
-#     # get indel positions to rm variants from
-#     variant_pos_bed = bed_dir / "variant.pos.bed"
-#     with open(variant_pos_bed, "w") as o2:
-#         # open processors waiting on stdin
-#         sort_p = sp.Popen(cmd1, stdin=sp.PIPE, stdout=sp.PIPE, text=True)
-#         uniq_p = sp.Popen(cmd2, stdin=sort_p.stdout, stdout=o2, text=True)
-
-#         # iterate over each file to feed it in
-#         vfiles = [vcf_dir / "snps.clean.vcf.gz", vcf_dir / "indels.vcf.gz"]
-#         for vcf_file in vfiles:
-#             # Write both files into sort_p stdin
-#             cmd_ = [BIN_BCF, "query", "-f", r"%CHROM\t%POS0\t%POS\n", str(vcf_file)]
-#             q2 = sp.run(cmd_, check=True, capture_output=True, text=True)
-#             sort_p.stdin.write(q2.stdout)
-
-#         # wait for sort and uniq processes to finish
-#         sort_p.stdin.close()
-#         rc_sort = sort_p.wait()
-#         rc_uniq = uniq_p.wait()
-
-#         # check for errors
-#         if rc_sort != 0 or rc_uniq != 0:
-#             raise RuntimeError("Failed to create variant.pos.bed")
-
-#     # ----------------------------------------------------------
-#     # 7) Recombine (refs + clean SNPs + indels) and sort
-#     cmd1 = [
-#         BIN_BCF, "concat",
-#         "-a",
-#         "-Oz", "-o", str(vcf_dir / "combined.vcf.gz"),
-#         "--threads", str(threads),
-#         # str(vcf_dir / "refs.clean.vcf.gz"),
-#         str(vcf_dir / "snps.clean.vcf.gz"),
-#         str(vcf_dir / "indels.vcf.gz"),
-#     ]
-#     cmd2 = [
-#         BIN_BCF, "sort",
-#         "-Oz", "-o", str(vcf_dir / "combined.sorted.vcf.gz"),
-#         "-T", str(vcf_dir),
-#         "-W",
-#         str(vcf_dir / "combined.vcf.gz"),
-#     ]
-#     sp.run(cmd1, check=True, capture_output=True)
-#     sp.run(cmd2, check=True, capture_output=True)
-
-#     # 8) Collapse biallelic records at same POS back to multi-allelic; sort & index
-#     cmd1 = [
-#         BIN_BCF, "norm",
-#         "-m", "+both",
-#         "-Oz", "-o", str(vcf_dir / "combined.multi.vcf.gz"),
-#         "--threads", str(threads),
-#         str(vcf_dir / "combined.sorted.vcf.gz"),
-#     ]
-#     cmd2 = [
-#         BIN_BCF, "sort",
-#         "-Oz", "-o", str(out_vcf_gz),
-#         "-W",
-#         str(vcf_dir / "combined.multi.vcf.gz")
-#     ]
-#     sp.run(cmd1, check=True, capture_output=True)
-#     sp.run(cmd2, check=True, capture_output=True)
-
-#     # clean up
-#     # for path in vcf_dir.glob("*.vcf.gz"):
-#     #     if path.name != out_vcf_gz.name:
-#     #         if path.exists():
-#     #             print(f'removing {path}')
-#     #             path.unlink()
-#     #         ipath = path.with_suffix(path.suffix + ".csi")
-#     #         if ipath.exists():
-#     #             print(f'removing {ipath}')
-#     #             ipath.unlink()
-#     return out_vcf_gz
 
 
 if __name__ == "__main__":

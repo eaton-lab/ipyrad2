@@ -158,11 +158,15 @@ def run_pipeline(cmds: List[Sequence[str]], outfile: Optional[Path] = None) -> T
 # ---------- Parent-side wrapper (always uses 'spawn'; no option exposed) ----------
 
 
-def run_with_pool(func: Callable[[Any], Any], jobs: Dict[Any, Any], log_level: str, max_workers: int | None = None) -> List[Any]:
-    """
-    Execute func(**job) over 'jobs' on a ProcessPoolExecutor.
+# def run_with_pool(func: Callable[[Any], Any], jobs: Dict[Any, Any], log_level: str, max_workers: int | None = None) -> List[Any]:
+def run_with_pool(jobs: Dict[Any, Tuple[Callable[[Any], Any], Dict[Any, Any]]], log_level: str, max_workers: int | None = None) -> List[Any]:
+    """Distribute jobs in parallel and collect results.
+
+    Submit jobs as a {key: (func, **kwargs), ...}.
+
     - Ctrl-C in parent: SIGTERM then SIGKILL to workers; workers kill their child procs.
     - Exceptions in workers propagate via fut.result().
+
     Returns results in submission order.
     """
     # jobs_dictst = list(jobs)
@@ -183,17 +187,29 @@ def run_with_pool(func: Callable[[Any], Any], jobs: Dict[Any, Any], log_level: s
 
     ex = None
     try:
+        # start process pool
         with ProcessPoolExecutor(
             max_workers=max_workers,
             mp_context=ctx,
             initializer=_init_worker_with_pid,
             initargs=(pid_queue, log_level),
         ) as ex:
-            fut2idx = {ex.submit(func, **kwargs): key for key, kwargs in jobs.items()}
-            for fut in as_completed(fut2idx):
+
+            # submit jobs to the pool
+            futures_to_jnames = {}
+            for jname, job in jobs.items():
+                func, kwargs = job
+                future = ex.submit(func, **kwargs)
+                futures_to_jnames[future] = jname
+
+            # wait for jobs to finish while storing pids in case we need to kill
+            for fut in as_completed(futures_to_jnames):
                 _collect_pids_nonblock()
-                results[fut2idx[fut]] = fut.result()
+                results[futures_to_jnames[fut]] = fut.result()
+
+    # stop jobs on interrupt
     except KeyboardInterrupt:
+
         # Grab any PIDs already reported
         _collect_pids_nonblock()
 

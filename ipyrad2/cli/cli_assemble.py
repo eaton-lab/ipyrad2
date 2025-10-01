@@ -89,7 +89,7 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
     )
     tool.add_argument(
         "-p", "--populations", metavar="Path", type=Path,
-        help="Path to a population file where each line lists 'sample-name\tgroup-name'. [default=None]"
+        help=r"Pop file ('name\tpop' on each line) to group samples for joint variant calls. [default=None]"
     )
     tool.add_argument(
         "-x", "--masks", metavar="str", nargs="*", type=str,
@@ -100,12 +100,12 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="Do not include the reference sequence as a sample in outputs",
     )
     tool.add_argument(
-        "-w", "--workers", metavar="int", type=int, default=2,
-        help="N concurrent workers (jobs) to parallelize. [default=4]",
+        "-c", "--cores", metavar="int", type=int, default=6,
+        help="Max number of cores to use. [default=6]",
     )
     tool.add_argument(
-        "-t", "--threads", metavar="int", type=int, default=4,
-        help="N threads per worker (e.g., -w 2 -t 4 uses up to 8 threads). [default=2]",
+        "-t", "--threads", metavar="int", type=int, default=3,
+        help="Run c/t multi-threaded jobs concurrently. Larger -t reduces RAM and I/O. [default=3]",
     )
     tool.add_argument(
         "-f", "--force", action="store_true",

@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 import numpy as np
 from loguru import logger
-from ..utils.parallel import run_pipeline
+from ipyrad2.utils.parallel import run_pipeline
 
 BIN = Path(sys.prefix) / "bin"
 BIN_SAM = str(BIN / "samtools")
@@ -48,7 +48,7 @@ def get_reference_sort_order(reference: Path, outdir: Path) -> Path:
     return out_path
 
 
-def get_fragment_beds(sname: str, bam_file: Path, outdir: Path) -> Path:
+def get_fragment_beds(sname: str, bam_file: Path, threads: int, outdir: Path) -> Path:
     """Produce a fragments BED (full inserts) from a coordinate-sorted BAM.
 
     Shell command
@@ -59,14 +59,12 @@ def get_fragment_beds(sname: str, bam_file: Path, outdir: Path) -> Path:
     >>>   | bedtools sort -i - > S1.fragments.bed
     """
     bed_dir = outdir / "beds"
-    log_dir = outdir / "logs"
     out_path = bed_dir / f"{sname}.fragments.bed"
     bed_dir.mkdir(parents=True, exist_ok=True)
-    log_dir.mkdir(parents=True, exist_ok=True)
 
     # Pipeline commands
     # 1) name-group for -bedpe (stdout)
-    cmd1 = [BIN_SAM, "collate", "-u", "-@", "1", "-O", str(bam_file)]
+    cmd1 = [BIN_SAM, "collate", "-u", "-@", str(threads), "-O", str(bam_file)]
 
     # 2) paired-end to BEDPE
     cmd2 = [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]
@@ -197,22 +195,35 @@ def get_sample_coverage_stats_in_loci_bed(bam_file: Path, outdir: Path) -> Dict[
     cmd2 = ["cut", "-f", "5"]
     _, out, _ = run_pipeline([cmd1, cmd2])
 
+    stats = {
+        "nloci_with_nonzero_mapping": 0,
+        "median_depth_per_locus_with_nonzero_mapping": 0,
+        "median_depth_per_locus_total": 0,
+    }
+
     # parse stdout of cut
     coverages = out.decode().strip().split("\n")
-    covs = np.array(list(map(int, coverages)))
+
+    if not coverages:
+        return stats
 
     # get nloci with non-zero coverage
-    results = {
-        "nloci_with_nonzero_mapping": int(np.sum(covs > 0)),
-        "median_depth_per_locus_with_nonzero_mapping": float(np.median(covs[covs > 0])),
-        "median_depth_per_locus_total": float(np.median(covs)),
-        "covs": covs > 0,
-    }
-    return results
+    covs = np.array(list(map(int, coverages)))
+    stats["nloci_with_nonzero_mapping"] = int(np.sum(covs > 0))
+    stats["median_depth_per_locus_with_nonzero_mapping"] = float(np.median(covs[covs > 0]))
+    stats["mean_depth_per_locus_with_nonzero_mapping"] = float(np.mean(covs[covs > 0]))
+    stats["std_depth_per_locus_with_nonzero_mapping"] = float(np.std(covs[covs > 0]))
+    stats["median_depth_per_locus_total"] = float(np.median(covs))
+    stats["mean_depth_per_locus_total"] = float(np.mean(covs))
+    stats["std_depth_per_locus_total"] = float(np.std(covs))
+    return stats
 
 
 
 
 if __name__ == "__main__":
 
-    pass
+    tmpdir = Path("/home/deren/Documents/ipyrad-tests/Ama-out/tmpdir/")
+    bam = Path("/home/deren/Documents/ipyrad-tests/Ama-map/SLH_AL_3065.marked.sorted.bam")
+
+    print(get_sample_coverage_stats_in_loci_bed(bam, tmpdir))

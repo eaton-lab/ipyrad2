@@ -21,7 +21,7 @@ from loguru import logger
 import pandas as pd
 from pandas.errors import ParserError
 from ipyrad2.utils.kmers import get_overhang_from_kmers
-from ipyrad2.utils.parse_names import get_name_to_fastq_dict
+from ipyrad2.utils.names import get_name_to_fastq_dict
 from ipyrad2.utils.seqs import AMBIGS, BADCHARS
 from ipyrad2.utils.exceptions import IPyradError
 from ipyrad2.demuxer.match import (
@@ -46,8 +46,8 @@ class Demux:
     """: Overhang on read2 from restriction digestion + ligation. Inferred if None."""
     max_mismatch: int
     """: Max number of mismatches between barcodes. Checked for conflict."""
-    workers: int
-    """: max number of parallel workers."""
+    cores: int
+    """: max number of parallel cores."""
     chunksize: int
     """: max number of reads to process between writing to disk."""
     merge_technical_replicates: bool
@@ -233,8 +233,8 @@ class Demux:
         # max_reads = int(200_000 / len(read1s))
         # infer_cut1 = infer_overhang(read1s, max_len=20, max_reads=max_reads, anchored=False)
         # infer_cut2 = infer_overhang(read2s, max_len=20, max_reads=max_reads, anchored=False)
-        infer_cut1 = get_overhang_from_kmers(read1s, 20, 100_000, self.workers)
-        infer_cut2 = get_overhang_from_kmers(read2s, 20, 100_000, self.workers)
+        infer_cut1 = get_overhang_from_kmers(read1s, 20, 100_000, self.cores)
+        infer_cut2 = get_overhang_from_kmers(read2s, 20, 100_000, self.cores)
 
         if self.re1:
             if self.re1 != infer_cut1:
@@ -516,7 +516,7 @@ def barmatch(fastq_tuple, demux_obj):
         cuts2=demux_obj._cuts2,
         merge_technical_replicates=demux_obj.merge_technical_replicates,
         outdir=demux_obj.outdir,
-        workers=demux_obj.workers,
+        cores=demux_obj.cores,
         chunksize=demux_obj.chunksize,
         max_reads=demux_obj.max_reads,
     )
@@ -569,7 +569,7 @@ if __name__ == "__main__":
         barcodes=DATA / "barcode*.csv",
         outdir="/tmp/DEMUX",
         max_mismatch=0,
-        workers=4,
+        cores=4,
         chunksize=int(1e7),
         re1="ATCGG",
         re2="CGATCC",
@@ -628,7 +628,7 @@ if __name__ == "__main__":
         fastqs="../../pedtest/Pedicularis_plate1_R*.fastq.gz",
         outdir="../../pedtest/demux_2024-3-16",
         max_barcode_mismatch=1,
-        workers=7,
+        cores=7,
         chunksize=1e6,
         # re1="ATCGG",
         # re2="CGATCC",

@@ -81,8 +81,8 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
         help="Demultiplex on i7 index instead of inline barcodes."
     )
     tool.add_argument(
-        "-w", "--workers", metavar="int", type=int, default=2,
-        help="N concurrent workers (jobs) to parallelize. [default=4]",
+        "-c", "--cores", metavar="int", type=int, default=4,
+        help="Max number of cores. [default=4]",
     )
     tool.add_argument(
         "-l", "--log-level", metavar="str", type=str, default="INFO",

@@ -3,10 +3,11 @@
 """...
 """
 
-from typing import List, Tuple
-import sys
+from typing import List
+import shutil
 from pathlib import Path
 from loguru import logger
+import pandas as pd
 from ..utils.parallel import run_with_pool
 from ..utils.exceptions import IPyradError
 from .beds import (
@@ -34,7 +35,7 @@ from .loci import (
     build_locus_fasta_database,
     write_loci_and_stats_files,
 )
-from .write_seqs_hdf5 import write_seqs_hdf5
+from .write_seqs_hdf5 import write_seqs_hdf5_2  # write_seqs_hdf5,
 
 
 def run_assembler(
@@ -55,15 +56,19 @@ def run_assembler(
     populations: Path,
     masks: List[str] | None,
     exclude_reference: bool,
-    name_parse: Tuple[str, int] | None,
-    workers: int,
+    cores: int,
     threads: int,
     force: bool,
+    log_level: str,
     ):
     # check reference and outdir paths
     reference = reference.expanduser().absolute()
     outdir = outdir.expanduser().absolute()
-    outdir.mkdir(exist_ok=True)
+    tmpdir = outdir / "tmpdir"
+    tmpdir.mkdir(exist_ok=True, parents=True)
+
+    # run this many multithreaded jobs concurrently
+    workers = max(1, cores // threads)
 
     # check outdir for existing and raise or remove
     if (outdir / f"{name}.loci.txt").exists():
@@ -71,26 +76,37 @@ def run_assembler(
             raise IPyradError(f"outfiles with prefix {name} already exist in {outdir}. Use --force to overwrite.")
         else:
             # collect relevant files and rm
-            pass
-            # for n in ["vcfs", "beds", "consensus_seqs"]:
-            #     odir = outdir / n
-            #     if odir.exists():
-            #         shutil.rmtree(odir)
+            logger.debug(f"removing previous ipyrad assemble files from {outdir}")
+            if tmpdir.exists():
+                shutil.rmtree(tmpdir)
+            rfiles = [
+                outdir / f"{name}.loci.txt",
+                outdir / f"{name}.seqs.hdf5",
+                outdir / f"{name}.snps.hdf5",
+                outdir / f"{name}.stats_loci.tsv",
+                outdir / f"{name}.stats_samples.tsv",
+                outdir / f"{name}.stats_coverage.tsv",
+            ]
+            for r in rfiles:
+                if r.exists():
+                    r.unlink()
 
-    # check bam paths and get names dicts as {name: Path, ...}
+    # raises exception if no RAD bams found. Fills {name: bam, ...}
     bam_dict = {}
     if rad_bams:
         for bam_file in rad_bams:
             bam_dict[get_name_from_bam(bam_file)] = bam_file.expanduser().absolute()
-    assert bam_dict, "..."
-    logger.info(f"loaded {len(bam_dict)} RAD samples") # : {sorted(bam_dict)}")
+    if not bam_dict:
+        raise IPyradError("No RAD bam files found. These are required.")
+    logger.info(f"loaded {len(bam_dict)} RAD samples")
 
+    # not required. Fills {name: bam, ...}
     wgs_dict = {}
     if wgs_bams:
         for bam_file in wgs_bams:
             wgs_dict[get_name_from_bam(bam_file)] = bam_file.expanduser().absolute()
     if wgs_dict:
-        logger.info(f"loaded {len(wgs_dict)} WGS samples") # : {sorted(wgs_dict)}")
+        logger.info(f"loaded {len(wgs_dict)} WGS samples")
 
     # all samples
     all_dict = wgs_dict | bam_dict
@@ -98,29 +114,29 @@ def run_assembler(
     # ---------------------------------------------
     logger.info(f"running up to {workers} parallel jobs each using up to {threads} threads")
     logger.debug("fetching reference scaffold order")
-    get_reference_sort_order(reference, outdir)
 
     # ------------------------------------------------------------------
     # ---- LOCUS DELIMITING --------------------------------------------
     # ------------------------------------------------------------------
+    get_reference_sort_order(reference, tmpdir)
     logger.info("delimiting sample coverage beds")
     jobs = {}
     for sname, bam_file in bam_dict.items():
-        kwargs = dict(sname=sname, bam_file=bam_file, outdir=outdir)
-        jobs[sname] = kwargs
-    results = run_with_pool(get_fragment_beds, jobs, workers)
+        kwargs = dict(sname=sname, bam_file=bam_file, threads=threads, outdir=tmpdir)
+        jobs[sname] = (get_fragment_beds, kwargs)
+    results = run_with_pool(jobs, log_level, workers)
 
     jobs = {}
     for sname, bam_file in bam_dict.items():
-        kwargs = dict(sname=sname, reference=reference, outdir=outdir)
-        jobs[sname] = kwargs
-    results = run_with_pool(get_fragment_coverage_beds, jobs, workers)
+        kwargs = dict(sname=sname, reference=reference, outdir=tmpdir)
+        jobs[sname] = (get_fragment_coverage_beds, kwargs)
+    results = run_with_pool(jobs, log_level, workers)              # single-threaded
 
     jobs = {}
     for sname, bam_file in bam_dict.items():
-        kwargs = dict(sname=sname, outdir=outdir)
-        jobs[sname] = kwargs
-    results = run_with_pool(get_fragment_merged_coverage_beds, jobs, workers)
+        kwargs = dict(sname=sname, outdir=tmpdir)
+        jobs[sname] = (get_fragment_merged_coverage_beds, kwargs)
+    results = run_with_pool(jobs, log_level, workers)              # single-threaded
 
     logger.info("delimiting shared coverage beds (loci)")
     get_across_sample_loci_bed(
@@ -128,60 +144,63 @@ def run_assembler(
         min_locus_sample_coverage,
         min_locus_merge_distance,
         min_locus_length,
-        outdir,
+        tmpdir,
     )
 
     # Maybe not necessary, we measure coverage on the filtered loci later.
-    # logger.info("measuring sample locus coverage stats")
-    # jobs = {}
-    # for sname, bam_file in all_dict.items():
-    #     jobs[sname] = dict(bam_file=bam_file, outdir=outdir)
-    # results = run_with_pool(get_sample_coverage_stats_in_loci_bed, jobs, workers)
-    # locus_bed_coverage_stats = results
+    logger.info("measuring sample coverage in loci")
+    jobs = {}
+    for sname, bam_file in all_dict.items():
+        jobs[sname] = (get_sample_coverage_stats_in_loci_bed, dict(bam_file=bam_file, outdir=tmpdir))
+    cov_stats = run_with_pool(jobs, log_level, workers)
+    logger.warning(pd.DataFrame(cov_stats).T)
+    nr_loci = sum([cov_stats[sname]["nloci_with_nonzero_mapping"] for sname in jobs])
+    if not nr_loci:
+        raise IPyradError("No loci have sample coverage >= 'min_locus_sample_coverage'. Consider lowering this parameter.")
 
     # ------------------------------------------------------------------
     # ---- VARIANT CALLING ---------------------------------------------
     # ------------------------------------------------------------------
     logger.info("calling variants in locus beds")
     nchunks = max(4, int(workers / threads))
-    locus_chunks = get_chunked_loci_beds(outdir, nchunks)
+    locus_chunks = get_chunked_loci_beds(tmpdir, nchunks)
     jobs = {}
     for chunk in locus_chunks:
-        kwargs = dict(outdir=outdir, reference=reference, bam_files=list(all_dict.values()), locus_chunk=chunk, threads=max(4, threads))
-        jobs[chunk] = kwargs
-    results = run_with_pool(get_group_called_variants_in_vcf_chunks, jobs, workers)
-    get_concat_chunk_vcfs(outdir, threads)
+        kwargs = dict(outdir=tmpdir, reference=reference, bam_files=list(all_dict.values()), locus_chunk=chunk, threads=threads)
+        jobs[chunk] = (get_group_called_variants_in_vcf_chunks, kwargs)
+    results = run_with_pool(jobs, log_level, workers)      # multithreaded jobs.
+    get_concat_chunk_vcfs(tmpdir, threads)
 
     logger.info("filtering variants")
-    get_filtered_vcf(outdir, min_sample_depth, min_gq, min_qual, max(4, threads))
+    get_filtered_vcf(tmpdir, min_sample_depth, min_gq, min_qual, threads)
 
     logger.info("resolving indels and snps")
-    get_vcf_with_indels_resolved(outdir, reference, max(4, threads))
+    get_vcf_with_indels_resolved(tmpdir, reference, threads)
 
     # optional: maybe wait til after locus filtering...
-    stats = get_locus_and_snp_stats_in_loci_bed(outdir, max(4, threads))
+    stats = get_locus_and_snp_stats_in_loci_bed(tmpdir, threads)
     logger.warning(stats)
 
     # ------------------------------------------------------------------
     # ---- CONSENSUS CALLING -------------------------------------------
     # ------------------------------------------------------------------
     logger.info("extracting reference sequence in locus beds")
-    write_sam_faidx(outdir)
-    get_reference_in_loci_beds(outdir, reference)
+    write_sam_faidx(tmpdir)
+    get_reference_in_loci_beds(tmpdir, reference)
 
     logger.info("building coverage masks")
     jobs = {}
     for sname, bam_file in all_dict.items():
-        kwargs = dict(sname=sname, bam_file=bam_file, min_sample_depth=min_sample_depth, outdir=outdir)
-        jobs[sname] = kwargs
-    results = run_with_pool(get_sample_masked_beds, jobs, workers)
+        kwargs = dict(sname=sname, bam_file=bam_file, min_sample_depth=min_sample_depth, outdir=tmpdir)
+        jobs[sname] = (get_sample_masked_beds, kwargs)
+    _ = run_with_pool(jobs, log_level, workers)  # returns redundant stats info
 
     logger.info("extracting consensus sequences")
     jobs = {}
     for sname, bam_file in all_dict.items():
-        kwargs = dict(sname=sname, reference=reference, outdir=outdir, keep_insertions=False)
-        jobs[sname] = kwargs
-    results = run_with_pool(get_consensus, jobs, workers)
+        kwargs = dict(sname=sname, reference=reference, outdir=tmpdir, keep_insertions=False)
+        jobs[sname] = (get_consensus, kwargs)
+    run_with_pool(jobs, log_level, workers)
 
     # ------------------------------------------------------------------
     # ---- LOCUS BUILDING ----------------------------------------------
@@ -191,45 +210,60 @@ def run_assembler(
         name,
         list(all_dict),
         reference,
-        outdir,
+        tmpdir,
         exclude_reference,
         masks,
-    )
-
-    logger.info("filtering and writing loci and stats")
-    stats = write_loci_and_stats_files(
-        list(all_dict),
-        name,
-        outdir,
-        exclude_reference,
-        min_locus_sample_coverage,
-        min_locus_trim_sample_coverage,
-        min_locus_length,
-        max_locus_hetero_frequency,
-        max_locus_variant_frequency,
-    )
-
-    # write seqs HDF5, snps HDF5, and final VCFs
-    logger.info("writing hdf5 database files")
-    write_seqs_hdf5(
-        name=name,
-        outdir=outdir,
-        snames=list(all_dict),
-        reference=reference,
-        exclude_reference=exclude_reference,
-        nloci=stats["nloci"],
-        nsites=stats["nsites"],
     )
 
     # ------------------------------------------------------------------
     # ---- DATABASE WRITING --------------------------------------------
     # ------------------------------------------------------------------
+    logger.info("writing outfiles (.loci, .hdf5, .bed, .stats_*)")
+    jobs = {
+        "loci": (write_loci_and_stats_files, dict(
+            snames=list(all_dict),
+            name=name,
+            outdir=outdir,
+            exclude_reference=exclude_reference,
+            min_locus_sample_coverage=min_locus_sample_coverage,
+            min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
+            min_locus_length=min_locus_length,
+            max_locus_hetero_frequency=max_locus_hetero_frequency,
+            max_locus_variant_frequency=max_locus_variant_frequency,
+        )),
+        # "seqs": (write_seqs_hdf5, dict(
+        #     name=name,
+        #     outdir=outdir,
+        #     snames=list(all_dict),
+        #     reference=reference,
+        #     exclude_reference=exclude_reference,
+        #     min_locus_sample_coverage=min_locus_sample_coverage,
+        #     min_locus_trim_sample_coverage=min_locus_sample_coverage,
+        #     min_locus_length=min_locus_length,
+        #     max_locus_hetero_frequency=max_locus_hetero_frequency,
+        #     max_locus_variant_frequency=max_locus_variant_frequency,
+        # )),
+        "seqs2": (write_seqs_hdf5_2, dict(
+            name=name,
+            outdir=outdir,
+            snames=list(all_dict),
+            reference=reference,
+            exclude_reference=exclude_reference,
+            min_locus_sample_coverage=min_locus_sample_coverage,
+            min_locus_trim_sample_coverage=min_locus_sample_coverage,
+            min_locus_length=min_locus_length,
+            max_locus_hetero_frequency=max_locus_hetero_frequency,
+            max_locus_variant_frequency=max_locus_variant_frequency,
+        ))
+        # write snps HDF5
+    }
+    run_with_pool(jobs, log_level, workers)
 
-    # write snps HDF5
+    # write the final filtered VCF
+    # get_assembly_vcf()
+    # write_snps_hdf5()
 
-    #
-    # logger.info(locus_bed_coverage_stats)
-
+    # shutil.rmtree(tmpdir)
 
 
 if __name__ == "__main__":

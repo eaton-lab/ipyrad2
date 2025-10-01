@@ -115,7 +115,7 @@ def command_line():
             i7=args.i7,
             disable_infer_re_overhangs=args.disable_infer_re_overhangs,
             merge_technical_replicates=args.merge_technical_replicates,
-            workers=args.workers,
+            cores=args.cores,
             max_reads=args.max_reads,
         )
         sys.exit(0)
@@ -139,7 +139,7 @@ def command_line():
             disable_infer_re_overhangs=args.disable_infer_re_overhangs,
             disable_adapter_trimming=args.disable_adapter_trimming,
             disable_quality_filtering=args.disable_quality_filtering,
-            workers=args.workers,
+            cores=args.cores,
             threads=args.threads,
             delim_str=args.delim_str,
             delim_idx=args.delim_idx,
@@ -159,13 +159,14 @@ def command_line():
             fastqs=args.fastqs,
             reference=args.reference,
             outdir=args.out,
-            workers=args.workers,
+            cores=args.cores,
             threads=args.threads,
             force=args.force,
-            umi_tag_in_i5=args.umi_tag_in_i5,
-            mark_duplicates=args.mark_duplicates,
+            mark_dups_by_coords=args.mark_dups_by_coords,
+            mark_dups_by_umis=args.mark_dups_by_umis,
             delim_str=args.delim_str,
             delim_idx=args.delim_idx,
+            log_level=args.log_level,
         )
         sys.exit(0)
 
@@ -193,10 +194,10 @@ def command_line():
             populations=args.populations,
             masks=args.masks,
             exclude_reference=args.exclude_reference,
-            workers=args.workers,
+            cores=args.cores,
             threads=args.threads,
             force=args.force,
-            name_parse=None if args.name_delim is None else (args.name_delim, args.name_index),
+            log_level=args.log_level,
         )
         sys.exit(0)
 

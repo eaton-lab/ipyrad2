@@ -51,9 +51,7 @@ def _setup_wex_subparser(subparsers: argparse._SubParsersAction, header: str = N
     )
     tool.add_argument(
         "-w", "--windows", metavar="str", type=str, nargs="*",
-        help="One or more genomic windows to extract data from and concatenate. "
-        "Scaffold names select entire scaffolds unless followed by :X-Y to subselect "
-        "a range. Use -P to see scaffold names."
+        help="Select one or more 'scaff' or 'scaff:start-end' (1-indexed) regions to extract an alignment from."
     )
     tool.add_argument(
         "-m", "--min-sample-coverage", metavar="int", type=int, default=4,

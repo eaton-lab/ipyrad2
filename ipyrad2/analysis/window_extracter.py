@@ -2,6 +2,14 @@
 
 """Extract/subset sequences from HDF5 database and write to a supermatrix.
 
+Note that genome coordinates are 1-based, closed (inclusive): both
+start and end are included. This is a general standard in concordance
+with samtools. If a user requests scaff:100-250 the extracted region
+is 151 bp long. The wex tool handles this internally and will return
+the 151 bp region by slicing from the phymap using 0-based indices.
+
+Note that each row of the h5 phymap represent a delimited locus.
+
 Command
 -------
 $ ipyrad wex -d ... -w ... -o ... -m ... -f phy
@@ -39,7 +47,8 @@ import numpy as np
 import pandas as pd
 import h5py
 from loguru import logger
-from ..utils.exceptions import IPyradError
+# from ..utils.exceptions import IPyradError
+from ipyrad2.utils.exceptions import IPyradError
 
 
 NEXHEADER = """#nexus
@@ -89,9 +98,6 @@ class WindowExtracter:
         self.phymap_windows: Dict[int, List[Tuple[int, int]]] = None
         self._imap: Dict[str, List[str]] = {}
         self._minmap: Dict[str, int] = {}
-
-        # ...
-        self.stats: pd.DataFrame = None
 
         # fills: snames, sidxs, scaffold_table
         self._get_scaffold_table()
@@ -171,6 +177,13 @@ class WindowExtracter:
             # sub-scaffold window
             if ":" in window:
                 scaff, region = window.split(":")
+                mask = t.index.str.fullmatch(pat=scaff, na=False)
+                scaff_hits = mask.sum()
+                if not scaff_hits:
+                    raise IPyradError(f"No scaffold names match '{window.split(':')[0]}'. Use -P to view scaffold names.")
+                if scaff_hits > 1:
+                    raise IPyradError("Cannot use regex with ':'. List windows separately: -w Chr1:1-1000 Chr2:1-1000")
+                logger.debug(mask)
                 if region.count("-") != 1:
                     raise IPyradError(f"malformatted window '{window}'. Must be {{scaff}} or {{scaff}}:{{start}}-{{end}}")
                 start, end = [int(i) for i in region.split("-")]
@@ -178,15 +191,17 @@ class WindowExtracter:
                     windows[scaff] = [(start, end)]
                 else:
                     # check for overlap with other windows
-                    for (s, e) in windows[scaff].items():
+                    for (s, e) in windows[scaff]:#.items():
                         if (start < e) & (end > start):
                             raise IPyradError(f"windows cannot overlap. {window} & {windows}")
-                    windows[scaff] = [(start, end)]
+                    windows[scaff].append((start, end))
 
             # full scaffold window
             else:
                 mask = t.index.str.fullmatch(pat=window, na=False)
                 scaffs = t.index[mask].values
+                if not scaffs.size:
+                    raise IPyradError(f"'{window}' does not match to any scaffold names. Check with '-P'.")
                 for scaff in scaffs:
                     if scaff not in windows:
                         length = int(t.loc[scaff, "scaffold_length"])
@@ -196,7 +211,10 @@ class WindowExtracter:
 
         # log to INFO and DEBUG
         logger.debug(f"windows: {windows}")
-        logger.info(f"selected {sum(len(i) for i in windows.values())} windows from {len(windows)} scaffolds")
+        nwindows = sum(len(i) for i in windows.values())
+        ws = 's' if nwindows > 1 else ''
+        ss = 's' if len(windows) > 1 else ''
+        logger.info(f"selected {nwindows} window{ws} from {len(windows)} scaffold{ss}")
 
         # store as dict mapping {scaff_index: window, ...}
         scaff_names = t.index.tolist()
@@ -205,9 +223,10 @@ class WindowExtracter:
     def _get_phymap(self) -> None:
         """Load the phymap for selecting windows from the seqs array."""
         with h5py.File(self.data, 'r') as io5:
-            colnames = io5.attrs["columns"]
-            mask = np.isin(io5["phymap"][:, 0], list(self.phymap_windows))
-            phymap = pd.DataFrame(io5["phymap"][mask], columns=colnames)
+            phymap = io5["phymap"]
+            colnames = phymap.attrs["columns"]
+            mask = np.isin(phymap[:, 0], list(self.phymap_windows))
+            phymap = pd.DataFrame(phymap[mask], columns=colnames)
         self.phymap = phymap
 
     def _get_seqarr(self) -> None:
@@ -243,7 +262,7 @@ class WindowExtracter:
         # if no windows then raise error
         if not phy_windows:
             raise IPyradError("Selected windows contain zero data in the assembly. Try larger/different windows.")
-
+        logger.debug(phy_windows)
         # extract sequences
         with h5py.File(self.data, 'r') as io5:
             lengths = [i[1] - i[0] for i in phy_windows]
@@ -449,25 +468,31 @@ def run_window_extracter(**kwargs):
 if __name__ == "__main__":
 
     h5 = Path("/tmp/OUT_klmnop/assembly.seqs.hdf5")
+    h5 = Path("/home/deren/Documents/ipyrad-tests/OUT/assembly.seqs.hdf5")
     assert h5.exists(), "h5 doesn't exist"
 
     with h5py.File(h5, 'r') as io5:
-        pass
+        print(io5["phymap"][:])
+        print(io5["phy"].shape)
 
-    tool = WindowExtracter(
-        data=h5,
-        name='test',
-        outdir=Path("/tmp/WEX"),
-        windows=r"Chr[2]",
-        min_sample_coverage=4,
-        max_sample_missing=1.0,
-        exclude=[],
-        imap=None,
-        minmap=None,
-        stdout=True,
-        force=True,
-    )
-    tool._write_to_phy()
+        # help(io5.create_dataset)
+
+
+    # tool = WindowExtracter(
+    #     data=h5,
+    #     name='test',
+    #     outdir=Path("/tmp/WEX"),
+    #     windows=r"MT",
+    #     min_sample_coverage=4,
+    #     max_sample_missing=1.0,
+    #     exclude=[],
+    #     imap=None,
+    #     minmap=None,
+    #     stdout=True,
+    #     force=True,
+    # )
+    # tool._write_to_phy()
+
     # print(tool.scaffold_table)
     # arr, stats = tool.run(return_data=True)
     # print(stats.T)

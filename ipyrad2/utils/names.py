@@ -89,7 +89,8 @@ def perfect_pairs(ndict: Dict[str, List[Path]], paths: List[Path]) -> bool:
     """valid PE name"""
     a = all(len(v) == 2 for v in ndict.values())
     b = sum(len(v) for v in ndict.values()) == len(paths)
-    return a & b
+    c = all(list(ndict))
+    return a & b & c
 
 
 def all_unique(ndict: Dict[str, List[Path]], paths: List[Path]) -> bool:
@@ -115,11 +116,11 @@ def get_pairs_or_single_by_trim(
             left = delim.join(parts[:delim_index])
             names_to_paths[left].append(path)
         if perfect_pairs(names_to_paths, fastqs):
-            logger.info("paired files by name-delim")
+            logger.info(f"paired files by user args: -dx={delim} -di={delim_index}")
             return {i: tuple(sorted(j)) for i, j in names_to_paths.items()}
         logger.info("pairing files by name-delim failed. Falling back to auto-detection.")
 
-    # try to pair samples by stripping suffix and/or characters
+    # try to pair samples by splitting on '.'
     hits = []
     idx = 1
     while 1:
@@ -128,17 +129,17 @@ def get_pairs_or_single_by_trim(
             stem = ".".join(path.name.split(".")[:-idx])
             names_to_paths[stem].append(path)
         if perfect_pairs(names_to_paths, fastqs):
-            hits.append(names_to_paths)
+            hits.append((idx, names_to_paths))
         if '' in names_to_paths:
             break
         idx += 1
     # keep the longest one
     if hits:
-        names_to_paths = max(hits, key=lambda x: len(list(x)[0]))
-        logger.info("paired files by splitting on '.'")
+        idx, names_to_paths = max(hits, key=lambda x: len(list(x[1])[0]))
+        logger.info(f"paired files by auto-splitting: -dx=. -di={-idx}")
         return {i: tuple(sorted(j)) for i, j in names_to_paths.items()}
 
-    # try to pair samples by stripping suffix and/or characters
+    # try to pair samples by splitting on '_' from right
     hits = []
     idx = 1
     while 1:
@@ -147,17 +148,36 @@ def get_pairs_or_single_by_trim(
             stem = "_".join(path.name.split("_")[:-idx])
             names_to_paths[stem].append(path)
         if perfect_pairs(names_to_paths, fastqs):
-            hits.append(names_to_paths)
+            hits.append((idx, names_to_paths))
         if '' in names_to_paths:
             break
         idx += 1
     # keep the longest one
     if hits:
-        names_to_paths = max(hits, key=lambda x: len(list(x)[0]))
-        logger.info("paired files by splitting on '_'")
+        idx, names_to_paths = max(hits, key=lambda x: len(list(x[1])[0]))
+        logger.info(f"paired files by auto-splitting: -dx=_ -di={-idx}")
         return {i: tuple(sorted(j)) for i, j in names_to_paths.items()}
 
-    # try to pair samples by stripping suffix and/or characters
+    # try to pair samples by splitting on '_' from left
+    hits = []
+    idx = 1
+    while 1:
+        names_to_paths = defaultdict(list)
+        for path in fastqs:
+            stem = "_".join(path.name.split("_")[:idx])
+            names_to_paths[stem].append(path)
+        if perfect_pairs(names_to_paths, fastqs):
+            hits.append((idx, names_to_paths))
+        if stem == path.name:
+            break
+        idx += 1
+    # keep the longest one
+    if hits:
+        idx, names_to_paths = max(hits, key=lambda x: len(list(x[1])[0]))
+        logger.info(f"paired files by auto-splitting: -dx=_ -di={idx}")
+        return {i: tuple(sorted(j)) for i, j in names_to_paths.items()}
+
+    # try to pair samples by stripping characters from right
     names = [i.name for i in fastqs]
     min_len = min(len(i) for i in names)
     hits = []
@@ -174,7 +194,7 @@ def get_pairs_or_single_by_trim(
     logger.info("failed to pair files, assuming data in single-end")
     # --------------------------------------------------------------
 
-    # try to delim SE names using delim args
+    # try to get unique SE names using delim args
     if delim:
         names_to_paths = defaultdict(list)
         for path in fastqs:
@@ -182,11 +202,11 @@ def get_pairs_or_single_by_trim(
             left = delim.join(parts[:delim_index])
             names_to_paths[left].append(path)
         if all_unique(names_to_paths, fastqs):
-            logger.info("parsed names by name-delim")
+            logger.info(f"parsed names by user args: -dx={delim} -di={delim_index}")
             return {i: (j[0], None) for i, j in names_to_paths.items()}
-        logger.info("parsing names by name-delim failed. Falling back to auto-detection.")
+        logger.info("parsing names by user args failed. Falling back to auto-detection.")
 
-    # get longest unique SE name by stripping characters
+    # get get unique SE name by stripping characters from right
     hits = []
     for cut in range(1, min_len):
         names_to_paths = defaultdict(list)

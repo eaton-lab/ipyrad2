@@ -13,7 +13,6 @@ import re
 import sys
 from pathlib import Path
 from collections import Counter
-import subprocess as sp
 import numpy as np
 from loguru import logger
 from ..utils.seqs import comp
@@ -32,8 +31,8 @@ def write_sam_faidx(outdir: Path) -> Path:
     loci_bed = outdir / "beds" / "loci.bed"
     fai_path = outdir / "loci.faidx.txt"
     awk_prog = 'BEGIN{OFS=""}{print $1,":",$2+1,"-",$3}'
-    with open(fai_path, "wb") as out:
-        sp.run(["awk", awk_prog, str(loci_bed)], stdout=out, check=True)
+    cmd = ["awk", awk_prog, str(loci_bed)]
+    run_pipeline([cmd], fai_path)
     return fai_path
 
 
@@ -45,14 +44,10 @@ def get_reference_in_loci_beds(outdir: Path, reference: Path) -> Path:
     consensus_dir = outdir / "consensus_seqs"
     consensus_dir.mkdir(parents=True, exist_ok=True)
     out_fasta = consensus_dir / "assembly_reference_sequence.consensus.fa"
+
     # run pipeline
-    with open(out_fasta, "wb") as OUT:
-        # extract ref fasta region
-        cmd = [BIN_SAM, "faidx", str(reference), "-r", str(loci)]
-        p1 = sp.Popen(cmd, stdout=OUT, stderr=sp.PIPE)
-        _, err = p1.communicate()
-    if p1.returncode:
-        raise RuntimeError(f"Error in {cmd}: {err.decode()}")
+    cmd = [BIN_SAM, "faidx", str(reference), "-r", str(loci)]
+    run_pipeline([cmd], out_fasta)
     return out_fasta
 
 
@@ -71,8 +66,6 @@ def get_consensus(sname: str, reference: Path, outdir: Path, keep_insertions: bo
     # sample files
     mask_bed = outdir / "beds" / f"{sname}.mask.bed"
     out_fasta = consensus_dir / f"{sname}.consensus.fa"
-    log_dir = outdir / "logs"
-    log_dir.mkdir(exist_ok=True)
 
     cmd1 = [BIN_SAM, "faidx", str(reference), "-r", str(loci)]
     cmd2 = [
@@ -189,7 +182,7 @@ def iter_build_loci(fastas: List[Path]) -> Tuple[List[str], List[str]]:
 
 
 def build_locus_fasta_database(
-    prefix: str,
+    name: str,
     snames: List[str],
     reference: Path,
     outdir: Path,
@@ -207,12 +200,11 @@ def build_locus_fasta_database(
         fastas = [reference_fa] + fastas
 
     # get names
-    # TODO: what if names don't match internal BAM name?
     snames = [i.name.rsplit(".consensus.fa")[0] for i in fastas]
 
     # file paths
-    database = outdir / f"{prefix}.database.fa"
-    bed_mask = outdir / f"{prefix}.re_mask.bed"
+    database = outdir / f"{name}.database.fa"
+    bed_mask = outdir / f"{name}.re_mask.bed"
 
     # restriction site sequences to be masked
     re_masks = []
@@ -232,7 +224,7 @@ def build_locus_fasta_database(
             # filter cut-sites from locus
             hits = set()
             if masks:
-                for name, seq in zip(snames, locus):
+                for seq in locus:
                     for search in re_masks:
                         for hit in search.finditer(seq):
                             hits.add((hit.start(), hit.end()))
@@ -246,7 +238,7 @@ def build_locus_fasta_database(
 
             # build fasta
             loc = []
-            for name, seq in zip(snames, locus):
+            for n, seq in zip(snames, locus):
                 if len(seq) > seq.count("N"):
                     # mask RE sites
                     if hits:
@@ -255,7 +247,7 @@ def build_locus_fasta_database(
                             seq[h[0]:h[1]] = "N" * (h[1] - h[0])
                         seq = "".join(seq)
                     # store locus
-                    loc.append(f">{header} {name}\n{seq}")
+                    loc.append(f">{header} {n}\n{seq}")
 
             # write locus
             out_fa.write("\n".join(loc) + "\n\n")
@@ -266,7 +258,7 @@ def build_locus_fasta_database(
 
 
 def iter_parse_loci(database_fasta: Path):
-    # get sorted iterators for all fastas starting with REF.
+    """Generator of (header, {names: seqs}) from database.fa"""
     ii = iter_fasta(database_fasta)
     last_scaff_pos = None
     while 1:
@@ -304,7 +296,7 @@ def filter_trim_locus(
     """
     # parse input locus
     scaff, pos = header.split(":")
-    start, end = [int(i) for i in pos.split("-")]
+    rstart, rend = [int(i) for i in pos.split("-")]
     snames = list(locus_dict.keys())
     seqs = [list(bytes(seq, "utf-8")) for seq in locus_dict.values()]
     seqs = np.array(seqs, dtype=np.uint8)
@@ -330,16 +322,13 @@ def filter_trim_locus(
         "variant_phylo_informative_site_frequency": 0,
         "variant_phylo_informative_site_frequency_where_sample_cov_greater_than_3": 0,
     }
-    # beds of trimmed sites or entire locus regions to be excluded from
-    # the VCF if they are trimmed or the locus does not pass filtering.
-    bed_masks: Dict[str: Tuple[int, int]] = {}
 
     # apply min_samples filter --------------------------------------
     if seqs.shape[0] < min_locus_sample_coverage:
         filters["min_samples"] = True
 
     # apply edge trimming ---- --------------------------------------
-    # find left and right-most edges where sample cov > min_trim_sample_cov
+    # get number of bases to trim from each side where sample cov < min_trim_sample_cov
     site_sample_covs = np.sum((seqs != 78) & (seqs != 45), axis=0)
     cov_sufficient = np.where(site_sample_covs >= min_locus_trim_sample_coverage)[0]
     try:
@@ -347,11 +336,11 @@ def filter_trim_locus(
     except IndexError:
         trim_left = 0
     try:
-        trim_right = int(cov_sufficient[-1])
+        trim_right = seqs.shape[1] - int(cov_sufficient[-1]) - 1
     except IndexError:
-        trim_right = seqs.shape[1]
-    tseqs = seqs[:, trim_left:trim_right + 1]
-    tsite_sample_covs = site_sample_covs[trim_left:trim_right + 1]
+        trim_right = 0
+    tseqs = seqs[:, trim_left:seqs.shape[1] - trim_right]
+    tsite_sample_covs = site_sample_covs[trim_left:seqs.shape[1] - trim_right]
 
     # get snps array
     snpsarr = snp_count_numba(tseqs)
@@ -370,22 +359,12 @@ def filter_trim_locus(
     if stats["nsites_sample_cov_greater_than_2"]:
         stats["variant_site_frequency_where_sample_cov_greater_than_2"] = float(stats["variant_sites"] / stats["nsites_sample_cov_greater_than_2"])
 
-    # get bed intervals of sites that were trimmed to mask in VCF later.
-    # TODO: check +1 for end trims
-    if trim_left or trim_right:
-        if scaff not in bed_masks:
-            bed_masks[scaff] = []
-        if trim_left > 0:
-            bed_masks[scaff].append((start, start + trim_left))
-        if trim_right < seqs.shape[1] - 1:
-            bed_masks[scaff].append((start + trim_right + 1, end))
-
-    # In addition to filtering by min-locus-length also filter by the
+    # In addition to filtering by min-locus-length also filter by the ------------------
     # the number of non-N sites, since small loci with non-overlapping
-    # filled sites could lead to almost no info. Here we just set a hard
-    # cutoff of 20 sites.
+    # filled sites could lead to almost no info. Here we just set a hard cutoff
     if min_locus_sample_coverage >= 4:
         if stats["nsites_sample_cov_greater_than_3"] < 15:  # hard-coded kind of arbitrary
+            logger.warning(f"FILTER BY MIN LENGTH: ({stats["nsites_sample_cov_greater_than_3"]}): {header} {trim_left} {trim_right}\n{seqs}\n{tseqs}\n{site_sample_covs}\n{tsite_sample_covs}\n{cov_sufficient}")
             filters["min_length"] = True
     elif min_locus_sample_coverage == 3:
         if stats["nsites_sample_cov_greater_than_2"] < 15:  # hard-coded kind of arbitrary
@@ -394,31 +373,25 @@ def filter_trim_locus(
         if stats["nsites_sample_cov_greater_than_1"] < 15:  # hard-coded kind of arbitrary
             filters["min_length"] = True
 
-    # filter for max proportion polymorphic sites
+    # filter for max proportion polymorphic sites ---------------------------------------
     if stats["variant_site_frequency_where_sample_cov_greater_than_2"] > max_locus_variant_frequency:
         filters["max_variant_proportion"] = True
 
-    # filter for max shared het sites
+    # filter for max shared het sites ----------------------------------------------------
     if tseqs.size:
         max_shared_h = max_heteros_count_numba(tseqs)
         max_shared_h_prop = max_shared_h / tseqs.shape[0]
         if max_shared_h_prop > max_locus_hetero_frequency:
             filters["max_shared_hetero_site_proportion"] = True
 
-    # revise the header for applied trim/filter
-    if not sum(filters.values()):
-        t_start = start + trim_left  # e.g., l=5 is 5 ahead of 0.
-        t_end = start + trim_right   # e.g., r=295 is 5 back from 300. (no +1 needed here)
-        header = f"{scaff}:{t_start}-{t_end}"
-    else:
-        bed_masks[scaff] = [(start, end)]
-
-    return header, snames, tseqs, snpsarr, filters, stats, bed_masks
+    # if keeping locus revise the header for trim.
+    header = f"{scaff}:{rstart + trim_left}-{rend - trim_right}"
+    return header, snames, tseqs, snpsarr, filters, stats
 
 
 def write_loci_and_stats_files(
     snames: List[str],
-    prefix: str,
+    name: str,
     outdir: Path,
     exclude_reference: bool,
     min_locus_sample_coverage: int,
@@ -426,43 +399,47 @@ def write_loci_and_stats_files(
     min_locus_length: int,
     max_locus_hetero_frequency: float,
     max_locus_variant_frequency: float,
-    ):
+):
     """
     """
-    # add
+    # database file is in the tmpdir inside outdir
+    database = outdir / "tmpdir" / f"{name}.database.fa"
+    loci_file = outdir / f"{name}.loci.txt"
+
+    # add reference to stats outputs
     refname = "assembly_reference_sequence"
     if not exclude_reference:
         snames.append(refname)
 
     # get name padding for loci file
     max_len = max(len(i) for i in snames) + 2
-    padded = {name: name + (" " * (max_len - len(name))) for name in snames}
+    padded = {n: n + (" " * (max_len - len(n))) for n in snames}
 
-    # ...
+    # stats
     keys = ["min_length", "min_samples", "max_variant_frequency", "max_shared_hetero_frequency"]
     total_filters = {i: 0 for i in keys}
     total_sample_cov = {i: 0 for i in snames}
     total_sample_cov[refname] = 0
     total_locus_cov = Counter()
-    total_stats = Counter([
-        "nsites",
-        "nsites_sample_cov_greater_than_2",
-        "nsites_sample_cov_greater_than_3",
-        "nsites_sample_cov_greater_than_or_equal_to_min_locus_trim_sample_coverage",
-        "variant_sites",
-        "variant_phylo_informative_sites"
-    ])
+    total_stats = {
+        "variant_sites": 0,
+        "variant_phylo_informative_sites": 0,
+        "nsites": 0,
+        "nsites_sample_cov_greater_than_1": 0,
+        "nsites_sample_cov_greater_than_2": 0,
+        "nsites_sample_cov_greater_than_3": 0,
+        "nsites_sample_cov_greater_than_or_equal_to_min_locus_trim_sample_coverage": 0,
+    }
 
     # build
+    beds = []
     loci = []
+    lidx = 0
     flidx = 0
-    locus_iter = iter_parse_loci(outdir / f"{prefix}.database.fa")
-    handle = outdir / f"{prefix}.loci.txt"
-    with open(handle, 'w') as out:
-        for lidx, liter in enumerate(locus_iter):
-
-            # parse locus
-            oheader, ldict = liter
+    # locus_iter = iter_parse_loci(database)
+    with open(loci_file, 'w') as out:
+        # for lidx, liter in enumerate(locus_iter):
+        for oheader, ldict in iter_parse_loci(database):
             args = (
                 oheader,
                 ldict,
@@ -473,23 +450,29 @@ def write_loci_and_stats_files(
                 max_locus_variant_frequency,
             )
             result = filter_trim_locus(*args)
-            header, snames, tseqs, snpsarr, filters, stats, bed_masks = result
+            header, tnames, tseqs, snpsarr, filters, stats = result
+
+            # update total dicts
             for key in total_filters:
                 total_filters[key] += int(result[4][key])
 
-            # write if it passed filters
+            # store for wriring if locus passed filters
             if not sum(filters.values()):
+                # store locus bed
+                scaff, pos = header.split(":")
+                pos0, pos1 = (int(i) for i in pos.split("-"))
+                beds.append((scaff, pos0 - 1, pos1, tseqs.shape[0]))
 
-                # increment sapmle counters
-                for sname in snames:
+                # increment sample counters
+                for sname in tnames:
                     total_sample_cov[sname] += 1
-                total_locus_cov[len(snames)] += 1
+                total_locus_cov[len(tnames)] += 1
                 for stat in total_stats:
                     total_stats[stat] += stats[stat]
 
                 # build locus with snpstring
                 locus = []
-                for sname, seq in zip(snames, tseqs):
+                for sname, seq in zip(tnames, tseqs):
                     locus.append(f"{padded[sname]}{bytes(seq).decode()}")
                 snpsarr[snpsarr == 0] = 32
                 snpsarr[snpsarr == 1] = 45
@@ -500,6 +483,7 @@ def write_loci_and_stats_files(
                 # store
                 loci.append("\n".join(locus))
                 flidx += 1
+            lidx += 1
 
             # write in chunks
             if not flidx % 5000:
@@ -511,8 +495,8 @@ def write_loci_and_stats_files(
         if loci:
             out.write("".join(loci))
 
-    # write filter stats
-    with open(outdir / "stats_locus_filtering.tsv", "w") as out:
+    # write locus stats -----------------------------------------------
+    with open(outdir / f"{name}.stats_filters.tsv", "w") as out:
         out.write("# Locus stats and filtering (nloci tagged and excluded for each filter; one locus can hit multile filters)\n")
 
         out.write(f"nloci_before_filtering\t{lidx}\n")
@@ -522,7 +506,8 @@ def write_loci_and_stats_files(
         for key in total_stats:
             out.write(f"{key}\t{total_stats[key]}\n")
 
-    with open(outdir / "stats_sample_coverage.tsv", "w") as out:
+    # write sample coverage -------------------------------------------
+    with open(outdir / f"{name}.stats_samples.tsv", "w") as out:
         out.write("# Sample coverage (number of loci containing each sample)\n")
         out.write("sample\tnloci\n")
         # write reference coverage (nloci) first
@@ -532,23 +517,19 @@ def write_loci_and_stats_files(
             if key != "assembly_reference_sequence":
                 out.write(f"{key}\t{total_sample_cov[key]}\n")
 
-    # write locus coverage stats
-    with open(outdir / "stats_locus_coverage.tsv", "w") as out:
+    # write locus coverage stats --------------------------------------
+    with open(outdir / f"{name}.stats_coverage.tsv", "w") as out:
         out.write("# Locus coverage (histogram of number of loci containing N samples)\n")
         out.write("nsamples\tnloci\n")
-        for key in range(len(snames)):
+        for key in range(len(snames) + 1):
             out.write(f"{key}\t{total_locus_cov[key]}\n")
-    return {"nloci": flidx, "nsites": total_stats["nsites"]} # , "nsites_sample_cov_greater_than_2": total_stats["nsites_sample_cov_greater_than_2"]}
+    logger.debug(f"wrote loci file to {loci_file}")
+    logger.debug(f"wrote stats files to {outdir / f'{name}.stats_*'}")
 
-
-def write_database_files():
-    pass
-
-
-
-
-
-
+    # write a bed file with beds of loci filtered and sites trimmed to
+    # be used to mask these from the final VCF
+    with open(outdir / f"{name}.bed", "w") as out:
+        out.write("\n".join("\t".join(map(str, i)) for i in beds))
 
 
 if __name__ == "__main__":

@@ -41,7 +41,7 @@ LOG_CMD3 = ("bwa-mem2 mem REF R1 R2 "
            "| samtools view -b -f 0x2 -q 20")
 
 
-def map_filter_sort_mark(sname: str, fastqs: Tuple[Path, Path], reference: Path, outdir: Path, umi_tag_in_i5: bool, threads: int) -> Path:
+def map_filter_sort_mark(sname: str, fastqs: Tuple[Path, Path], reference: Path, outdir: Path, mark_dups_by_umis: bool, threads: int) -> Path:
     """Map reads to the reference to get a sorted bam.
     """
     if not reference.exists():
@@ -56,8 +56,6 @@ def map_filter_sort_mark(sname: str, fastqs: Tuple[Path, Path], reference: Path,
         raise IPyradError(f"fastq file not found: {r1}")
 
     # paths
-    log_dir = outdir / "logs"
-    log_dir.mkdir(exist_ok=True)
     out_bam = outdir / f"{sname}.marked.sorted.bam"
     tmp_bam = outdir / f"{sname}.bam.tmp"
     tmp_prefix = outdir / f"{sname}.sam.tmp"
@@ -75,7 +73,7 @@ def map_filter_sort_mark(sname: str, fastqs: Tuple[Path, Path], reference: Path,
         "-K", "50000000",         # stable nbases chunk size. Improves repeatability.
         # "-Y",                   # soft-clip supplementary. Wouldn't hurt, but not necessary.
         # "-M",                   # Picard compatibility. Not necessary, we use samtools fixmate for dups.
-        # "-R", f"@RG\\tID:{sname}\\tSM:{sname}\\tPL:ILLUMINA",  # not currently used, since we provide custom -G to bcftools.
+        "-R", f"@RG\\tID:{sname}\\tSM:{sname}\\tPL:ILLUMINA",  # store sample name; group can be overriden with -G.
         str(reference),
         str(r1),
     ]
@@ -125,7 +123,7 @@ def map_filter_sort_mark(sname: str, fastqs: Tuple[Path, Path], reference: Path,
         "-@", str(mid_threads),
         "-", "-",
     ]
-    if umi_tag_in_i5:
+    if mark_dups_by_umis:
         cmd6.extend(["--barcode-rgx", "UMI_([ACGTN]+)"])
 
     # final view
@@ -145,10 +143,11 @@ def map_filter_sort_mark(sname: str, fastqs: Tuple[Path, Path], reference: Path,
     # CSI index bam file
     cmd = [BIN_SAMTOOLS, "index", "-c", "--threads", str(threads), str(out_bam)]
     run_pipeline([cmd])
+    logger.debug(f"finished mapping: {sname}")
     return out_bam
 
 
-def map_filter_sort(sname: str, fastqs: Tuple[Path, Path], reference: Path, outdir: Path, umi_tag_in_i5: bool, threads: int) -> Path:
+def map_filter_sort(sname: str, fastqs: Tuple[Path, Path], reference: Path, outdir: Path, threads: int, **kwargs) -> Path:
     """Map reads to the reference to get a sorted bam."""
     if not reference.exists():
         raise IPyradError(f"reference_sequence not found: {reference}")
@@ -212,32 +211,27 @@ def map_filter_sort(sname: str, fastqs: Tuple[Path, Path], reference: Path, outd
     # CSI index bam file
     cmd1 = [BIN_SAMTOOLS, "index", "-c", "--threads", str(threads), str(out_bam)]
     run_pipeline([cmd1])
+    logger.debug(f"finished mapping: {sname}")
     return out_bam
 
 
-def count_mapped_reads(bam_file: Path) -> int:
+def count_mapped_reads(bam_file: Path, threads: int) -> int:
     """Return the number of mapped reads in the filtered/sorted bam.
 
     Note that for PE data this is the still nreads, so divide by 2 to
     get the n read pairs.
     """
     # Count number of mapped read pairs
-    cmd1 = [BIN_SAMTOOLS, "flagstat", bam_file]
-    cmd2 = ["grep", "total"]
-
-    # Run pipeline and check *all* return codes with real stderr captured
-    with sp.Popen(cmd1, stdout=sp.PIPE, stderr=sp.PIPE) as p1:
-        with sp.Popen(cmd2, stdin=p1.stdout, stdout=sp.PIPE, stderr=sp.PIPE) as p2:
-            p1.stdout.close()
-            line, err2 = p2.communicate()
-        _, err1 = p1.communicate()
-    # Check in reverse order to surface the first failing stage
-    if p2.returncode:
-        raise IPyradError(f"grep failed ({p2.returncode}).\n{err2.decode(errors='ignore')}")
-    if p1.returncode:
-        raise IPyradError(f"flagstat failed ({p1.returncode}).\n{err1.decode(errors='ignore')}")
-    nreads_mapped = int(line.decode().strip().split()[0])
-    return nreads_mapped
+    cmd1 = [BIN_SAMTOOLS, "flagstat", "--threads", str(threads), bam_file]
+    _, out, _ = run_pipeline([cmd1])
+    lines = out.decode().strip().split("\n")
+    for line in lines:
+        parts = line.split()
+        if parts[-1] == "primary":
+            primary_mapped = int(parts[0])
+        elif parts[-1] == "duplicates":
+            primary_duplicates = int(parts[0])
+    return {"mapped_primary": primary_mapped, "mapped_duplicates": primary_duplicates}
 
 
 def index_ref_with_bwa(reference: Path) -> None:
@@ -263,34 +257,26 @@ def index_ref_with_bwa(reference: Path) -> None:
     logger.info(f"indexing reference: {reference.name}")
     cmd = [str(BIN_BWA), "index", str(reference)]
     logger.debug(f"cmd: {' '.join(cmd)}")
-    with sp.Popen(cmd, stderr=sp.PIPE, stdout=sp.DEVNULL) as proc:
-        error = proc.communicate()[1].decode()
-
-    # error handling for one type of error on stderr
-    if proc.returncode:
-        if "please use bgzip" in error:
-            raise IPyradError(
-                "Reference sequence must be de-compressed fasta or bgzip "
-                "compressed, your file is probably gzip compressed. The "
-                "simplest fix is to gunzip your reference sequence by "
-                "running this command: \n"
-                f"    gunzip {reference}\n")
-        raise IPyradError(error)
+    run_pipeline([cmd])
 
 
 def run_mapper(
     fastqs: Tuple[Path, Path],
     outdir: Path,
     reference: Path,
-    workers: int,
+    cores: int,
     threads: int,
     force: bool,
-    mark_duplicates: bool,
-    umi_tag_in_i5: bool,
+    mark_dups_by_coords: bool,
+    mark_dups_by_umis: bool,
     delim_str: str | None,
     delim_idx: int,
+    log_level: str,
 ):
     # ------------------------------------------------------------
+    # run at most this many concurrent jobs
+    workers = max(1, cores // threads)
+
     # check reference and outdir paths
     reference = reference.expanduser().absolute()
     outdir = outdir.expanduser().absolute()
@@ -300,19 +286,26 @@ def run_mapper(
     fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx)
 
     # check outdir for existing and raise or remove
-    result_files = [outdir / f"{sname}.sorted.bam" for sname in fastq_dict]
-    if any(i.exists() for i in result_files):
+    result_files = [list(outdir.glob(f"{sname}.*.bam")) for sname in fastq_dict]
+    if any(result_files):
         if not force:
-            raise IPyradError(f"Bam files exist in outdir: e.g., {result_files[0]}. Use --force to overwrite.")
+            raise IPyradError("{prefix}.bam exists for >=1 sample in outdir. Use --force to overwrite.")
+        else:
+            for bam_list in result_files:
+                for bam_file in bam_list:
+                    if bam_file.exists():
+                        logger.debug(f"removing existing bam file: {bam_file}")
 
     # check mark_dups suitability
-    if mark_duplicates:
+    if mark_dups_by_coords or mark_dups_by_umis:
+        if mark_dups_by_coords and mark_dups_by_umis:
+            raise IPyradError("you cannot select both mark_dups_by_coords and mark_dups_by_umis.")
         if list(fastq_dict.values())[0][1] is None:
-            raise IPyradError("Data do not appear to be paired. Cannot use mark-duplicates with SE data.")
-        if not umi_tag_in_i5:
+            raise IPyradError("Data do not appear to be paired. Cannot mark duplicates for SE data.")
+        if mark_dups_by_coords:
             logger.warning("marking PCR duplicates by coordinates. Data is expected to be WGS, not RAD")
-        if umi_tag_in_i5:
-            logger.warning("marking PCR duplicates. Data is expected to be RAD with i5 UMI tags")
+        if mark_dups_by_umis:
+            logger.warning("marking PCR duplicates. Data is expected to be RAD with i5 UMIs moved into read names")
 
     # index the reference
     index_ref_with_bwa(reference)
@@ -327,27 +320,27 @@ def run_mapper(
             sname=sname,
             outdir=outdir,
             reference=reference,
-            umi_tag_in_i5=umi_tag_in_i5,
-            threads=max(1, threads),
+            mark_dups_by_umis=mark_dups_by_umis,
+            threads=threads,
         )
-        jobs[sname] = kwargs
-    if mark_duplicates:
-        bam_dict = run_with_pool(map_filter_sort_mark, jobs, workers)
-    else:
-        bam_dict = run_with_pool(map_filter_sort, jobs, workers)
+        if mark_dups_by_coords or mark_dups_by_umis:
+            jobs[sname] = (map_filter_sort_mark, kwargs)
+        else:
+            jobs[sname] = (map_filter_sort, kwargs)
+    bam_dict = run_with_pool(jobs, log_level, workers)
 
     # get bam file stats and write to a file
     jobs = {}
     for sname, bam_file in bam_dict.items():
-        jobs[sname] = dict(bam_file=bam_file)
-    stats = run_with_pool(count_mapped_reads, jobs, workers)
+        jobs[sname] = (count_mapped_reads, dict(bam_file=bam_file, threads=threads))
+    stats = run_with_pool(jobs, log_level, workers)
 
     # write stats
     handle = outdir / "ipyrad_map_stats.txt"
     with open(handle, 'w') as out:
-        out.write("sample\tnreads_mapped\n")
+        out.write("sample\tmapped_primary\tmapped_duplicates\n")
         for key in sorted(stats):
-            out.write(f"{key}\t{stats[key]}\n")
+            out.write(f"{key}\t{stats[key]['mapped_primary']}\t{stats[key]['mapped_duplicates']}\n")
         logger.info(f"mapping stats written to {handle}")
 
 

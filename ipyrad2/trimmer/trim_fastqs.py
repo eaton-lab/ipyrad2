@@ -143,7 +143,7 @@ def run_trimmer(
     disable_infer_re_overhangs: bool,
     disable_adapter_trimming: bool,
     disable_quality_filtering: bool,
-    workers: int,
+    cores: int,
     threads: int,
     delim_str: str | None,
     delim_idx: int,
@@ -161,12 +161,16 @@ def run_trimmer(
     if any(i.exists() for i in result_files):
         if not force:
             raise IPyradError(f"Trimmed fastqs exist in outdir: e.g., {result_files[0]}. Use --force to overwrite.")
+    outdir.mkdir(exist_ok=True)
+
+    # run at most this many concurrent jobs
+    workers = max(1, cores // threads)
 
     # ------------------------------------------------------------
     # infer restriction overhangs by kmer analysis
     if not disable_infer_re_overhangs:
-        re1 = get_overhang_from_kmers([i[0] for i in fastq_dict.values()], 20, 100_000, workers)
-        re2 = get_overhang_from_kmers([i[1] for i in fastq_dict.values()], 20, 100_000, workers)
+        re1 = get_overhang_from_kmers([i[0] for i in fastq_dict.values()], 20, 100_000, cores, log_level)
+        re2 = get_overhang_from_kmers([i[1] for i in fastq_dict.values()], 20, 100_000, cores, log_level)
         logger.info(f"restriction site overhangs inferred by kmer analysis = {re1} {re2}")
         # allow user override but warn if it doesn't match inferred.
         if restriction_overhangs:
@@ -196,10 +200,10 @@ def run_trimmer(
             disable_adapter_trimming=disable_adapter_trimming,
             disable_quality_filtering=disable_quality_filtering,
             umi_tag_in_i5=umi_tag_in_i5,
-            threads=max(1, threads - 2),  # uses 2 I/O threads + requested threads
+            threads=threads,  # recommended >=3 since 2 are used for i/o
         )
-        jobs[sname] = kwargs
-    _ = run_with_pool(trim_sample_with_fastp, jobs, log_level, workers)
+        jobs[sname] = (trim_sample_with_fastp, kwargs)
+    _ = run_with_pool(jobs, log_level, workers)
 
 
 
