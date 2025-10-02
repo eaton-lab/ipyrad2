@@ -98,7 +98,6 @@ def all_unique(ndict: Dict[str, List[Path]], paths: List[Path]) -> bool:
     a = all(len(v) == 1 for v in ndict.values())
     b = len(ndict) == len(paths)
     c = len(set([i[-1] for i in ndict])) > 1
-    logger.warning(list(ndict))
     return a & b & c
 
 

@@ -157,7 +157,6 @@ def run_assembler(
     for sname, bam_file in all_dict.items():
         jobs[sname] = (get_sample_coverage_stats_in_loci_bed, dict(bam_file=bam_file, outdir=tmpdir))
     cov_stats = run_with_pool(jobs, log_level, workers)
-    logger.warning(pd.DataFrame(cov_stats).T)
     nr_loci = sum([cov_stats[sname]["nloci_with_nonzero_mapping"] for sname in jobs])
     if not nr_loci:
         raise IPyradError("No loci have sample coverage >= 'min_locus_sample_coverage'. Consider lowering this parameter.")
@@ -183,7 +182,6 @@ def run_assembler(
 
     # optional: maybe wait til after locus filtering...
     stats = get_locus_and_snp_stats_in_loci_bed(tmpdir, cores)
-    logger.warning(stats)
 
     # ------------------------------------------------------------------
     # ---- CONSENSUS CALLING -------------------------------------------
@@ -252,14 +250,15 @@ def run_assembler(
 
     # get the final vcf file
     logger.info("writing variants file (.vcf.gz)")
-    vcf_gz = write_vcf(name, outdir, threads)
+    write_vcf(name, outdir, threads)
 
     # add snps dataset to the database file
     logger.info("writing snps database (.hdf5)")
-    write_snps_hdf5(name, outdir, list(all_dict), reference, vcf_gz, )
+    write_snps_hdf5(name, outdir, list(all_dict), reference)
 
     # final stats stuff?
-
+    logger.warning(f"\n{stats}")
+    logger.warning(f"\n{pd.DataFrame(cov_stats).T}")
     # shutil.rmtree(tmpdir)
 
 

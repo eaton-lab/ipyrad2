@@ -60,6 +60,7 @@ class Demux:
     """: do not infer res"""
     max_reads: int
     """: subsample only the first N reads from each file (used for testing)."""
+    log_level: str
 
     # attrs to be filled ----------------------------------------------
     _names_to_barcodes: Dict[str, Tuple[str, str]] = None
@@ -98,7 +99,7 @@ class Demux:
         self._merge_cleanup()
 
     def _get_filenames_to_paired_fastqs(self) -> None:
-        self._filenames_to_fastqs = get_name_to_fastq_dict(self.fastqs)
+        self._filenames_to_fastqs = get_name_to_fastq_dict(self.fastqs, None, None)
 
     def _get_outdir(self) -> None:
         """Require an empty outdir to write to."""
@@ -233,8 +234,8 @@ class Demux:
         # max_reads = int(200_000 / len(read1s))
         # infer_cut1 = infer_overhang(read1s, max_len=20, max_reads=max_reads, anchored=False)
         # infer_cut2 = infer_overhang(read2s, max_len=20, max_reads=max_reads, anchored=False)
-        infer_cut1 = get_overhang_from_kmers(read1s, 20, 100_000, self.cores)
-        infer_cut2 = get_overhang_from_kmers(read2s, 20, 100_000, self.cores)
+        infer_cut1 = get_overhang_from_kmers(read1s, 20, 100_000, self.cores, self.log_level)
+        infer_cut2 = get_overhang_from_kmers(read2s, 20, 100_000, self.cores, self.log_level)
 
         if self.re1:
             if self.re1 != infer_cut1:
@@ -516,9 +517,9 @@ def barmatch(fastq_tuple, demux_obj):
         cuts2=demux_obj._cuts2,
         merge_technical_replicates=demux_obj.merge_technical_replicates,
         outdir=demux_obj.outdir,
-        cores=demux_obj.cores,
         chunksize=demux_obj.chunksize,
         max_reads=demux_obj.max_reads,
+        workers=demux_obj.cores,
     )
 
     if demux_obj.i7:

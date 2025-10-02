@@ -11,7 +11,6 @@ from typing import Tuple
 import os
 import sys
 from pathlib import Path
-import subprocess as sp
 from loguru import logger
 from ..utils.exceptions import IPyradError
 from ..utils.names import get_name_to_fastq_dict
@@ -289,7 +288,7 @@ def run_mapper(
     result_files = [list(outdir.glob(f"{sname}.*.bam")) for sname in fastq_dict]
     if any(result_files):
         if not force:
-            raise IPyradError("{prefix}.bam exists for >=1 sample in outdir. Use --force to overwrite.")
+            raise IPyradError(".bam exists for >=1 of the selected samples in outdir. Use --force to overwrite.")
         else:
             for bam_list in result_files:
                 for bam_file in bam_list:

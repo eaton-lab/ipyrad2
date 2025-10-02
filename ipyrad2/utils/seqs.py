@@ -2,15 +2,13 @@
 
 import string
 
+COMP = str.maketrans("ACGTacgtnN", "TGCAtgcanN")
+
 def comp(seq: str) -> str:
-    """Returns a seq complemented. Preserves little n's for denovo inserts."""
-    return seq.replace("A", 't')\
-              .replace('T', 'a')\
-              .replace('C', 'g')\
-              .replace('G', 'c')\
-              .replace('n', 'Z')\
-              .upper()\
-              .replace("Z", "n")
+    return seq.translate(COMP)
+
+def revcomp(seq: str) -> str:
+    return seq.translate(COMP)[::-1]
 
 # used in demux to fix sample names.
 BADCHARS = (
@@ -29,3 +27,20 @@ AMBIGS = {
     "W": ("T", "A"),
     "M": ("C", "A"),
 }
+
+IUPAC = {
+    frozenset(("A","G")) : "R",
+    frozenset(("C","T")) : "Y",
+    frozenset(("G","C")) : "S",
+    frozenset(("A","T")) : "W",
+    frozenset(("G","T")) : "K",
+    frozenset(("A","C")) : "M",
+}
+
+
+if __name__ == "__main__":
+
+    S = "ACTGGnnnnAAATTTCCCGGG"
+    print(S)
+    print(comp(S))
+    print(revcomp(S))

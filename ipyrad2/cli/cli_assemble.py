@@ -9,8 +9,9 @@ from .make_wide import make_wide
 EPILOG = """\
 Examples
 --------
-$ ipyrad assemble --bams BAMs/*.bam --ref REF --out OUT -m 4 -d 5 -q 20
-$ ipyrad assemble -b BAMs/a*.bam -B BAMS/b*.bam --ref REF --out OUT -m 4 -d 5 -q 20
+$ ipyrad assemble -d BAMs/r*.bam --ref REF --out OUT -m 4 -s 5 -q 20
+$ ipyrad assemble -d BAMs/r*.bam -w BAMS/w*.bam --ref REF --out OUT -m 4 -s 5 -q 20
+$ ipyrad assemble -w BAMS/w*.bam --ref REF -b loci.bed --out OUT -m 4 -q 20
 """
 
 
@@ -21,21 +22,27 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
     tool = subparsers.add_parser(
         "assemble",
         description=header,
-        help="assemble loci and call variants in shared mapping beds using 'bedtools' and 'bcftools'.",
+        help="assemble loci and call variants using 'bedtools' and 'bcftools'.",
         epilog=EPILOG,
         formatter_class=make_wide(argparse.RawDescriptionHelpFormatter, max_help_position=60, width=140),
     )
     tool.add_argument(
-        "-b", "--rad-bams", metavar="Path", type=Path, required=True, nargs="*",
-        help="Bam files from RAD-type data. These samples are used to delimit locus beds. (regex allowed; e.g., './bam/{a,b}*.bam')",
+        "-d", "--rad-bams", metavar="Path", type=Path, required=True, nargs="*",
+        help="Bam files from RAD-type samples. (regex allowed; e.g., './bam/{a,b}*.bam'). "
+             "These data are used to delimit loci regions (unless overruled by -b), and assembled",
     )
     tool.add_argument(
-        "-B", "--wgs-bams", metavar="Path", type=Path, nargs="*",
-        help="Optional bam files from WGS-type data. These samples are not used to delimit locus beds, but will have variants called within the RAD locus beds. (regex allowed; e.g., './bam/{a,b}*.bam')",
+        "-w", "--wgs-bams", metavar="Path", type=Path, nargs="*",
+        help="Optional bam files from WGS-type data. (regex allowed; e.g., './bam/{a,b}*.bam') "
+             "These data are only assembled within loci regions delimited by RAD samples (or set using -b)"
     )
     tool.add_argument(
         "-r", "--reference", metavar="Path", type=Path, required=True,
-        help="Path to the reference fasta used in the mapping step.",
+        help="Path to the reference fasta used in the mapping step",
+    )
+    tool.add_argument(
+        "-b", "--loci-bed", metavar="Path", type=Path,
+        help="Optional bed file delimiting loci on the reference genome.",
     )
     tool.add_argument(
         "-n", "--name", metavar="str", type=str, default="assembly",
@@ -54,7 +61,7 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="Min across-sample genotype quality score. [default=20]",
     )
     tool.add_argument(
-        "-d", "--min-sample-depth", metavar="int", type=int, default=1,
+        "-s", "--min-sample-depth", metavar="int", type=int, default=1,
         help="Min read depth within a sample to make variant calls. [default=1]",
     )
     tool.add_argument(
@@ -84,12 +91,12 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="Max frequency of samples heterozygous *at the same site* in a locus. [default=0.3]",
     )
     tool.add_argument(
-        "-s", "--max-locus-variant-frequency", metavar="float", type=float, default=1.0,
+        "-y", "--max-locus-variant-frequency", metavar="float", type=float, default=1.0,
         help="Max frequency of sites that are variant in a locus. [default=1.0]",
     )
     tool.add_argument(
         "-p", "--populations", metavar="Path", type=Path,
-        help=r"Pop file ('name\tpop' on each line) to group samples for joint variant calls. [default=None]"
+        help=r"Pop file ('name\tpop' lines) to group samples for joint variant calls. [default=None]"
     )
     tool.add_argument(
         "-x", "--masks", metavar="str", nargs="*", type=str,

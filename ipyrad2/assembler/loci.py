@@ -364,7 +364,7 @@ def filter_trim_locus(
     # filled sites could lead to almost no info. Here we just set a hard cutoff
     if min_locus_sample_coverage >= 4:
         if stats["nsites_sample_cov_greater_than_3"] < 15:  # hard-coded kind of arbitrary
-            logger.warning(f"FILTER BY MIN LENGTH: ({stats["nsites_sample_cov_greater_than_3"]}): {header} {trim_left} {trim_right}\n{seqs}\n{tseqs}\n{site_sample_covs}\n{tsite_sample_covs}\n{cov_sufficient}")
+            # logger.warning(f"FILTER BY MIN LENGTH: ({stats["nsites_sample_cov_greater_than_3"]}): {header} {trim_left} {trim_right}\n{seqs}\n{tseqs}\n{site_sample_covs}\n{tsite_sample_covs}\n{cov_sufficient}")
             filters["min_length"] = True
     elif min_locus_sample_coverage == 3:
         if stats["nsites_sample_cov_greater_than_2"] < 15:  # hard-coded kind of arbitrary

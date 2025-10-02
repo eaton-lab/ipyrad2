@@ -79,13 +79,13 @@ def write_snps_hdf5(
     outdir: Path,
     snames: List[str],
     reference: Path,
-    vcf_path: Path,
-    loci_bed: Path,
     scaffold_order: Optional[List[str]] = None,
 ):
     """Stream VCF→HDF5 with read-optimized chunking."""
     # paths
     database = outdir / f"{name}.hdf5"
+    vcf_path = outdir / f"{name}.vcf.gz"
+    loci_bed = outdir / f"{name}.bed"
 
     # sorted names
     snames = sorted(snames)
@@ -111,7 +111,8 @@ def write_snps_hdf5(
         # SNP map: (n_snps, 5)
         snpsmap = io5.create_dataset(
             "snpsmap",
-            shape=(0, 5), maxshape=(None, 5),
+            shape=(0, 5),
+            maxshape=(None, 5),
             dtype=np.uint64,
             chunks=(chunk_snps, 5),
             compression="gzip", compression_opts=4, shuffle=True
@@ -122,7 +123,8 @@ def write_snps_hdf5(
         # Genotypes: (nsamples, n_snps, 3)  ← note fixed sample axis
         genos = io5.create_dataset(
             "genos",
-            shape=(nsamples, 0, 3), maxshape=(nsamples, None, 3),
+            shape=(nsamples, 0, 3),
+            maxshape=(nsamples, None, 3),
             dtype=np.uint8,
             chunks=(nsamples, chunk_snps, 3),
             compression="gzip", compression_opts=4, shuffle=True
@@ -131,7 +133,8 @@ def write_snps_hdf5(
         # Reference ord per SNP: (n_snps,)
         reference_ord = io5.create_dataset(
             "reference",
-            shape=(0,), maxshape=(None,),
+            shape=(0,),
+            maxshape=(None,),
             dtype=np.uint8,
             chunks=(chunk_snps,),
             compression="gzip", compression_opts=4, shuffle=True
@@ -181,7 +184,7 @@ def write_snps_hdf5(
                 fill = 0
         flush(fill)
         io5.attrs["nsnps"] = int(total)
-    logger.info(f"wrote snps dataset to {database} (nsnps={total:,}")
+    logger.debug(f"wrote snps dataset to {database} (nsnps={total:,})")
 
 
 def load_bed_index_nonoverlap(

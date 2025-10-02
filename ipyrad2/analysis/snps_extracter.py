@@ -11,21 +11,6 @@ Command line
 ------------
 $ ipyrad snpex -d H5 --stdout --maf 0.2 --scaff Chr[1-2] --min-samp 4
 
-Note
-----
-snpsmap columns:
-    0: 1-indexed scaff id
-    1: 0-indexed snpidx
-    2: 1-indexed scaffpos
-    3: 0-indexed orig. scaffidx
-    4: snpcounter]
-
-Example
--------
->>> import ipyrad.analysis as ipa
->>> tool = ipa.snps_extracter(DATA)
->>> tool.run()
->>> ...
 """
 
 from typing import Optional, Dict, List, Union, Tuple
@@ -33,8 +18,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from loguru import logger
-# from .cluster import Cluster
-# from .utils import jsubsample_snps, jsubsample_loci
 
 
 # how many cols of SNPs to load in at once from snps, genos, snpsmap
@@ -96,13 +79,13 @@ class SNPsExtracter:
     """
     def __init__(
         self,
-        data: Union[str, Path],
-        imap: Optional[Dict] = None,
-        minmap: Optional[Dict] = None,
-        mincov: Union[float,int] = 0.0,
-        minmaf: Union[float,int] = 0.0,
-        # rmincov: float=0.0,
-        ):
+        data: Path,
+        min_sample_coverage: float,
+        max_sample_missing: float,
+        min_minor_allele_frequency: float,
+        imap: Path | None,
+        minmap: Path | None,
+    ):
 
         # store params
         self.data = Path(data)
@@ -637,32 +620,20 @@ class SNPsExtracter:
 
 if __name__ == "__main__":
 
-    import toytree
-    import ipcoal
-    import ipyrad.analysis as ipa
-    import ipyrad as ip
-    ipa.set_log_level("DEBUG")
-    ip.set_log_level("DEBUG")
+    # import toytree
+    # import ipcoal
+    # import ipyrad.analysis as ipa
+    from ipyrad2.utils.logger import set_log_level
+    set_log_level("DEBUG")
 
-    tree = toytree.rtree.unittree(10, 1e6)
-    model = ipcoal.Model(tree, Ne=1e5, nsamples=6)
-    model.sim_loci(50, 100)
-    model.apply_missing_mask(0.5)
-    model.write_snps_to_hdf5(name="test", outdir="/tmp")
+    database = Path("/home/deren/Documents/ipyrad-tests/Ama-out/assembly.hdf5")
+    snex = SNPsExtracter(database, min_sample_coverage=4, max_sample_missing=0.5, min_minor_allele_frequency=0.05, )
 
-    # write popfile and load back as an imap
-    model.write_popfile(name='test', outdir="/tmp", diploid=True)
-    IMAP = ipa.popfile_to_imap("/tmp/test.popfile.tsv")
 
-    # model.write_snps_to_hdf5(name="test", outdir="/tmp", diploid=True)
-    tool = ipa.snps_extracter(
-        data="/tmp/test.snps.hdf5",
-        imap=IMAP,
-        minmap={i: 1 for i in IMAP},
-        minmaf=0.1,
-    )
-    tool.run(cores=2)
-    # print(tool.subsample_snps().view())
 
-    # ipa.snps_imputer(tool.genos, tool.names, tool.imap, inplace=True).run()
-    # print(tool.subsample_genos())
+    # tool = ipa.snps_extracter(
+    #     data="/tmp/test.snps.hdf5",
+    #     imap=IMAP,
+    #     minmap={i: 1 for i in IMAP},
+    #     minmaf=0.1,
+    # )

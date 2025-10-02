@@ -8,11 +8,13 @@ import argparse
 from .make_wide import make_wide
 from .cli_demux import _setup_demux_subparser
 from .cli_trim import _setup_trim_subparser
+from .cli_denovo import _setup_denovo_subparser
 from .cli_map import _setup_map_subparser
 from .cli_assemble import _setup_assemble_subparser
 from .cli_wex import _setup_wex_subparser
 from ..demuxer import run_demuxer
 from ..trimmer import run_trimmer
+from ..denovo import run_denovo
 from ..mapper import run_mapper
 from ..assembler import run_assembler
 from ..analysis.window_extracter import run_window_extracter
@@ -50,7 +52,7 @@ $ ipyrad trim -d DATA/*.fastq.gz -o TRIMMED/ -q 20 -n 5 -c 10
 $ ipyrad map -d DATA/*.fastq.gz -o BAMs -c 10
 
 # assemble: delimit rad loci, call variants, filter, and write outputs
-$ ipyrad assemble -b BAMS/*.bam -o OUT -p TEST -m 4 -q 20 -c 10
+$ ipyrad assemble -d BAMS/*.bam -o OUT -p TEST -m 4 -q 20 -c 10
 """
 
 
@@ -68,6 +70,7 @@ def setup_parsers() -> argparse.ArgumentParser:
     # add subcommands
     _setup_demux_subparser(subparser, f"{HEADER}\nipyrad demux: demultiplex pooled reads to sample files by index/barcode")
     _setup_trim_subparser(subparser, f"{HEADER}\nipyrad trim: trim for quality, adapters, and restriction overhangs")
+    _setup_denovo_subparser(subparser, f"{HEADER}\nipyrad denovo: construct a reference locus library")
     _setup_map_subparser(subparser, f"{HEADER}\nipyrad map: reference map, filter, and sort reads to bam files")
     _setup_assemble_subparser(subparser, f"{HEADER}\nipyrad assemble: delimit loci, call variants, and write outputs")
     _setup_wex_subparser(subparser, f"{HEADER}\nipyrad wex: window extracter to filter and write concatenated alignments")
@@ -117,6 +120,7 @@ def command_line():
             merge_technical_replicates=args.merge_technical_replicates,
             cores=args.cores,
             max_reads=args.max_reads,
+            log_level=args.log_level,
         )
         sys.exit(0)
 
@@ -145,6 +149,31 @@ def command_line():
             delim_idx=args.delim_idx,
             umi_tag_in_i5=args.umi_tag_in_i5,
             force=args.force,
+            log_level=args.log_level,
+        )
+        sys.exit(0)
+
+    # DENOVO: --------------------------------------------------------
+    if args.subcommand == "denovo":
+        logger.info("------------------------------------------------------------")
+        logger.info("----- ipyrad denovo: construct locus reference library -----")
+        logger.info("------------------------------------------------------------")
+        logger.info(f"CMD: ipyrad {' '.join(sys.argv[1:])}")
+        run_denovo(
+            fastqs=args.fastqs,
+            outdir=args.out,
+            similarity_threshold_within=args.similarity_threshold_within,
+            similarity_threshold_across=args.similarity_threshold_across,
+            min_dereplication_size=args.min_dereplication_size,
+            min_length=args.min_length,
+            min_merge_overlap=args.min_merge_overlap,
+            max_merge_diffs=args.max_merge_diffs,
+            cores=args.cores,
+            threads=args.threads,
+            force=args.force,
+            strand_both=args.strand_both,
+            delim_str=args.delim_str,
+            delim_idx=args.delim_idx,
             log_level=args.log_level,
         )
         sys.exit(0)

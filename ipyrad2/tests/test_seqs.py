@@ -24,6 +24,6 @@ if __name__ == "__main__":
     # DATA = DIR / "assembly.seqs2.hdf5"
 
     DIR = Path("/home/deren/Documents/ipyrad-tests/Ama-out/")
-    DATA = DIR / "test.hdf5"
+    DATA = DIR / "assembly.hdf5"
     main(DATA)
 
