@@ -26,7 +26,7 @@ def get_name_from_bam(bam_file: Path) -> str:
 
 def samtools_index_reference(reference: Path, threads: int) -> None:
     """Index reference with samtools."""
-    cmd = [BIN_SAM, "faidx", "--threads", str(threads)]
+    cmd = [BIN_SAM, "faidx", reference]
     run_pipeline([cmd])
     return
 

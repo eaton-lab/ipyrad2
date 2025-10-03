@@ -233,7 +233,7 @@ def run_assembler(
             max_locus_hetero_frequency=max_locus_hetero_frequency,
             max_locus_variant_frequency=max_locus_variant_frequency,
         )),
-        "seqs2": (write_seqs_hdf5, dict(
+        "seqs": (write_seqs_hdf5, dict(
             name=name,
             outdir=outdir,
             snames=snames,
