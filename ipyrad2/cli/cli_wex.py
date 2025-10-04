@@ -30,7 +30,7 @@ def _setup_wex_subparser(subparsers: argparse._SubParsersAction, header: str = N
     tool = subparsers.add_parser(
         "wex",
         description=header,
-        help="window extracter to filter and write a concatenated alignments.",
+        help="Window extracter to filter and write a concatenated alignments.",
         epilog=EPILOG,
         formatter_class=make_wide(argparse.RawDescriptionHelpFormatter, max_help_position=60, width=140),
     )

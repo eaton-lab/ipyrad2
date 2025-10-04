@@ -67,7 +67,7 @@ def setup_parsers() -> argparse.ArgumentParser:
     parser.add_argument("-v", "--version", action='version', version=f"ipyrad {VERSION}")
     subparser = parser.add_subparsers(help="sub-commands", dest="subcommand")
 
-    # add subcommands
+    # add subcommands: these messages are subcommand headers
     _setup_demux_subparser(subparser, f"{HEADER}\nipyrad demux: demultiplex pooled reads to sample files by index/barcode")
     _setup_trim_subparser(subparser, f"{HEADER}\nipyrad trim: trim for quality, adapters, and restriction overhangs")
     _setup_denovo_subparser(subparser, f"{HEADER}\nipyrad denovo: construct a reference locus library")
@@ -211,8 +211,8 @@ def command_line():
             reference=args.reference,
             outdir=args.out,
             name=args.name,
-            min_gq=args.min_gq,
-            min_qual=args.min_qual,
+            min_map_q=args.min_map_q,
+            min_base_q=args.min_base_q,
             min_sample_depth=args.min_sample_depth,
             min_locus_sample_coverage=args.min_locus_sample_coverage,
             min_locus_trim_sample_coverage=args.min_locus_trim_sample_coverage,

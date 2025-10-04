@@ -20,7 +20,7 @@ def _setup_denovo_subparser(subparsers: argparse._SubParsersAction, header: str 
     tool = subparsers.add_parser(
         "denovo",
         description=header,
-        help="construct a denovo reference library by clustering with 'vsearch'.",
+        help="Construct a denovo reference library by clustering with 'vsearch'.",
         epilog=EPILOG,
         formatter_class=make_wide(argparse.RawDescriptionHelpFormatter, max_help_position=60, width=140),
     )

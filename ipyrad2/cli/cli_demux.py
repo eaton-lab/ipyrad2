@@ -23,7 +23,7 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
     tool = subparsers.add_parser(
         "demux",
         description=header,
-        help="Demultiplex unsorted data by index or barcode.",
+        help="Demultiplex pooled data to samples by index or barcode.",
         epilog=EPILOG,
         formatter_class=make_wide(argparse.RawDescriptionHelpFormatter, max_help_position=60, width=140),
     )

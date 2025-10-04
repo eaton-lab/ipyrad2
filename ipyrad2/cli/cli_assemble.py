@@ -22,7 +22,7 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
     tool = subparsers.add_parser(
         "assemble",
         description=header,
-        help="assemble loci and call variants using 'bedtools' and 'bcftools'.",
+        help="Assemble loci and call variants using 'bedtools' and 'bcftools'.",
         epilog=EPILOG,
         formatter_class=make_wide(argparse.RawDescriptionHelpFormatter, max_help_position=60, width=140),
     )
@@ -53,12 +53,12 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="Directory for results and stat files. Created if it doesn't exist. [default=./OUT]",
     )
     tool.add_argument(
-        "-q", "--min-gq", metavar="int", type=int, default=20,
-        help="Min per-sample genotype quality score. [default=20]",
+        "-q", "--min-map_q", metavar="int", type=int, default=15,
+        help="Min read alignment score (mapQ). Applied to coverage and variant calling [default=15]",
     )
     tool.add_argument(
-        "-Q", "--min-qual", metavar="int", type=int, default=20,
-        help="Min across-sample genotype quality score. [default=20]",
+        "-Q", "--min-base_q", metavar="int", type=int, default=13,
+        help="Min base quality score (baseQ). Applied in variant calling [default=13]",
     )
     tool.add_argument(
         "-s", "--min-sample-depth", metavar="int", type=int, default=1,

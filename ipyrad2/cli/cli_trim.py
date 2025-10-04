@@ -23,7 +23,7 @@ def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = 
     tool = subparsers.add_parser(
         "trim",
         description=header,
-        help="trim reads for quality, adapters, and restriction overhangs using 'fastp'.",
+        help="Trim reads for quality, adapters, and restriction overhangs using 'fastp'.",
         epilog=EPILOG,
         formatter_class=make_wide(argparse.RawDescriptionHelpFormatter, max_help_position=60, width=140),
     )

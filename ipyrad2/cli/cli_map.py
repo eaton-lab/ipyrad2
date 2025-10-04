@@ -20,7 +20,7 @@ def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = N
     tool = subparsers.add_parser(
         "map",
         description=header,
-        help="map, filter, and sort reads with 'bwa-mem2' and 'samtools'.",
+        help="Map, filter, and sort reads with 'bwa-mem2' and 'samtools'.",
         epilog=EPILOG,
         formatter_class=make_wide(argparse.RawDescriptionHelpFormatter, max_help_position=60, width=140),
     )
