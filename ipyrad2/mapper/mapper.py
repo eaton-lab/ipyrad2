@@ -40,70 +40,63 @@ LOG_CMD3 = ("bwa-mem2 mem REF R1 R2 "
            "| samtools view -b -f 0x2 -q 20")
 
 
-def map_filter_sort_mark(sname: str, fastqs: Tuple[Path, Path], reference: Path, outdir: Path, mark_dups_by_umis: bool, threads: int) -> Path:
+def map_filter_sort_mark_pairs(sname: str, fastqs: Tuple[Path, Path], reference: Path, outdir: Path, mark_dups_by_umis: bool, threads: int) -> Path:
     """Map reads to the reference to get a sorted bam.
+
+    This pipeline is for PE data w duplication marking information,
+    meaning either WGS data (coordinates), or ddRAD w/ i5 UMIs stored
+    to names (see option in ipyrad2 trim to do this.)
     """
-    if not reference.exists():
-        raise IPyradError(f"reference_sequence not found: {reference}")
-
-    # Inputs: paired if split files exist, otherwise single-end derep
-    r1, r2 = fastqs
-    paired = r1.exists() and r2.exists()
-    if not paired:
-        r2 = None
-    if not r1.exists():
-        raise IPyradError(f"fastq file not found: {r1}")
-
     # paths
     out_bam = outdir / f"{sname}.marked.sorted.bam"
     tmp_bam = outdir / f"{sname}.bam.tmp"
     tmp_prefix = outdir / f"{sname}.sam.tmp"
 
     # Split threads between BWA and samtools
-    nthreads = max(1, int(threads))
-    bwa_threads = max(1, nthreads - 1)
-    mid_threads = max(1, int(nthreads / 2))
+    bwa_threads = max(1, int(threads * 0.75))
+    sort_threads = max(1, threads - bwa_threads)
 
     # mapping command
+    # additional options to consider for toggle
+    # -k 15   # reduce kmer size for small denovo loci
+    # -L 1,1  # reduce penalty for clipping
     cmd1 = [
         BIN_BWA, "mem",
-        "-t", str(bwa_threads),
-        "-v", "1",                # less verbose.
-        "-K", "50000000",         # stable nbases chunk size. Improves repeatability.
-        # "-Y",                   # soft-clip supplementary. Wouldn't hurt, but not necessary.
-        # "-M",                   # Picard compatibility. Not necessary, we use samtools fixmate for dups.
+        "-Y",                     # mark supplementary with soft-clip. Doesn't hurt reference mapping, but helps short loci mapping.
+        "-T", "20",               # minimum alignmnet score to output (default=30). This is different from MAPQ in samtools.
         "-R", f"@RG\\tID:{sname}\\tSM:{sname}\\tPL:ILLUMINA",  # store sample name; group can be overriden with -G.
+        "-K", "50000000",         # stable nbases chunk size. Improves repeatability.
+        "-v", "1",                # less verbose.
+        "-t", str(bwa_threads),
         str(reference),
-        str(r1),
+        str(fastqs[0]),
+        str(fastqs[1]),
     ]
-    if r2:
-        cmd1.append(str(r2))
 
     # drop unmapped + seconday + supplementary; require proper pair only if paired
     cmd2 = [
         BIN_SAMTOOLS, "view",
-        "-b", "-u",         # stream uncompressed bam
-        "-F", "0x900",      # exclude secondary and supplemental.
-        "-q", "20",         # only MAPQ≥20
-        "-@", str(mid_threads),
+        "-b", "-u",
+        "-o", "-",
     ]
 
     # [optional] sort by name for fixmate and marking dups
     cmd3 = [
         BIN_SAMTOOLS, "sort",
         "-n",
-        "-@", str(mid_threads),
-        "-m", "50M",
+        "-m", "256M",
         "-T", str(tmp_prefix),
         "-o", "-",
+        "-@", str(sort_threads),
     ]
 
     # [optional] fixmate checks and updates tags about pairing
     cmd4 = [
         BIN_SAMTOOLS, "fixmate",
         "-m",
+        "-r",                       # remove unmapped and secondary
         "-", "-",
-        "-@", str(mid_threads),
+        "-@", str(bwa_threads),
     ]
 
     # coordinate sort command
@@ -113,13 +106,13 @@ def map_filter_sort_mark(sname: str, fastqs: Tuple[Path, Path], reference: Path,
         "-T", str(tmp_prefix),
         "-O", "bam",
         "-o", "-",
-        "-@", str(mid_threads),
+        "-@", str(sort_threads),
     ]
 
     # mark dups in coordinate sorted fixmate bams
     cmd6 = [
         BIN_SAMTOOLS, "markdup",
-        "-@", str(mid_threads),
+        "-@", str(bwa_threads),
         "-", "-",
     ]
     if mark_dups_by_umis:
@@ -128,10 +121,11 @@ def map_filter_sort_mark(sname: str, fastqs: Tuple[Path, Path], reference: Path,
     # final view
     cmd7 = [
         BIN_SAMTOOLS, "view",
+        "-F", "4",                   # drop 'unmapped''
+        "-F", "8",                   # drop 'mate-unmapped'
+        "-F", "2048",                # drop 'secondary''
+        "-q", "0",                   # do not yet apply map quality filters
         "-b",
-        "-f", "0x2",              # filter improperly paired
-        "-q", "20",
-        "-@", str(mid_threads),
         "-o", str(tmp_bam),
     ]
 
@@ -146,71 +140,94 @@ def map_filter_sort_mark(sname: str, fastqs: Tuple[Path, Path], reference: Path,
     return out_bam
 
 
-def map_filter_sort(sname: str, fastqs: Tuple[Path, Path], reference: Path, outdir: Path, threads: int, **kwargs) -> Path:
-    """Map reads to the reference to get a sorted bam."""
-    if not reference.exists():
-        raise IPyradError(f"reference_sequence not found: {reference}")
+    # [optional] sort by name for fixmate and marking dups
+    cmd3 = [
+        BIN_SAMTOOLS, "sort",
+        "-n",
+        "-m", "256M",
+        "-T", str(tmp_prefix),
+        "-@", str(sort_threads),
+        "-o", "-",
+    ]
 
-    # Inputs: paired if split files exist, otherwise single-end derep
-    r1, r2 = fastqs
-    paired = r1.exists() and r2.exists()
-    if not paired:
-        r2 = None
-    if not r1.exists():
-        raise IPyradError(f"fastq file not found: {r1}")
+    # [optional] fixmate checks and updates tags about pairing
+    cmd4 = [
+        BIN_SAMTOOLS, "fixmate",
+        "-m",
+        "-r",                       # remove unmapped and secondary
+        "-", "-",
+    ]
 
+
+def map_filter_sort_pairs(sname: str, fastqs: Tuple[Path, Path], reference: Path, outdir: Path, threads: int, **kwargs) -> Path:
+    """Map reads to the reference to get a sorted bam.
+
+    This pipeline is for PE data w/o duplication marking information.
+    """
     # paths
-    outdir = Path(outdir).expanduser().absolute()
-    outdir.mkdir(exist_ok=True)
-    out_bam = outdir / f"{sname}.sorted.bam"
+    out_bam = outdir / f"{sname}.sorted.filtered.bam"
     tmp_bam = outdir / f"{sname}.bam.tmp"
     tmp_prefix = outdir / f"{sname}.sam.tmp"
 
     # Split threads between BWA and samtools
-    nthreads = max(1, int(threads))
-    bwa_threads = max(1, nthreads - 1)
+    bwa_threads = max(1, int(threads * 0.75))
+    sort_threads = max(1, threads - bwa_threads)
 
     # mapping command
     cmd1 = [
         BIN_BWA, "mem",
-        "-t", str(bwa_threads),
-        "-v", "1",                # less verbose.
+        "-Y",                     # soft-clip supplementary. Wouldn't hurt, but not necessary.
+        "-T", "20",               # minimum score to output (default=30). Keep lower scores for now, can filter on higher MAPQ later.
+        "-R", f"@RG\\tID:{sname}\\tSM:{sname}\\tPL:ILLUMINA",  # store sample names in bam.
         "-K", "50000000",         # stable chunk size. Improves repeatability.
-        # "-Y",                   # soft-clip supplementary. Wouldn't hurt, but not necessary.
-        # "-M",                   # Picard compatibility. Not necessary, we use samtools fixmate for dups.
-        "-R", f"@RG\\tID:{sname}\\tSM:{sname}\\tPL:ILLUMINA",  # not currently used, since we provide custom -G to bcftools.
+        "-v", "1",                # less verbose.
+        "-t", str(bwa_threads),
         str(reference),
-        str(r1),
+        str(fastqs[0]),
+        str(fastqs[1]),
     ]
-    if r2:
-        cmd1.append(str(r2))
 
-    # drop unmapped + seconday + supplementary; require proper pair only if paired
+    # stream converted to bam
     cmd2 = [
         BIN_SAMTOOLS, "view",
-        "-b", "-u",         # stream uncompressed bam
-        # "-F", "0x400",    # exclude optical/dups if marked (nb: bcftools already ignores reads that are marked.)
-        "-F", "0x900",      # exclude secondary and supplemental.
-        "-q", "20",         # only MAPQ≥20         # TODO: expose as param
-        "-@", "1",
-    ] + (["-f", "0x2"] if paired else [])
+        "-u", "-b",                  # stream uncompressed bam
+    ]
 
-    # coordinate sorted command
+    # coordinate sort
     cmd3 = [
         BIN_SAMTOOLS, "sort",
-        "-m", "100M",                # tune per-thread memory
+        "-m", "256M",                # per-thread memory
         "-T", str(tmp_prefix),
-        "-O", "bam",
-        "-o", str(tmp_bam),
-        "-@", "1",
+        "-@", str(sort_threads),
+        "-O", "bam",                 # explicity ask for bam format to be safe
+        "-o", f"{sname}.tmp.coord_sorted.bam",
+        "-",
     ]
-    run_pipeline([cmd1, cmd2, cmd3])
+    cmds = [cmd1, cmd2, cmd3]
+    run_pipeline(cmds)
+
+    # apply filters and write to disk
+    cmd4 = [
+        BIN_SAMTOOLS, "view",
+        # "-F", "2060",                # combines three options below
+        "-F", "4",                   # drop 'unmapped''
+        "-F", "8",                   # drop 'mate-unmapped'
+        "-F", "2048",                # drop 'secondary''
+        "-q", "0",                   # do not yet apply map quality filters
+        "-b",
+        "-o", str(tmp_bam),
+        f"{sname}.tmp.coord_sorted.bam",
+    ]
+    # cmds = [cmd1, cmd2, cmd3, cmd4]
+    # cmd_strings = [f"{' '.join(cmd)}" for cmd in cmds]
+    # logger.debug(" | ".join(cmd_strings))
+    run_pipeline([cmd4])
     os.replace(tmp_bam, out_bam)
 
     # CSI index bam file
     cmd1 = [BIN_SAMTOOLS, "index", "-c", "--threads", str(threads), str(out_bam)]
     run_pipeline([cmd1])
-    logger.debug(f"finished mapping: {sname}")
+    logger.info(f"finished mapping: {sname}")
     return out_bam
 
 
@@ -306,6 +323,15 @@ def run_mapper(
         if mark_dups_by_umis:
             logger.warning("marking PCR duplicates. Data is expected to be RAD with i5 UMIs moved into read names")
 
+    # store whether reads are paired
+    is_paired = False
+    pairs_exist = [(r1.exists() and r2.exists()) for (r1, r2) in fastq_dict.values()]
+    if any(pairs_exist):
+        if all(pairs_exist):
+            is_paired = True
+        else:
+            raise IPyradError("some but not all files have R1 and R2 pairs. Check inputs.")
+
     # index the reference
     index_ref_with_bwa(reference)
 
@@ -322,10 +348,14 @@ def run_mapper(
             mark_dups_by_umis=mark_dups_by_umis,
             threads=threads,
         )
-        if mark_dups_by_coords or mark_dups_by_umis:
-            jobs[sname] = (map_filter_sort_mark, kwargs)
+        if is_paired:
+            if mark_dups_by_coords or mark_dups_by_umis:
+                jobs[sname] = (map_filter_sort_mark_pairs, kwargs)
+            else:
+                jobs[sname] = (map_filter_sort_pairs, kwargs)
         else:
-            jobs[sname] = (map_filter_sort, kwargs)
+            raise NotImplementedError("TODO: SE data.")
+    # run jobs in parallel
     bam_dict = run_with_pool(jobs, log_level, workers)
 
     # get bam file stats and write to a file
