@@ -46,8 +46,8 @@ def run_assembler(
     reference: Path,
     outdir: Path,
     name: str,
-    min_gq: int,
-    min_qual: int,
+    min_map_q: int,
+    min_base_q: int,
     min_sample_depth: int,                # sample must have depth cov or site is masked.
     min_locus_sample_coverage: int,       # locus must have data for N samples (used in locus delim)
     min_locus_trim_sample_coverage: int,  # trim r/l to region with at least N samples data (default 4)
@@ -126,7 +126,7 @@ def run_assembler(
     logger.info("delimiting sample coverage beds")
     jobs = {}
     for sname, bam_file in bam_dict.items():
-        kwargs = dict(sname=sname, bam_file=bam_file, threads=threads, outdir=tmpdir)
+        kwargs = dict(sname=sname, bam_file=bam_file, min_map_q=min_map_q, threads=threads, outdir=tmpdir)
         jobs[sname] = (get_fragment_beds, kwargs)
     results = run_with_pool(jobs, log_level, cores)
 
@@ -169,13 +169,21 @@ def run_assembler(
     locus_chunks = get_chunked_loci_beds(tmpdir, nchunks)
     jobs = {}
     for chunk in locus_chunks:
-        kwargs = dict(outdir=tmpdir, reference=reference, bam_files=list(all_dict.values()), locus_chunk=chunk, threads=threads)
+        kwargs = dict(
+            outdir=tmpdir, reference=reference,
+            bam_files=list(all_dict.values()),
+            min_map_q=min_map_q,
+            min_base_q=min_base_q,
+            locus_chunk=chunk,
+            threads=threads,
+        )
         jobs[chunk] = (get_group_called_variants_in_vcf_chunks, kwargs)
-    results = run_with_pool(jobs, log_level, workers)   # multithreaded jobs.
+    run_with_pool(jobs, log_level, workers)   # multithreaded jobs.
     get_concat_chunk_vcfs(tmpdir, threads)
 
     logger.info("filtering variants")
-    get_filtered_vcf(tmpdir, min_sample_depth, min_gq, min_qual, cores)
+    logger.warning("TODO: other quality filters here?")
+    get_filtered_vcf(tmpdir, min_sample_depth, min_map_q, min_base_q, cores)
 
     logger.info("resolving indels and snps")
     get_vcf_with_indels_resolved(tmpdir, reference, cores)

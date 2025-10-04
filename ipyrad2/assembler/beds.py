@@ -48,7 +48,7 @@ def get_reference_sort_order(reference: Path, outdir: Path) -> Path:
     return out_path
 
 
-def get_fragment_beds(sname: str, bam_file: Path, threads: int, outdir: Path) -> Path:
+def get_fragment_beds(sname: str, bam_file: Path, min_map_q: int, threads: int, outdir: Path) -> Path:
     """Produce a fragments BED (full inserts) from a coordinate-sorted BAM.
 
     Shell command
@@ -64,18 +64,21 @@ def get_fragment_beds(sname: str, bam_file: Path, threads: int, outdir: Path) ->
 
     # Pipeline commands
     # 1) name-group for -bedpe (stdout)
-    cmd1 = [BIN_SAM, "collate", "-u", "-@", str(threads), "-O", str(bam_file), "-T", str(outdir / f"{sname}")]
+    cmd1 = [BIN_SAM, "collate", "-u", "-@", str(threads), "-O", "-T", str(outdir / f"{sname}"), str(bam_file)]
+
+    # this filter applies the same read-level (q) filter as in variants.py
+    cmd2 = [BIN_SAM, "view", "-u", "-q", str(min_map_q), "-o", "-"]
 
     # 2) paired-end to BEDPE
-    cmd2 = [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]
+    cmd3 = [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]
 
     # 3) collapse each pair to its fragment span [min(start), max(end)]
-    cmd3 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
+    cmd4 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
 
     # 4) sort BED
-    cmd4 = [BIN_BED, "sort", "-i", "-"]
+    cmd5 = [BIN_BED, "sort", "-i", "-"]
 
-    run_pipeline([cmd1, cmd2, cmd3, cmd4], out_path)
+    run_pipeline([cmd1, cmd2, cmd3, cmd4, cmd5], out_path)
     return out_path
 
 
@@ -95,8 +98,8 @@ def get_fragment_coverage_beds(sname: str, reference: Path, outdir: Path) -> Pat
     cmd = [
         BIN_BED, "genomecov",
         "-i", str(fragment_bed),
-        "-g", str(fai_path),
-        "-bg",
+        "-g", str(fai_path),          # genome file to define chrom lens
+        "-bg",                        # report depth in bedgraph format
     ]
     run_pipeline([cmd], out_path)
     fragment_bed.unlink()

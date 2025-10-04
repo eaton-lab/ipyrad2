@@ -140,7 +140,7 @@ def get_chunked_loci_beds(outdir: Path, nchunks: int) -> List[Path]:
     return paths
 
 
-def get_group_called_variants_in_vcf_chunks(outdir: Path, reference: Path, bam_files: List[Path], locus_chunk: Path, threads: int):
+def get_group_called_variants_in_vcf_chunks(outdir: Path, reference: Path, bam_files: List[Path], locus_chunk: Path, min_map_q: int, min_base_q: int, threads: int):
     """Make variant calls for all samples using -G (groups).
 
     >>> $ bcftools mpileup \
@@ -159,11 +159,13 @@ def get_group_called_variants_in_vcf_chunks(outdir: Path, reference: Path, bam_f
     threads_view = 1
 
     # get genotype likelihoods at all sites in Region with decent mapping.
+    # Applies the same map_q here for variant calling as used in the bed
+    # delimitation steps.
     cmd1 = [
         BIN_BCF, "mpileup",
         "-f", str(reference),
-        "-q", str(20),
-        "-Q", str(20),
+        "-q", str(min_map_q),     # 10-20 is good for RAD-seq
+        "-Q", str(min_base_q),    # default in mpileup is 13, but many use 20
         "-d", str(10_000),
         "-a", "FMT/DP,FMT/AD",
         "-R", str(locus_chunk),
@@ -188,6 +190,7 @@ def get_group_called_variants_in_vcf_chunks(outdir: Path, reference: Path, bam_f
         "--threads", str(threads_view),
         "-Oz", "-o", str(out_vcf_gz),
     ]
+    logger.debug(f"{' '.join(cmd1)} | {' '.join(cmd2)} | {' '.join(cmd3)}")
     run_pipeline([cmd1, cmd2, cmd3])
     return out_vcf_gz
 
@@ -293,10 +296,10 @@ def get_filtered_vcf(outdir: Path, min_read_depth: int, min_gq: int, min_qual: i
     run_pipeline([cmd])
 
     # clean up by removing raw SNPs file
-    if in_vcf_gz.exists():
-        in_vcf_gz.unlink()
-    if in_vcf_gz.with_suffix(in_vcf_gz.suffix + ".csi").exists():
-        in_vcf_gz.with_suffix(in_vcf_gz.suffix + ".csi").unlink()
+    # if in_vcf_gz.exists():
+    #     in_vcf_gz.unlink()
+    # if in_vcf_gz.with_suffix(in_vcf_gz.suffix + ".csi").exists():
+    #     in_vcf_gz.with_suffix(in_vcf_gz.suffix + ".csi").unlink()
     return out_vcf_gz
 
 
@@ -441,15 +444,15 @@ def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) ->
     run_pipeline([cmd1, cmd2])
 
     # clean up
-    for path in vcf_dir.glob("*.vcf.gz"):
-        if path.name != out_vcf_gz.name:
-            if path.exists():
-                # logger.warning(f'removing {path}')
-                path.unlink()
-            ipath = path.with_suffix(path.suffix + ".csi")
-            if ipath.exists():
-                # logger.warning(f'removing {ipath}')
-                ipath.unlink()
+    # for path in vcf_dir.glob("*.vcf.gz"):
+    #     if path.name != out_vcf_gz.name:
+    #         if path.exists():
+    #             # logger.warning(f'removing {path}')
+    #             path.unlink()
+    #         ipath = path.with_suffix(path.suffix + ".csi")
+    #         if ipath.exists():
+    #             # logger.warning(f'removing {ipath}')
+    #             ipath.unlink()
     return out_vcf_gz
 
 
