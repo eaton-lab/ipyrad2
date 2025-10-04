@@ -122,7 +122,7 @@ def trim_sample_with_fastp(
     # run the command in subprocess
     logger.debug(f"CMD: {' '.join(cmd)}")
     run_pipeline([cmd])
-    logger.info(f"finished trimmming {sname}")
+    logger.info(f"finished trimming {sname}")
 
     # parse JSON stats
     with open(stats_json, 'r', encoding="utf-8") as indata:
