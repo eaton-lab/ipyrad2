@@ -61,6 +61,16 @@ def color_support():
     # return tty1 or tty2
 
 
+def normalize_log_level(level: str) -> str:
+    """Convert level input to full string if it is a substring, else return user value"""
+    OPTIONS = ("TRACE", "DEBUG", "INFO", "WARNING", "ERROR")
+    level = level.upper()
+    for lvl in OPTIONS:
+        if lvl.startswith(level):
+            return lvl
+    return level
+
+
 def set_log_level(log_level: str = "DEBUG", log_file: Optional[Path] = None):
     """Add logger for ipyrad to stderr and optionally to file.
 
@@ -72,7 +82,7 @@ def set_log_level(log_level: str = "DEBUG", log_file: Optional[Path] = None):
     # always log to stderr
     logger.add(
         sink=sys.stderr,
-        level=log_level,
+        level=normalize_log_level(log_level),
         colorize=color_support(),
         format=formatter,
         enqueue=False,
@@ -85,7 +95,7 @@ def set_log_level(log_level: str = "DEBUG", log_file: Optional[Path] = None):
         log_file.touch(exist_ok=True)
         logger.add(
             sink=str(log_file),
-            level=log_level,
+            level=normalize_log_level(log_level),
             colorize=False,
             format=formatter,
             enqueue=True,
@@ -102,7 +112,7 @@ def setup_loguru_worker(log_level: str) -> None:
     logger.remove()
     logger.add(
         sys.stderr,
-        level=log_level,
+        level=normalize_log_level(log_level),
         colorize=color_support(),
         format=formatter,
         enqueue=True,
