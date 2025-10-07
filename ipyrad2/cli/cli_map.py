@@ -26,7 +26,7 @@ def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = N
     )
     tool.add_argument(
         "-d", "--fastqs", metavar="Path", type=Path, required=True, nargs="*",
-        help="One or more paths to fastq data files (regex allowed; e.g., './data/*.fastq.gz')",
+        help="One or more paths to fastq data files (or glob patterns; e.g., './data/*.fastq.gz')",
     )
     tool.add_argument(
         "-r", "--reference", metavar="Path", type=Path, required=True,

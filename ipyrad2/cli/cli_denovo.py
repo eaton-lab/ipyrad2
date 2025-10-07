@@ -26,7 +26,7 @@ def _setup_denovo_subparser(subparsers: argparse._SubParsersAction, header: str 
     )
     tool.add_argument(
         "-d", "--fastqs", metavar="Path", type=Path, required=True, nargs="*",
-        help="One or more paths to fastq data files (regex allowed; e.g., './data/*.fastq.gz')",
+        help="One or more paths to fastq data files (or glob patterns; e.g., './data/*.fastq.gz')",
     )
     tool.add_argument(
         "-o", "--out", metavar="Path", type=Path, default="./CLUSTERS",

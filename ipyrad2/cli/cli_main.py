@@ -99,7 +99,8 @@ def command_line():
     args = parser.parse_args()
 
     # LOGGING: -----------------------------------------------------
-    set_log_level(args.log_level, args.log_file)
+    if hasattr(args, "log_level"):
+        set_log_level(args.log_level, args.log_file)
 
     # DEMUX: -------------------------------------------------------
     if args.subcommand == "demux":

@@ -28,22 +28,22 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
     )
     tool.add_argument(
         "-d", "--rad-bams", metavar="Path", type=Path, required=True, nargs="*",
-        help="Bam files from RAD-type samples. (regex allowed; e.g., './bam/{a,b}*.bam'). "
+        help="Bam files from RAD-type samples. (glob supported; e.g., './bam/{a,b}*.bam'). "
              "These data are used to delimit loci regions (unless overruled by -b), and assembled",
     )
     tool.add_argument(
         "-w", "--wgs-bams", metavar="Path", type=Path, nargs="*",
-        help="Optional bam files from WGS-type data. (regex allowed; e.g., './bam/{a,b}*.bam') "
+        help="Optional bam files from WGS-type data. (glob supported; e.g., './bam/{a,b}*.bam') "
              "These data are only assembled within loci regions delimited by RAD samples (or set using -b)"
     )
     tool.add_argument(
         "-r", "--reference", metavar="Path", type=Path, required=True,
         help="Path to the reference fasta used in the mapping step",
     )
-    tool.add_argument(
-        "-b", "--loci-bed", metavar="Path", type=Path,
-        help="Optional bed file delimiting loci on the reference genome.",
-    )
+    # tool.add_argument(
+    #     "-b", "--loci-bed", metavar="Path", type=Path,
+    #     help="Optional bed file delimiting loci on the reference genome.",
+    # )
     tool.add_argument(
         "-n", "--name", metavar="str", type=str, default="assembly",
         help="Prefix name for output files. [default=assembly]",
@@ -69,7 +69,8 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="Min num samples that must be present to retain a locus. [default=4]",
     )
     # This isn't super necessary. It reduces the size of the seqs h5 a bit,
-    # but otherwise this filter is applied when you use wex.
+    # but otherwise this filter is applied when you use wex. Meh, let's keep it,
+    # it makes loci edges looks nicer.
     tool.add_argument(
         "-a", "--min-locus-trim-sample-coverage", metavar="int", type=int, default=4,
         help="Min num samples with non-N calls for trimming locus edges. Must be <= '-m'. [default=4]",

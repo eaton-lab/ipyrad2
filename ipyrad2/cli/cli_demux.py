@@ -41,11 +41,11 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
     )
     tool.add_argument(
         "-re1", "--restriction-overhang-1", metavar="str", type=str,
-        help="Restriction overhang on read1s. If None it is inferred by kmer analysis."
+        help="Restriction overhang (junction motif) on read1s. If None it is inferred by kmer analysis."
     )
     tool.add_argument(
         "-re2", "--restriction-overhang-2", metavar="str", type=str,
-        help="Restriction overhang on read2s. If None it is inferred by kmer analysis."
+        help="Restriction overhang (junction motif) on read2s. If None it is inferred by kmer analysis."
     )
     tool.add_argument(
         "-m", "--max_mismatch", metavar="int", type=int, default=0,
