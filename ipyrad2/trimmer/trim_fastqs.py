@@ -17,11 +17,10 @@ import sys
 import json
 from pathlib import Path
 from loguru import logger
-# from ..utils.parse_names import get_name_to_fastq_dict
 from ..utils.names import get_name_to_fastq_dict
 from ..utils.kmers import get_overhang_from_kmers
 from ..utils.exceptions import IPyradError
-from ..utils.parallel import run_with_pool, run_pipeline
+from ..utils.parallel3 import run_with_pool, run_pipeline
 
 
 FASTP_BINARY = Path(sys.prefix) / "bin" / "fastp"

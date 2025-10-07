@@ -200,7 +200,7 @@ def map_filter_sort_pairs(sname: str, fastqs: Tuple[Path, Path], reference: Path
         "-T", str(tmp_prefix),
         "-@", str(sort_threads),
         "-O", "bam",                 # explicity ask for bam format to be safe
-        "-o", f"{sname}.tmp.coord_sorted.bam",
+        "-o", str(tmp_bam),
         "-",
     ]
     cmds = [cmd1, cmd2, cmd3]
@@ -215,14 +215,13 @@ def map_filter_sort_pairs(sname: str, fastqs: Tuple[Path, Path], reference: Path
         "-F", "2048",                # drop 'secondary''
         "-q", "0",                   # do not yet apply map quality filters
         "-b",
-        "-o", str(tmp_bam),
-        f"{sname}.tmp.coord_sorted.bam",
+        "-o", str(out_bam),
+        str(tmp_bam),
     ]
     # cmds = [cmd1, cmd2, cmd3, cmd4]
     # cmd_strings = [f"{' '.join(cmd)}" for cmd in cmds]
     # logger.debug(" | ".join(cmd_strings))
     run_pipeline([cmd4])
-    os.replace(tmp_bam, out_bam)
 
     # CSI index bam file
     cmd1 = [BIN_SAMTOOLS, "index", "-c", "--threads", str(threads), str(out_bam)]

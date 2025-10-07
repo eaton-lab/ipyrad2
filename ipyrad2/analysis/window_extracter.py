@@ -83,8 +83,6 @@ class WindowExtracter:
         self.outdir = Path(outdir).expanduser().absolute()
         self.windows = [] if windows is None else [windows] if isinstance(windows, str) else list(windows)
         self.exclude = set(exclude if exclude else [])
-        self.imap = imap
-        self.minmap = minmap
         self.min_sample_coverage = min_sample_coverage
         self.max_sample_missing = min(1.0, max(0, max_sample_missing))
         self.stdout = stdout
@@ -96,13 +94,13 @@ class WindowExtracter:
         self.pnames: Dict[str, str] = None
         self.phymap: pd.DataFrame = None
         self.phymap_windows: Dict[int, List[Tuple[int, int]]] = None
-        self._imap: Dict[str, List[str]] = {}
-        self._minmap: Dict[str, int] = {}
+        self.imap: Dict[str, List[str]] = {}
+        self.minmap: Dict[str, int] = {}
 
         # fills: snames, sidxs, scaffold_table
         self._get_scaffold_table()
-        self._get_snames_and_sidxs_subset()
-        self._get_imap_minmap()
+        self._get_snames_and_sidxs_subset(imap)
+        self._get_imap_minmap(imap, minmap)
 
         # run commands
     def _run(self):
@@ -111,31 +109,11 @@ class WindowExtracter:
         self._get_seqarr()
         return self._filter_seqarr()
 
-    def _get_imap_minmap(self):
-        """Set _imap and _minmap for seqarr filtering."""
-        # if no imap was entered then group all samples into one group
-        # and use the global mincov as the min coverage of that group.
-        if not self.imap:
-            self._imap = {'all': self.snames}
-            self._minmap = {'all': int(self.min_sample_coverage)}
-            logger.debug(f"sample coverage minmap = {self._minmap}")
-
-        # if imap was provided, then (1) check the names; (2) apply a
-        # min value to each group from minmap; or (3) raise errors.
-        else:
-            if self.minmap is None:
-                raise IPyradError("must provide a minmap when using imap.")
-            if set(self.minmap) != set(self.imap):
-                raise IPyradError("imap and minmap keys must match.")
-            self._imap = self.imap.copy()
-            self._minmap = {}
-            for key in self._imap:
-                self._minmap[key] = self.minmap[key]
-            logger.debug(f"sample coverage minmap = {self._minmap}")
-
     def _get_scaffold_table(self) -> None:
         """Store table with scaffold names and lengths in the order they are stored in H5."""
         with h5py.File(self.data, 'r') as io5:
+            if io5.attrs["version"] < 2.0:
+                raise IPyradError("hdf5 database version must be >= 2.0")
             scaff_names = io5.attrs["scaffold_names"]
             scaff_lengths = io5.attrs["scaffold_lengths"]
             self.scaffold_table = pd.DataFrame(
@@ -143,14 +121,14 @@ class WindowExtracter:
                 data={"scaffold_name": scaff_names, "scaffold_length": scaff_lengths},
             )
 
-    def _get_snames_and_sidxs_subset(self) -> None:
+    def _get_snames_and_sidxs_subset(self, imap) -> None:
         with h5py.File(self.data, 'r') as io5:
             # get sample names and get them as padded names
             snames = io5.attrs["names"]
 
             # auto-update exclude from imap difference
-            if self.imap:  # is not None:
-                imapset = set(itertools.chain(*self.imap.values()))
+            if imap:  # is not None:
+                imapset = set(itertools.chain(*imap.values()))
                 self.exclude.update(set(snames).difference(imapset))
                 logger.debug(
                     "dropping samples that are either not in the imap dict, "
@@ -159,6 +137,28 @@ class WindowExtracter:
             # filter to only the included samples, store their new indices (sidxs)
             self.sidxs = [i for (i, j) in enumerate(snames) if j not in self.exclude]
             self.snames = [j for (i, j) in enumerate(snames) if i in self.sidxs]
+
+    def _get_imap_minmap(self, imap, minmap):
+        """Set _imap and _minmap for seqarr filtering."""
+        # if no imap was entered then group all samples into one group
+        # and use the global mincov as the min coverage of that group.
+        if not imap:
+            self.imap = {'all': self.snames}
+            self.minmap = {'all': int(self.min_sample_coverage)}
+            logger.debug(f"sample coverage minmap = {self.minmap}")
+
+        # if imap was provided, then (1) check the names; (2) apply a
+        # min value to each group from minmap; or (3) raise errors.
+        else:
+            if minmap is None:
+                raise IPyradError("must provide a minmap when using imap.")
+            if set(minmap) != set(imap):
+                raise IPyradError("imap and minmap keys must match.")
+            self.imap = imap.copy()
+            self.minmap = {}
+            for key in self.imap:
+                self.minmap[key] = minmap[key].copy()
+            logger.debug(f"sample coverage minmap = {self.minmap}")
 
     def _get_phymap_windows(self) -> None:
         """Check each window for a matching scaffold name, and position within its bounds."""
@@ -283,9 +283,9 @@ class WindowExtracter:
 
         # create and apply mask for sites (columns) that fail minmap filter
         mask = np.zeros(seqs.shape[1], dtype=np.bool_)
-        for pop in self._imap:
-            pop_snames = self._imap[pop]
-            pop_mincov = self._minmap[pop]
+        for pop in self.imap:
+            pop_snames = self.imap[pop]
+            pop_mincov = self.minmap[pop]
             pop_sidxs = [self.snames.index(i) for i in pop_snames]
             pop_arr = seqs[pop_sidxs, :]
             mask += np.sum(pop_arr != 78, axis=0) <= pop_mincov
@@ -392,8 +392,8 @@ class WindowExtracter:
             "infile": self.data,
             "outfile": outfile,
             "windows": self.windows, #" ".join(self.windows),
-            "imap": self._imap,
-            "min_sample_coverage_filter": self._minmap,
+            "imap": self.imap,
+            "min_sample_coverage_filter": self.minmap,
             "max_sample_missing_filter": self.max_sample_missing,
         }
         with open(stats_file, "w") as out:

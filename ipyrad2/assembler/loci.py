@@ -382,7 +382,7 @@ def filter_trim_locus(
         max_shared_h = max_heteros_count_numba(tseqs)
         max_shared_h_prop = max_shared_h / tseqs.shape[0]
         if max_shared_h_prop > max_locus_hetero_frequency:
-            filters["max_shared_hetero_site_proportion"] = True
+            filters["max_shared_hetero_frequency"] = True
 
     # if keeping locus revise the header for trim.
     header = f"{scaff}:{rstart + trim_left}-{rend - trim_right}"
@@ -451,12 +451,20 @@ def write_loci_and_stats_files(
             )
             result = filter_trim_locus(*args)
             header, tnames, tseqs, snpsarr, filters, stats = result
+            # logger.warning(filters)
 
             # update total dicts
             for key in total_filters:
                 total_filters[key] += int(result[4][key])
 
-            # store for wriring if locus passed filters
+            # tmp debugging code
+            if sum(filters.values()):
+                logger.debug(result[4])
+                logger.debug(header)
+                for sname, seq in zip(tnames, tseqs):
+                    logger.debug(f"\n{padded[sname]}{bytes(seq).decode()}")
+
+            # store for writing if locus passed filters
             if not sum(filters.values()):
                 # store locus bed
                 scaff, pos = header.split(":")

@@ -10,13 +10,13 @@ This tool is used in: pca, structure, treemix, popgen, baba
 Command line
 ------------
 $ ipyrad snpex -d H5 --stdout --maf 0.2 --scaff Chr[1-2] --min-samp 4
-
 """
 
 from typing import Optional, Dict, List, Union, Tuple
 from pathlib import Path
 import numpy as np
 import pandas as pd
+import h5py
 from loguru import logger
 
 
@@ -44,7 +44,7 @@ class SNPsExtracter:
     This tool is used to subsample and filter SNPs for linkage and
     missingness. The filtered SNPs are accessible as a numpy array.
     This tool is primarily for internal use by ipyrad-analysis, and
-    is used in other tools such as ipa.pca, ipa.popgen, etc.
+    is used in other tools such as ipa.pca.
 
     Parameters
     ----------
@@ -94,17 +94,17 @@ class SNPsExtracter:
         """Dict mapping population names to a list of existing sample names."""
         self.minmap = minmap if minmap else {i: 1 for i in self.imap}
         """Dict mapping population names to mincov numbers or proportions per population."""
-        self.mincov = mincov
+        self.mincov = min_sample_coverage
         """The minimum sample coverage across all samples or subsamples (if imap)."""
-        self.maf = minmaf
+        self.maf = min_minor_allele_frequency
         """The minimum frequency of the minor allele else SNP is filtered."""
 
         # attributes to be filled
         self.nsnps: int = None
         """Number of SNPs before filters are applied."""
-        self.dbnames: np.ndarray=None
+        # self.dbnames: np.ndarray=None
         """Array of ordered names in the HDF5 snps array."""
-        self.names: List[str]=None
+        self.snames: List[str]=None
         """List of ordered names in the IMAP dict (may be subset of dbnames)."""
         self.sidxs: np.ndarray=None
         """Array of int indices of names in .dbnames that are in .names."""
@@ -119,85 +119,98 @@ class SNPsExtracter:
         self.stats: pd.Series=None
         """DataFrame with filtering statistics."""
 
+        self._get_snames_and_sidxs_subset()
+        self._get_imap_minmap(imap, minmap)
+
         self._set_names_from_imap()
         self._set_nsnps_and_check_h5_file_format()
         self._set_names_sidxs_and_dbnames()
 
-    def _set_names_from_imap(self) -> None:
-        """Fill names, nsnps, and check input H5 file."""
-        self.names = []
-        for _, val in self.imap.items():
-            if isinstance(val, (list, tuple, np.ndarray)):
-                self.names.extend(val)
-            elif isinstance(val, str):
-                self.names.append(val)
-        # report repeated names
-        for name in self.names:
-            if self.names.count(name) > 1:
-                raise ValueError(f"Name {name} is repeated in imap.")
+    def _get_snames_and_sidxs_subset(self, imap) -> None:
+        with h5py.File(self.data, 'r') as io5:
+            # get sample names and get them as padded names
+            snames = io5.attrs["names"]
 
-    def _set_nsnps_and_check_h5_file_format(self) -> None:
-        """Check input data is proper format, and get nsnps."""
-        if self.data.suffix == ".vcf":
-            raise TypeError("input should be hdf5, see the vcf_to_hdf5 tool.")
-        # this will raise an error msg if using an outdated version
-        with SnpsDatabase(self.data, 'r') as io5:
-            self.nsnps = int(io5.attrs['nsnps'])
+            # auto-update exclude from imap difference
+            if imap:  # is not None:
+                imapset = set(itertools.chain(*imap.values()))
+                self.exclude.update(set(snames).difference(imapset))
+                logger.debug(
+                    "dropping samples that are either not in the imap dict, "
+                    f"or are in the exclude list: {self.exclude}")
 
-    def _set_names_sidxs_and_dbnames(self) -> None:
-        """Check names in h5 file match those in imap dict. Also sets names."""
-        # this will raise an error msg if using an outdated version
-        with SnpsDatabase(self.data, 'r') as io5:
+            # filter to only the included samples, store their new indices (sidxs)
+            self.sidxs = [i for (i, j) in enumerate(snames) if j not in self.exclude]
+            self.snames = [j for (i, j) in enumerate(snames) if i in self.sidxs]
 
-            # get all names in database as List[str]
-            self.dbnames = list(io5.attrs["names"])
+    def _get_imap_minmap(self, imap, minmap):
+        """Set _imap and _minmap for seqarr filtering."""
+        # if no imap was entered then group all samples into one group
+        # and use the global mincov as the min coverage of that group.
+        if not imap:
+            self.imap = {'all': self.snames}
+            self.minmap = {'all': int(self.min_sample_coverage)}
+            logger.debug(f"sample coverage minmap = {self.minmap}")
 
-            # raise error if any imap sample names not in database names
-            badnames = set(self.names).difference(self.dbnames)
-            if badnames:
-                raise ValueError(
-                    f"Samples [{badnames}] are not in data file: {self.data}")
-
-            # if no imap names then use db names, else subset to imap
-            # names but order into db names order
-            if not self.names:
-                self.names = self.dbnames
-            else:
-                self.names = [i for i in self.dbnames if i in self.names]
-
-            # update sidxs to mask rows not in selected samples
-            sidxs = sorted([self.dbnames.index(i) for i in self.names])
-            self.sidxs = np.array(sidxs)
-
-    ################################################################
-    ## the main user function
-    ################################################################
-    def run(self, cores: int=1, log_level: str="INFO", ipyclient: "Client"=None):
-        """Loads SNP data from HDF5, applies filters, and logs stats.
-
-        The filtered statistics are saved in the .stats attribute, and
-        are printed if the log_level if above the `ipa.set_log_level()`
-        (default='INFO'). This operation can be parallelized for speed
-        improvements on large datasets by entering a value > 1 for
-        the `cores` arg.
-
-        Parameters
-        ----------
-        cores: int
-            Number of cores to parallelize filtering. Default=1.
-        log_level: str
-            verbosity of outputs to the logger (mostly used internally).
-        """
-        if cores == 1:
-            self._run(log_level)
-            return
-
-        # run with an existing ipyclient or start and wrap a new one.
-        if ipyclient is not None:
-            self._run(log_level=log_level, ipyclient=ipyclient)
+        # if imap was provided, then (1) check the names; (2) apply a
+        # min value to each group from minmap; or (3) raise errors.
         else:
-            with Cluster(cores=cores, logger_name="ipa") as client:
-                self._run(log_level=log_level, ipyclient=client)
+            if minmap is None:
+                raise IPyradError("must provide a minmap when using imap.")
+            if set(minmap) != set(imap):
+                raise IPyradError("imap and minmap keys must match.")
+            self.imap = imap.copy()
+            self.minmap = {}
+            for key in self.imap:
+                self.minmap[key] = minmap[key].copy()
+            logger.debug(f"sample coverage minmap = {self.minmap}")
+
+    # def _set_names_from_imap(self) -> None:
+    #     """Fill names, nsnps, and check input H5 file."""
+    #     self.names = []
+    #     for _, val in self.imap.items():
+    #         if isinstance(val, (list, tuple, np.ndarray)):
+    #             self.names.extend(val)
+    #         elif isinstance(val, str):
+    #             self.names.append(val)
+    #     # report repeated names
+    #     for name in self.names:
+    #         if self.names.count(name) > 1:
+    #             raise ValueError(f"Name {name} is repeated in imap.")
+
+    # def _set_nsnps_and_check_h5_file_format(self) -> None:
+    #     """Check input data is proper format, and get nsnps."""
+    #     if self.data.suffix == ".vcf":
+    #         raise TypeError("input should be hdf5, see the vcf_to_hdf5 tool.")
+    #     # this will raise an error msg if using an outdated version
+    #     with SnpsDatabase(self.data, 'r') as io5:
+    #         self.nsnps = int(io5.attrs['nsnps'])
+
+    # def _set_names_sidxs_and_dbnames(self) -> None:
+    #     """Check names in h5 file match those in imap dict. Also sets names."""
+    #     # this will raise an error msg if using an outdated version
+    #     with SnpsDatabase(self.data, 'r') as io5:
+
+    #         # get all names in database as List[str]
+    #         self.dbnames = list(io5.attrs["names"])
+
+    #         # raise error if any imap sample names not in database names
+    #         badnames = set(self.names).difference(self.dbnames)
+    #         if badnames:
+    #             raise ValueError(
+    #                 f"Samples [{badnames}] are not in data file: {self.data}")
+
+    #         # if no imap names then use db names, else subset to imap
+    #         # names but order into db names order
+    #         if not self.names:
+    #             self.names = self.dbnames
+    #         else:
+    #             self.names = [i for i in self.dbnames if i in self.names]
+
+    #         # update sidxs to mask rows not in selected samples
+    #         sidxs = sorted([self.dbnames.index(i) for i in self.names])
+    #         self.sidxs = np.array(sidxs)
+
 
     def _run(self, log_level: str="INFO", ipyclient=None):
         """Parse genotype calls from HDF5 snps file.
@@ -291,7 +304,7 @@ class SNPsExtracter:
         This could be parallelized. It only reads from h5.
         """
         chunkslice = slice(start, start + CHUNKSIZE)
-        with SnpsDatabase(self.data, 'r') as io5:
+        with h5py.File(self.data, 'r') as io5:
 
             # snps is used to filter multi-allel and indel containing.
             snps = io5["snps"]
@@ -451,7 +464,7 @@ class SNPsExtracter:
         return_sites: bool=False,
         # invariant_loci: Optional[int]=None,
         log_level: str="INFO",
-        ) -> np.ndarray:
+    ) -> np.ndarray:
         """Return an array of snps by re-sampling loci w/ replacement.
 
         Calls jitted functions to subsample loci/linkage-blocks with
@@ -509,7 +522,7 @@ class SNPsExtracter:
         subsample:bool=False,
         random_seed: Optional[int]=None,
         log_level="INFO",
-        ):
+    ):
         """Return dataframe with genos in treemix format.
 
         A   B   C   D
@@ -559,7 +572,7 @@ class SNPsExtracter:
         random_seed=None,
         log_level="INFO",
         # imap: Optional[Dict]=None
-        ):
+    ):
         """Return a dataframe with genotype frequencies as in construct format.
 
         The population names will the names in the .imap dictionary

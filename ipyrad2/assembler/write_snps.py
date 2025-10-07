@@ -57,6 +57,7 @@ def get_fai_values(reference: Path, key: str) -> np.ndarray:
     return table[key].values
 
 
+# UPDATE THIS: CHATGPT MADE. CHUNKS SHOULD JUST USE TARGET MB. MAYBE 512MB
 def _choose_chunk_snps(
     nsamples: int,
     target_mb: int = 16,

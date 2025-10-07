@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 import numpy as np
 from loguru import logger
-from ipyrad2.utils.parallel import run_pipeline
+from ..utils.parallel2 import run_pipeline
 
 BIN = Path(sys.prefix) / "bin"
 BIN_SAM = str(BIN / "samtools")
@@ -61,25 +61,46 @@ def get_fragment_beds(sname: str, bam_file: Path, min_map_q: int, threads: int, 
     bed_dir = outdir / "beds"
     out_path = bed_dir / f"{sname}.fragments.bed"
     bed_dir.mkdir(parents=True, exist_ok=True)
+    collate_path = outdir / f"{sname}.collate.bam"
 
-    # Pipeline commands
-    # 1) name-group for -bedpe (stdout)
-    cmd1 = [BIN_SAM, "collate", "-u", "-@", str(threads), "-O", "-T", str(outdir / f"{sname}"), str(bam_file)]
+    cmd1 = [
+        BIN_SAM, "collate",
+        "-@", str(threads),
+        "-T", str(outdir / f"{sname}"),
+        "-o", str(collate_path),
+        str(bam_file),
+    ]
+    run_pipeline([cmd1])
 
-    # this filter applies the same read-level (q) filter as in variants.py
-    cmd2 = [BIN_SAM, "view", "-u", "-q", str(min_map_q), "-o", "-"]
-
-    # 2) paired-end to BEDPE
+    cmd2 = [BIN_SAM, "view", "-u", "-q", str(min_map_q), str(collate_path)]
     cmd3 = [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]
-
-    # 3) collapse each pair to its fragment span [min(start), max(end)]
     cmd4 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
-
-    # 4) sort BED
     cmd5 = [BIN_BED, "sort", "-i", "-"]
+    run_pipeline([cmd2, cmd3, cmd4, cmd5], out_path)
+    collate_path.unlink()
 
-    run_pipeline([cmd1, cmd2, cmd3, cmd4, cmd5], out_path)
     return out_path
+
+    # # Pipeline commands
+    # # sort into pairs
+    # cmd1 = [BIN_SAM, "collate", "-u", "-@", str(threads), "-O", "-T", str(outdir / f"{sname}"), str(bam_file)]
+    # logger.debug(" ".join(cmd1))
+    # # apply read-level quality filter; NOTE: same filter is applied in variants.py
+    # cmd2 = [BIN_SAM, "view", "-u", "-q", str(min_map_q), "-"]
+    # logger.debug(" ".join(cmd2))
+    # # measure beds including PE insert region. Note, if filter removed one of
+    # # the pairs this will skip the other and report a warning to stderr, that
+    # # is OK, we want both pairs excluded if one has low quality mapping.
+    # cmd3 = [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]
+
+    # # 3) collapse each pair to its fragment span [min(start), max(end)]
+    # cmd4 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
+
+    # # 4) sort BED
+    # cmd5 = [BIN_BED, "sort", "-i", "-"]
+
+    # run_pipeline([cmd1, cmd2, cmd3, cmd4, cmd5], out_path)
+    # return out_path
 
 
 def get_fragment_coverage_beds(sname: str, reference: Path, outdir: Path) -> Path:
@@ -226,7 +247,8 @@ def get_sample_coverage_stats_in_loci_bed(bam_file: Path, outdir: Path) -> Dict[
 
 if __name__ == "__main__":
 
-    tmpdir = Path("/home/deren/Documents/ipyrad-tests/Ama-out/tmpdir/")
-    bam = Path("/home/deren/Documents/ipyrad-tests/Ama-map/SLH_AL_3065.marked.sorted.bam")
-
-    print(get_sample_coverage_stats_in_loci_bed(bam, tmpdir))
+    # tmpdir = Path("/home/deren/Documents/ipyrad-tests/Ama-out/tmpdir/")
+    # bam = Path("/home/deren/Documents/ipyrad-tests/Ama-map/SLH_AL_3065.marked.sorted.bam")
+    # print(get_sample_coverage_stats_in_loci_bed(bam, tmpdir))
+    a = "TTGAAGACTGCTCTGTGCACAACCATCTAATAGTCGATTGTCCGACGTCGAGTGTGCAGTTTCTCGAGAAACAGCTCGTATCACGGGCCGGTTTCTTAGCATGCAATATGTGGGCATAATTCTCCTACCTTCTTCCGTTAACTGGTAACGTGACACAACAGGTGGCGAGTGTTTACCATCCAT"
+    print(len(a))

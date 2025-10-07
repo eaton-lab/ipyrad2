@@ -8,8 +8,6 @@ import shutil
 from pathlib import Path
 from loguru import logger
 import pandas as pd
-from ..utils.parallel import run_with_pool
-from ..utils.exceptions import IPyradError
 from .beds import (
     get_name_from_bam,
     get_reference_sort_order,
@@ -38,6 +36,8 @@ from .loci import (
 )
 from .write_seqs import write_seqs_hdf5
 from .write_snps import write_snps_hdf5
+from ..utils.parallel3 import run_with_pool
+from ..utils.exceptions import IPyradError
 
 
 def run_assembler(
@@ -97,7 +97,11 @@ def run_assembler(
     bam_dict = {}
     if rad_bams:
         for bam_file in rad_bams:
-            bam_dict[get_name_from_bam(bam_file)] = bam_file.expanduser().absolute()
+            sname = get_name_from_bam(bam_file)
+            # currently do not support, but should we?
+            if sname in bam_dict:
+                raise IPyradError(f"Multiple input files of sample name {sname}")
+            bam_dict[sname] = bam_file.expanduser().absolute()
     if not bam_dict:
         raise IPyradError("No RAD bam files found. These are required.")
     logger.info(f"loaded {len(bam_dict)} RAD samples")
@@ -106,7 +110,11 @@ def run_assembler(
     wgs_dict = {}
     if wgs_bams:
         for bam_file in wgs_bams:
-            wgs_dict[get_name_from_bam(bam_file)] = bam_file.expanduser().absolute()
+            sname = get_name_from_bam(bam_file)
+            # currently do not support, but should we?
+            if sname in wgs_dict:
+                raise IPyradError(f"Multiple input files of sample name {sname}")
+            wgs_dict[sname] = bam_file.expanduser().absolute()
     if wgs_dict:
         logger.info(f"loaded {len(wgs_dict)} WGS samples")
 
