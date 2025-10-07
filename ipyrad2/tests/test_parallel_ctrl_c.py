@@ -8,7 +8,7 @@ import time
 import unittest
 import multiprocessing as mp
 
-from ipyrad2.utils.parallel3 import run_with_pool, run_with_pool_iter, run_pipeline
+from ipyrad2.utils.parallel import run_with_pool, run_with_pool_iter, run_pipeline
 
 
 # ---------------------------- helpers for tests ---------------------------- #

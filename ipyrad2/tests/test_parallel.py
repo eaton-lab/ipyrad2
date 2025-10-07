@@ -1,7 +1,7 @@
 
 
 from pathlib import Path
-from ipyrad2.utils.parallel3 import run_with_pool, run_pipeline
+from ipyrad2.utils.parallel import run_with_pool, run_pipeline
 from loguru import logger
 
 

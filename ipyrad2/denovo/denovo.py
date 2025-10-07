@@ -13,7 +13,7 @@ PAIRED END
 from typing import List
 import sys
 import shutil
-import tempfile
+# import tempfile
 from pathlib import Path
 from loguru import logger
 from .cluster import build_sample_summary, concat_summaries

@@ -21,24 +21,6 @@ BIN = Path(sys.prefix) / "bin"
 BIN_BWA = str(BIN / "bwa-mem2")
 BIN_SAMTOOLS = str(BIN / "samtools")  # indexing
 
-LOG_CMD1 = ("bwa-mem2 mem REF R1 R2 "
-           "| samtools view -bu -F 0x900 -q 20 "
-           "| samtools sort -o - ")
-LOG_CMD2 = ("bwa-mem2 mem REF R1 R2 "
-           "| samtools view -bu -F 0x900 -q 20 "
-           "| samtools sort -n -o - "
-           "| samtools fixmate -m - - "
-           "| samtools sort -o - "
-           "| samtools markdup - - "
-           "| samtools view -b -f 0x2 -q 20")
-LOG_CMD3 = ("bwa-mem2 mem REF R1 R2 "
-           "| samtools view -bu -F 0x900 -q 20 "
-           "| samtools sort -n -o - "
-           "| samtools fixmate -m - - "
-           "| samtools sort -o - "
-           "| samtools markdup --barcode-rgx 'UMI_([ACGTN]+)' - - "
-           "| samtools view -b -f 0x2 -q 20")
-
 
 def map_filter_sort_mark_pairs(sname: str, fastqs: Tuple[Path, Path], reference: Path, outdir: Path, mark_dups_by_umis: bool, threads: int) -> Path:
     """Map reads to the reference to get a sorted bam.

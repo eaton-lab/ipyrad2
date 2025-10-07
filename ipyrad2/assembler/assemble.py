@@ -36,7 +36,7 @@ from .loci import (
 )
 from .write_seqs import write_seqs_hdf5
 from .write_snps import write_snps_hdf5
-from ..utils.parallel3 import run_with_pool
+from ..utils.parallel import run_with_pool
 from ..utils.exceptions import IPyradError
 
 

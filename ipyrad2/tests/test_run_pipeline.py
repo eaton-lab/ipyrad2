@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from ipyrad2.utils.parallel3 import run_pipeline
+from ipyrad2.utils.parallel import run_pipeline
 
 
 def _py(*lines: str) -> list[str]:

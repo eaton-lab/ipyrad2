@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 import numpy as np
 from loguru import logger
-from ..utils.parallel2 import run_pipeline
+from ..utils.parallel import run_pipeline
 
 BIN = Path(sys.prefix) / "bin"
 BIN_SAM = str(BIN / "samtools")
