@@ -73,15 +73,19 @@ def get_name_to_fastq_dict(
     fastq_dict = get_pairs_or_single_by_trim(paths_list, delim, delim_index)
 
     # report to logger
-    logger.info("names parsed from file paths")
+    total = len(fastq_dict)
+    fmax = min(10, total)
+    logger.info(f"showing first {fmax}/{total} names parsed from file paths")
     max_len = max(len(i) for i in fastq_dict)
-    for name in sorted(fastq_dict):
+    for fidx, name in enumerate(sorted(fastq_dict)):
         paths = fastq_dict[name]
         key_padded = name + " " * (max_len - len(name))
         if paths[1]:
-            logger.info(f"{key_padded} <- {(paths[0].name, paths[1].name)}")
+            if fidx < fmax:
+                logger.info(f"{key_padded} <- {(paths[0].name, paths[1].name)}")
         else:
-            logger.info(f"{key_padded} <- {paths[0].name}")
+            if fidx < fmax:
+                logger.info(f"{key_padded} <- {paths[0].name}")
     return fastq_dict
 
 

@@ -66,6 +66,9 @@ BIN_BCF = str(BIN / "bcftools")
 # ==========================================================================
 
 
+
+
+
 def get_locus_and_snp_stats_in_loci_bed(outdir: Path, threads: int = 4):
     """Return dict with stats"""
     # file paths
@@ -140,7 +143,7 @@ def get_chunked_loci_beds(outdir: Path, nchunks: int) -> List[Path]:
     return paths
 
 
-def get_group_called_variants_in_vcf_chunks(outdir: Path, reference: Path, bam_files: List[Path], locus_chunk: Path, min_map_q: int, min_base_q: int, threads: int):
+def get_group_called_variants_in_vcf_chunks(outdir: Path, reference: Path, bam_files: List[Path], locus_chunk: Path, min_base_q: int, threads: int):
     """Make variant calls for all samples using -G (groups).
 
     >>> $ bcftools mpileup \
@@ -163,12 +166,12 @@ def get_group_called_variants_in_vcf_chunks(outdir: Path, reference: Path, bam_f
     # delimitation steps.
     cmd1 = [
         BIN_BCF, "mpileup",
-        "-f", str(reference),
-        "-q", str(min_map_q),     # 10-20 is good for RAD-seq
+        "-f", str(reference),     # reference genome fa
+        # "-q", str(min_map_q),   # if we apply -q here we need to apply same in beds.py
         "-Q", str(min_base_q),    # default in mpileup is 13, but many use 20
-        "-d", str(10_000),
-        "-a", "FMT/DP,FMT/AD",
-        "-R", str(locus_chunk),
+        "-d", str(10_000),        # TODO: expose as param
+        "-a", "FMT/DP,FMT/AD",    #
+        "-R", str(locus_chunk),   # restrict calls to this chunk bed
         "--threads", str(threads_mpileup),
         "-Ou",
     ] + [str(i) for i in bam_files]
@@ -178,7 +181,6 @@ def get_group_called_variants_in_vcf_chunks(outdir: Path, reference: Path, bam_f
         BIN_BCF, "call",
         "-m",
         "-a", "GQ",
-        # "-W",  # index after concatenating
         "-G", "-",
         # "-G", str(groups_file),
         "-Ou",
@@ -190,7 +192,7 @@ def get_group_called_variants_in_vcf_chunks(outdir: Path, reference: Path, bam_f
         "--threads", str(threads_view),
         "-Oz", "-o", str(out_vcf_gz),
     ]
-    logger.debug(f"{' '.join(cmd1)} | {' '.join(cmd2)} | {' '.join(cmd3)}")
+    # logger.debug(f"{' '.join(cmd1)} | {' '.join(cmd2)} | {' '.join(cmd3)}")
     run_pipeline([cmd1, cmd2, cmd3])
     return out_vcf_gz
 
@@ -222,8 +224,11 @@ def get_concat_chunk_vcfs(outdir: Path, threads: int):
     return out_vcf_gz
 
 
-def get_filtered_vcf(outdir: Path, min_read_depth: int, min_gq: int, min_qual: int, threads: int) -> Path:
+def get_filtered_vcf(outdir: Path, min_read_depth: int, min_geno_q: int, min_site_q: int, threads: int) -> Path:
     """Apply filtering to raw genotype calls by depth and quality
+
+    QUAL answers “Is there a variant here?”;
+    GQ answers “How confident is this sample’s genotype?”
 
     $ bcftools +setGT VCF -- -t q -n . -i "FMT/DP<X | FMT/GQ<Y"
     $ bcftools +setGT VCF -- -t q -n . -i "QUAL<Z"
@@ -237,9 +242,9 @@ def get_filtered_vcf(outdir: Path, min_read_depth: int, min_gq: int, min_qual: i
     out_vcf_tmp = out_vcf_gz.with_suffix(out_vcf_gz.suffix + ".tmp")
 
     dp_min: int = min_read_depth                   # DP<X (pser sample DP)
-    gq_min: int = min_gq                           # GQ<X (per-sample GQ)
+    gq_min: int = min_geno_q                       # GQ<X (per-sample GQ)
     # indel_snp_mask: int = 0                      # filter SNPs within N bases on an indel
-    qual_min: int = min_qual                       # QUAL (across samples)
+    qual_min: int = min_site_q                     # QUAL (across samples)
     threads = max(1, int(threads / 2))      # assign threads among piped jobs
 
     # filter per-sample genotypes by min depth and geno quality

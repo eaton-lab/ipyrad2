@@ -12,11 +12,12 @@ Example
 python trim_fastqs.py FQs ...
 """
 
-from typing import Tuple, List
+from typing import Tuple, List, Dict, Any
 import sys
 import json
 from pathlib import Path
 from loguru import logger
+import pandas as pd
 from ..utils.names import get_name_to_fastq_dict
 from ..utils.kmers import get_overhang_from_kmers
 from ..utils.exceptions import IPyradError
@@ -60,8 +61,8 @@ def trim_sample_with_fastp(
     disable_quality_filtering: bool,
     umi_tag_in_i5: bool,
     threads: int,
-):
-    """Run FASTP and return: {stats} (r1, r2)
+) -> Dict[str, Tuple[Tuple[Path, Path], Dict[str, Any]]]:
+    """Run FASTP and return: {sname: ((r1, r2), stats)}
     """
     out1 = outdir / f"{sname}.R1.trimmed.fastq.gz"
     out2 = outdir / f"{sname}.R2.trimmed.fastq.gz"
@@ -84,6 +85,8 @@ def trim_sample_with_fastp(
             "-w", str(threads),   # 2 workers + 2 i/o threads.
             "--trim_front1", str(len(restriction_overhangs[0])),
             "--trim_front2", str(len(restriction_overhangs[1])),
+            "--overlap_len_require", "20",    # default is 30
+            "--overlap_diff_limit", "5",
         ]
         if umi_tag_in_i5:
             cmd.extend(["-U", "--umi_loc=index2", "--umi_prefix=UMI"])
@@ -98,7 +101,9 @@ def trim_sample_with_fastp(
 
     # common arguments
     cmd.extend([
-        "-r",                                                    # move sliding window front to tail
+        "--cut_front",
+        "--cut_tail",
+        # "-r",                                                    # move sliding window front to tail
         "-M", str(min_quality + phred_qscore_offset - 33),       # mean quality in -r window
         "-q", str(min_quality + phred_qscore_offset - 33),       # minqual
         "-l", str(min_trimmed_length),
@@ -122,11 +127,70 @@ def trim_sample_with_fastp(
     logger.debug(f"CMD: {' '.join(cmd)}")
     run_pipeline([cmd])
     logger.info(f"finished trimming {sname}")
+    return None
 
-    # parse JSON stats
-    with open(stats_json, 'r', encoding="utf-8") as indata:
-        jdata = json.loads(indata.read())
-    return jdata, (out1, out2)
+
+def write_stats_summary(snames: List[str], outdir: Path):
+    """Collect fastp stats from all samples in outdir and write summary.
+
+    If user runs multiple ipyrad trim multiple times with the same
+    out directory this will append an int to stats name each time to
+    write a new stats file.
+    """
+    # get a new stats outfile path in outdir
+    idx = 0
+    while 1:
+        outfile = outdir / f"trim_stats_{idx}.txt"
+        if outfile.exists():
+            idx += 1
+
+    # load all stats dicts from jsons
+    jdata = {}
+    snames = sorted(snames)
+    for sname in snames:
+        stats_file = outdir / f"{sname}.stats.json"
+        if stats_file.exists():
+            with open(stats_file, 'r', encoding="utf-8") as indata:
+                jdata[sname] = json.loads(indata.read())
+
+    # init the dataframe
+    df = pd.DataFrame(index=snames, columns=[
+        "total_reads_before", "total_bases_before", "q20_rate_before", "q30_rate_before",
+        "read1_mean_length_before", "read2_mean_length_before",
+        "total_reads_after", "total_bases_after", "q20_rate_after", "q30_rate_after",
+        "read1_mean_length_after", "read2_mean_length_after",
+        "reads_filtered_by_low_quality",
+        "reads_filtered_by_too_many_N",
+        "reads_filtered_by_low_complexity",
+        "reads_filtered_by_too_short",
+        "adapter_trimmed_reads",
+        "adapter_trimmed_bases",
+    ])
+
+    # fill the dataframe
+    for sname in snames:
+        j = jdata[sname]
+        df.loc[sname, "total_reads_before"] = j["summary"]["before_filtering"]["total_reads"]
+        df.loc[sname, "total_bases_before"] = j["summary"]["before_filtering"]["total_bases"]
+        df.loc[sname, "q20_rate_before"] = j["summary"]["before_filtering"]["q20_rate"]
+        df.loc[sname, "q30_rate_before"] = j["summary"]["before_filtering"]["q30_rate"]
+        df.loc[sname, "read1_mean_length_before"] = j["summary"]["before_filtering"]["read1_mean_length"]
+        df.loc[sname, "read2_mean_length_before"] = j["summary"]["before_filtering"]["read2_mean_length"]
+        df.loc[sname, "total_reads_after"] = j["summary"]["after_filtering"]["total_reads"]
+        df.loc[sname, "total_bases_after"] = j["summary"]["after_filtering"]["total_bases"]
+        df.loc[sname, "q20_rate_after"] = j["summary"]["after_filtering"]["q20_rate"]
+        df.loc[sname, "q30_rate_after"] = j["summary"]["after_filtering"]["q30_rate"]
+        df.loc[sname, "read1_mean_length_after"] = j["summary"]["after_filtering"]["read1_mean_length"]
+        df.loc[sname, "read2_mean_length_after"] = j["summary"]["after_filtering"]["read2_mean_length"]
+        df.loc[sname, "reads_filtered_by_low_quality"] = j["filtering_result"]["low_quality_reads"]
+        df.loc[sname, "reads_filtered_by_too_many_N"] = j["filtering_result"]["too_many_N_reads"]
+        df.loc[sname, "reads_filtered_by_low_complexity"] = j["filtering_result"]["low_complexity_reads"]
+        df.loc[sname, "reads_filtered_by_too_short"] = j["filtering_result"]["too_short_reads"]
+        df.loc[sname, "adapter_trimmed_reads"] = j["adapter_cutting"]["adapter_trimmed_reads"]
+        df.loc[sname, "adapter_trimmed_bases"] = j["adapter_cutting"]["adapter_trimmed_bases"]
+
+    # write human readable whitespace delimited.
+    jdata.to_string(outfile, float_format=lambda x: f"{x:.6f}")
 
 
 def run_trimmer(
@@ -202,8 +266,8 @@ def run_trimmer(
             threads=threads,  # recommended >=3 since 2 are used for i/o
         )
         jobs[sname] = (trim_sample_with_fastp, kwargs)
-    _ = run_with_pool(jobs, log_level, workers)
-
+    results = run_with_pool(jobs, log_level, workers)
+    write_stats_summary(sorted(results), outdir)
 
 
 if __name__ == "__main__":

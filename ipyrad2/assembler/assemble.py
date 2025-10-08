@@ -46,7 +46,8 @@ def run_assembler(
     reference: Path,
     outdir: Path,
     name: str,
-    min_map_q: int,
+    min_site_q: int,
+    min_geno_q: int,
     min_base_q: int,
     min_sample_depth: int,                # sample must have depth cov or site is masked.
     min_locus_sample_coverage: int,       # locus must have data for N samples (used in locus delim)
@@ -134,21 +135,21 @@ def run_assembler(
     logger.info("delimiting sample coverage beds")
     jobs = {}
     for sname, bam_file in bam_dict.items():
-        kwargs = dict(sname=sname, bam_file=bam_file, min_map_q=min_map_q, threads=threads, outdir=tmpdir)
+        kwargs = dict(sname=sname, bam_file=bam_file, threads=threads, outdir=tmpdir)
         jobs[sname] = (get_fragment_beds, kwargs)
-    results = run_with_pool(jobs, log_level, cores)
+    run_with_pool(jobs, log_level, cores)
 
     jobs = {}
     for sname, bam_file in bam_dict.items():
         kwargs = dict(sname=sname, reference=reference, outdir=tmpdir)
         jobs[sname] = (get_fragment_coverage_beds, kwargs)
-    results = run_with_pool(jobs, log_level, cores)              # single-threaded
+    run_with_pool(jobs, log_level, cores)              # single-threaded
 
     jobs = {}
     for sname, bam_file in bam_dict.items():
         kwargs = dict(sname=sname, outdir=tmpdir)
         jobs[sname] = (get_fragment_merged_coverage_beds, kwargs)
-    results = run_with_pool(jobs, log_level, cores)              # single-threaded
+    run_with_pool(jobs, log_level, cores)              # single-threaded
 
     logger.info("delimiting shared coverage beds (loci)")
     get_across_sample_loci_bed(
@@ -178,9 +179,9 @@ def run_assembler(
     jobs = {}
     for chunk in locus_chunks:
         kwargs = dict(
-            outdir=tmpdir, reference=reference,
+            outdir=tmpdir,
+            reference=reference,
             bam_files=list(all_dict.values()),
-            min_map_q=min_map_q,
             min_base_q=min_base_q,
             locus_chunk=chunk,
             threads=threads,
@@ -190,8 +191,8 @@ def run_assembler(
     get_concat_chunk_vcfs(tmpdir, threads)
 
     logger.info("filtering variants")
-    logger.warning("TODO: other quality filters here?")
-    get_filtered_vcf(tmpdir, min_sample_depth, min_map_q, min_base_q, cores)
+    # TODO: condier other quality filters here?
+    get_filtered_vcf(tmpdir, min_sample_depth, min_geno_q, min_site_q, cores)
 
     logger.info("resolving indels and snps")
     get_vcf_with_indels_resolved(tmpdir, reference, cores)

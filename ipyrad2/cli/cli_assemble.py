@@ -53,13 +53,21 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="Directory for results and stat files. Created if it doesn't exist. [default=./OUT]",
     )
     tool.add_argument(
-        "-q", "--min-map_q", metavar="int", type=int, default=15,
-        help="Min read alignment score (mapQ). Applied to coverage and variant calling [default=15]",
+        "-qs", "--min-site-q", metavar="int", type=int, default=20,
+        help="Min variant site quality (QUAL: 'confidence a site is variant'). [default=20]."
     )
     tool.add_argument(
-        "-Q", "--min-base_q", metavar="int", type=int, default=13,
-        help="Min base quality score (baseQ). Applied in variant calling [default=13]",
+        "-qg", "--min-geno-q", metavar="int", type=int, default=13,
+        help="Min genotype quality (GQ: 'confidence in a sample's genotype). [default=13]",
     )
+    tool.add_argument(
+        "-qb", "--min-base-q", metavar="int", type=int, default=13,
+        help="Min base quality score (BQ: 'confidence in base call'). [default=13]",
+    )
+    # tool.add_argument(
+    #     "-q", "--min-map-q", metavar="int", type=int, default=10,
+    #     help="Min alignment quality... allow user only to apply this in mapper step.
+    # )
     tool.add_argument(
         "-s", "--min-sample-depth", metavar="int", type=int, default=1,
         help="Min read depth within a sample to make variant calls. [default=1]",

@@ -48,7 +48,7 @@ def get_reference_sort_order(reference: Path, outdir: Path) -> Path:
     return out_path
 
 
-def get_fragment_beds(sname: str, bam_file: Path, min_map_q: int, threads: int, outdir: Path) -> Path:
+def get_fragment_beds(sname: str, bam_file: Path, threads: int, outdir: Path) -> Path:
     """Produce a fragments BED (full inserts) from a coordinate-sorted BAM.
 
     Shell command
@@ -61,46 +61,20 @@ def get_fragment_beds(sname: str, bam_file: Path, min_map_q: int, threads: int, 
     bed_dir = outdir / "beds"
     out_path = bed_dir / f"{sname}.fragments.bed"
     bed_dir.mkdir(parents=True, exist_ok=True)
-    collate_path = outdir / f"{sname}.collate.bam"
 
+    # CHECK that this properly pipes on large files...
     cmd1 = [
         BIN_SAM, "collate",
         "-@", str(threads),
         "-T", str(outdir / f"{sname}"),
-        "-o", str(collate_path),
+        "-O",
         str(bam_file),
     ]
-    run_pipeline([cmd1])
-
-    cmd2 = [BIN_SAM, "view", "-u", "-q", str(min_map_q), str(collate_path)]
-    cmd3 = [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]
-    cmd4 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
-    cmd5 = [BIN_BED, "sort", "-i", "-"]
-    run_pipeline([cmd2, cmd3, cmd4, cmd5], out_path)
-    collate_path.unlink()
-
+    cmd2 = [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]
+    cmd3 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
+    cmd4 = [BIN_BED, "sort", "-i", "-"]
+    run_pipeline([cmd1, cmd2, cmd3, cmd4], out_path)
     return out_path
-
-    # # Pipeline commands
-    # # sort into pairs
-    # cmd1 = [BIN_SAM, "collate", "-u", "-@", str(threads), "-O", "-T", str(outdir / f"{sname}"), str(bam_file)]
-    # logger.debug(" ".join(cmd1))
-    # # apply read-level quality filter; NOTE: same filter is applied in variants.py
-    # cmd2 = [BIN_SAM, "view", "-u", "-q", str(min_map_q), "-"]
-    # logger.debug(" ".join(cmd2))
-    # # measure beds including PE insert region. Note, if filter removed one of
-    # # the pairs this will skip the other and report a warning to stderr, that
-    # # is OK, we want both pairs excluded if one has low quality mapping.
-    # cmd3 = [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]
-
-    # # 3) collapse each pair to its fragment span [min(start), max(end)]
-    # cmd4 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
-
-    # # 4) sort BED
-    # cmd5 = [BIN_BED, "sort", "-i", "-"]
-
-    # run_pipeline([cmd1, cmd2, cmd3, cmd4, cmd5], out_path)
-    # return out_path
 
 
 def get_fragment_coverage_beds(sname: str, reference: Path, outdir: Path) -> Path:
@@ -141,6 +115,7 @@ def get_fragment_merged_coverage_beds(sname: str, outdir: Path):
     # keep all RAD beds above depth=1 and merge
     cmd1 = ["awk", "-v", "MIN=1", r'$4>=MIN', bedgraph]
     cmd2 = [BIN_BED, "merge", "-i", "-"]
+    # -d merge beds within this many sites of each other.
     run_pipeline([cmd1, cmd2], out_path)
     return out_path
 
@@ -173,13 +148,6 @@ def get_across_sample_loci_bed(
             sort_cmd = [BIN_BED, "sort", "-g", ref_info, "-i", str(src)]
             run_pipeline([sort_cmd], dst)
             sorted_paths.append(dst)
-
-            # # write sorted copy to tempdir
-            # with open(dst, "wb") as out, open(log_dir / f"sort_{i}.err", "wb") as err:
-            #     rc = sp.run(sort_cmd, stdout=out, stderr=err).returncode
-            # if rc != 0:
-            #     raise RuntimeError(f"bedtools sort failed on {src} (see {err.name})")
-            # sorted_paths.append(dst)
 
         # cmd1: bedtools multiinter
         cmd1 = [BIN_BED, "multiinter", "-i"] + [str(p) for p in sorted_paths] + ["-names"] + names
@@ -222,12 +190,17 @@ def get_sample_coverage_stats_in_loci_bed(bam_file: Path, outdir: Path) -> Dict[
     stats = {
         "nloci_with_nonzero_mapping": 0,
         "median_depth_per_locus_with_nonzero_mapping": 0,
+        "mean_depth_per_locus_with_nonzero_mapping": 0,
+        "std_depth_per_locus_with_nonzero_mapping": 0,
         "median_depth_per_locus_total": 0,
+        "mean_depth_per_locus_total": 0,
+        "std_depth_per_locus_total": 0,
     }
 
     # parse stdout of cut
     coverages = out.decode().strip().split("\n")
 
+    # no loci has sufficient sample coverage
     if not coverages:
         return stats
 
