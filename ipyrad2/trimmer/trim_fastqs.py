@@ -143,6 +143,8 @@ def write_stats_summary(snames: List[str], outdir: Path):
         outfile = outdir / f"trim_stats_{idx}.txt"
         if outfile.exists():
             idx += 1
+        else:
+            break
 
     # load all stats dicts from jsons
     jdata = {}
@@ -190,7 +192,7 @@ def write_stats_summary(snames: List[str], outdir: Path):
         df.loc[sname, "adapter_trimmed_bases"] = j["adapter_cutting"]["adapter_trimmed_bases"]
 
     # write human readable whitespace delimited.
-    jdata.to_string(outfile, float_format=lambda x: f"{x:.6f}")
+    df.to_string(outfile, float_format=lambda x: f"{x:.6f}")
 
 
 def run_trimmer(

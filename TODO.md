@@ -1,7 +1,6 @@
 
 # TODO
-- assemble: add a max-len arg to assemble. It will help to identify when users accidentally
-  input WGS bams as rad data, and the assembled beds are waaay too big.
+- assemble: increase the hdf5 chunk size in Mb.
 - assemble: replace numba code to be pure numpy and remove numba as a dependency.
 - assemble: write_snps: check and cleanup
 - map: test mapping rates on edges of short loci.
@@ -33,6 +32,9 @@
 - cli_main: log only a subset of the CMD because it looks ugly when too many file paths are expanded by the shell.
 - assemble: should we include insertions and do a MSA on final loci? Optional? Downsides: much slower,
   and unaligns loci with the VCF.
+- assemble: add a max-len arg to assemble. It will help to identify when users accidentally
+  input WGS bams as rad data, and the assembled beds are waaay too big.
+
 
 # ideas explored and abandoned
 
