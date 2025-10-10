@@ -5,22 +5,22 @@ Integrative assembly and analysis of RAD-seq datasets
 ## Usage
 ```bash
 # help message for subcommand options
-ipyrad -h
+ipyrad2-h
 ```
 
 The core command-line arguments:
 ```bash
 # demultiplex reads by barcode/index to sample files
-ipyrad demux -d DATA/*.fastq.gz -b barcodes.tsv -o FASTQs/ -c 10 -t 2
+ipyrad2demux -d DATA/*.fastq.gz -b barcodes.tsv -o FASTQs/ -c 10 -t 2
 
 # quality, adapter, and restriction overhang trimming
-ipyrad trim -d FASTQs/*fastq.gz -o TRIMMED/ -c 10 -t 2
+ipyrad2trim -d FASTQs/*fastq.gz -o TRIMMED/ -c 10 -t 2
 
 # map reads to reference genome to get filtered/sorted/marked bams
-ipyrad map -d TRIMMED/*.fastq.gz -r REF.fa -o BAMs/ -c 10 -t 2
+ipyrad2map -d TRIMMED/*.fastq.gz -r REF.fa -o BAMs/ -c 10 -t 2
 
 # assemble loci and call variants
-ipyrad assemble -b BAMs/*.bam -r REF.fa -o OUT/ -m 4 -d 5 -c 10 -t 2
+ipyrad2assemble -b BAMs/*.bam -r REF.fa -o OUT/ -m 4 -d 5 -c 10 -t 2
 ```
 
 ## Installation
