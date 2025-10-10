@@ -89,24 +89,25 @@ def write_snps_hdf5(
     loci_bed = outdir / f"{name}.bed"
 
     # sorted names
+    # TODO: add reference?
+    # snames = ["reference"] + sorted(snames)
     snames = sorted(snames)
     nsamples = len(snames)
 
     # pick chunk size along SNP axis (tuned for read-many)
-    chunk_snps = _choose_chunk_snps(nsamples, target_mb=16, typical_window=100_000)
+    chunk_snps = _choose_chunk_snps(nsamples, target_mb=256, typical_window=100_000)
 
     # HDF5 file/open options
     kwargs = dict(libver="latest", rdcc_nbytes=512*1024*1024, rdcc_nslots=2_000_003)
     with h5py.File(database, "a", **kwargs) as io5:
-        # ---- metadata ----
-        scaff_names = [str(i) for i in get_fai_values(reference, "scaffold")]
-        scaff_lens  = [int(i) for i in get_fai_values(reference, "length")]
-
-        io5.attrs["version"] = 2.0
-        io5.attrs["names"] = snames
-        io5.attrs["reference"] = str(reference)
-        io5.attrs["scaffold_names"] = scaff_names
-        io5.attrs["scaffold_lengths"] = scaff_lens
+        # ---- metadata already stored by write_seq.py ----
+        # scaff_names = [str(i) for i in get_fai_values(reference, "scaffold")]
+        # scaff_lens  = [int(i) for i in get_fai_values(reference, "length")]
+        # io5.attrs["version"] = 2.0
+        # io5.attrs["names"] = snames
+        # io5.attrs["reference"] = str(reference)
+        # io5.attrs["scaffold_names"] = scaff_names
+        # io5.attrs["scaffold_lengths"] = scaff_lens
 
         # ---- datasets (extendable along SNP axis) ----
         # SNP map: (n_snps, 5)
@@ -232,10 +233,10 @@ def load_bed_index_nonoverlap(
 
 
 def _parse_gt_to_uint8(gt_field: str) -> np.ndarray:
-    """
-    Parse a VCF GT subfield into two uint8 allele indexes.
-    - REF=0, first ALT=1, etc.
-    - Missing allele -> 255
+    """Parse a VCF GT subfield into two uint8 allele indexes.
+
+      - REF=0, first ALT=1, etc.
+      - Missing allele -> 255
     """
     out = np.array([255, 255], dtype=np.uint8)
     if not gt_field or gt_field == ".":
@@ -263,8 +264,8 @@ def _parse_gt_to_uint8(gt_field: str) -> np.ndarray:
 
 
 def _call_char_ord(alleles: List[str], a0: int, a1: int) -> np.uint8:
-    """
-    Convert two allele indexes to a single-byte ASCII code:
+    """Convert two allele indexes to a single-byte ASCII code:
+
       - 'N' if missing/invalid or not single-base A/C/G/T
       - IUPAC code for heterozygous SNPs
       - base letter for homozygous SNPs

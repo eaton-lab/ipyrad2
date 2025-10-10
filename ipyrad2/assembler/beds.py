@@ -49,7 +49,7 @@ def get_reference_sort_order(reference: Path, outdir: Path) -> Path:
 
 
 def get_fragment_beds(sname: str, bam_file: Path, threads: int, outdir: Path) -> Path:
-    """Produce a fragments BED (full inserts) from a coordinate-sorted BAM.
+    r"""Produce a fragments BED (full inserts) from a coordinate-sorted BAM.
 
     Shell command
     -------------

@@ -64,9 +64,13 @@ def choose_chunk_cols(
     """
     # size-driven cols
     by_size = (target_mb * 1024 * 1024) // (nsamples * itemsize)
+    return by_size
+    logger.warning(by_size)
     cols = int(max(min_cols, min(by_size, max_cols)))
+    logger.warning(cols)
     # bias toward typical window (round to nearest 4096)
     cols = max(4096, (int((cols + typical_window) / 2) // 4096) * 4096)
+    logger.warning(cols)
     return cols
 
 
@@ -88,18 +92,17 @@ def write_seqs_hdf5(
     database = outdir / "tmpdir" / f"{name}.database.fa"
     seqs_database = outdir / f"{name}.hdf5"
 
-    # get global sorted names
+    # get global sorted names with reference sequence on top
     snames = sorted(snames)
-    if not exclude_reference:
-        snames = ["assembly_reference_sequence"] + snames
+    snames = ["assembly_reference_sequence"] + snames
     nsamples = len(snames)
 
     # get optimal chunk size
     chunk_size = choose_chunk_cols(
         nsamples,
         np.dtype(np.uint8).itemsize,
-        target_mb=16,
-        typical_window=100_000,
+        target_mb=256,
+        # typical_window=100_000,
     )
 
     # get the data generator
