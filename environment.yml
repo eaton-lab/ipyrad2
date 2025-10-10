@@ -16,4 +16,5 @@ dependencies:
   - fastp
   - bwa-mem2
   - vsearch
+  - mafft
   # - toytree >=3.0.1
