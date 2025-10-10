@@ -189,6 +189,7 @@ def command_line():
             fastqs=args.fastqs,
             reference=args.reference,
             outdir=args.out,
+            imap=args.imap,
             min_map_q=args.min_map_q,
             mark_dups_by_coords=args.mark_dups_by_coords,
             mark_dups_by_umis=args.mark_dups_by_umis,

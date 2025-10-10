@@ -7,11 +7,13 @@ Example
 map --fastqs DATA --ref REF -out MAP
 """
 
-from typing import Tuple
+from typing import Tuple, Dict
 import os
 import sys
+from collections import defaultdict
 from pathlib import Path
 from loguru import logger
+import pandas as pd
 from ..utils.exceptions import IPyradError
 from ..utils.names import get_name_to_fastq_dict
 from ..utils.parallel import run_pipeline, run_with_pool
@@ -63,7 +65,7 @@ def map_filter_sort_mark_pairs(sname: str, fastqs: Tuple[Path, Path], reference:
         BIN_BWA, "mem",
         # "-Y",                   # mark supplementary with soft-clip. We exclude supplementals anyways.
         "-T", "20",               # minimum alignmnet score to output (default=30). This is different from MAPQ in samtools.
-        "-R", f"@RG\\tID:{sname}\\tSM:{sname}\\tPL:ILLUMINA",  # store sample name; group can be overriden with -G.
+        "-R", f"@RG\\tID:{sname}\\tSM:{sname}",  # store sample name.
         "-K", "50000000",         # stable nbases chunk size. Improves repeatability.
         "-v", "1",                # less verbose.
         "-t", str(bwa_threads),
@@ -233,6 +235,47 @@ def map_filter_sort_pairs(sname: str, fastqs: Tuple[Path, Path], reference: Path
     return out_bam
 
 
+def concat_tech_reps_into_tmpdir(imap: Path, tmpdir: Path, fastq_dict: Dict[str, Tuple[Path, Path]]) -> Dict[str, Path]:
+    """Return fastq_dict pointing to updated concat paths in tmpdir"""
+    # parse the population file
+    df = pd.read_csv(imap, header=None, sep=r"\s+")
+
+    # fill pdict and warn if names don't match any samples.
+    snames = set(fastq_dict)
+    pop2tups = defaultdict(list)
+    pop2snames = defaultdict(list)
+    for idx in df.index:
+        sname, pname, *_ = df.loc[idx]
+        if sname in snames:
+            pop2tups[pname].append(fastq_dict.pop(sname))
+            pop2snames[pname].append(sname)
+        else:
+            logger.warning(f"sample name '{sname}' from imap file was not found in data. Skipping.")
+
+    # return original dict if nothing to merge/rename
+    if not pop2snames:
+        return fastq_dict
+
+    # report to logger
+    logger.info(f"merging/renaming samples according to imap file: {imap}")
+    maxlen = max(len(i) for i in pop2snames)
+    for pname, tups in pop2tups.items():
+        snames = pop2snames[pname]
+        logger.info(f"{pname}{' ' * (maxlen - len(pname))} <- {' + '.join(snames)}")
+        out1 = tmpdir / f"{pname}.tmp.R1.fastq.gz"
+        cmd = ["cat"] + [str(i[0]) for i in tups]
+        run_pipeline([cmd], out1)
+
+        if tups[0][1] is not None:
+            out2 = tmpdir / f"{pname}.tmp.R2.fastq.gz"
+            cmd = ["cat"] + [str(i[1]) for i in tups]
+            run_pipeline([cmd], out2)
+            fastq_dict[pname] = (out1, out2)
+        else:
+            fastq_dict[pname] = (out1, None)
+    return fastq_dict
+
+
 def count_mapped_reads(bam_file: Path, threads: int) -> int:
     """Return the number of mapped reads in the filtered/sorted bam.
 
@@ -282,6 +325,7 @@ def run_mapper(
     fastqs: Tuple[Path, Path],
     outdir: Path,
     reference: Path,
+    imap: Path,
     min_map_q: int,
     cores: int,
     threads: int,
@@ -299,7 +343,8 @@ def run_mapper(
     # check reference and outdir paths
     reference = reference.expanduser().absolute()
     outdir = outdir.expanduser().absolute()
-    outdir.mkdir(exist_ok=True)
+    tmpdir = outdir / "tmpdir"
+    tmpdir.mkdir(exist_ok=True, parents=True)
 
     # parse dict of {name: (r1, r2)}
     fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx)
@@ -339,6 +384,10 @@ def run_mapper(
     # index the reference
     index_ref_with_bwa(reference)
 
+    # if tech-reps present concat files into tmpdir and update fastq_dict
+    if imap is not None:
+        fastq_dict = concat_tech_reps_into_tmpdir(imap, tmpdir, fastq_dict)
+
     # run map, filter, sort
     logger.info(f"mapping and filtering {len(fastq_dict)} inputs to bams in {outdir}")
     logger.info(f"running up to {workers} parallel jobs each using up to {threads} threads")
@@ -360,7 +409,7 @@ def run_mapper(
                 jobs[sname] = (map_filter_sort_pairs, kwargs)
         else:
             raise NotImplementedError("TODO: SE data.")
-    # run jobs in parallel
+    # run mapping jobs in parallel
     bam_dict = run_with_pool(jobs, log_level, workers)
 
     # get bam file stats and write to a file
@@ -369,26 +418,28 @@ def run_mapper(
         jobs[sname] = (count_mapped_reads, dict(bam_file=bam_file, threads=threads))
     stats = run_with_pool(jobs, log_level, workers)
 
+    # get a new stats outfile path in outdir
+    idx = 0
+    while 1:
+        outstats = outdir / f"ipyrad_trim_stats_{idx}.txt"
+        if outstats.exists():
+            idx += 1
+        else:
+            break
+
     # write stats
-    handle = outdir / "ipyrad_map_stats.txt"
-    with open(handle, 'w') as out:
-        out.write("sample\tmapped_primary\tmapped_duplicates\n")
-        for key in sorted(stats):
-            out.write(f"{key}\t{stats[key]['mapped_primary']}\t{stats[key]['mapped_duplicates']}\n")
-        logger.info(f"mapping stats written to {handle}")
+    df = pd.DataFrame(index=sorted(fastq_dict), columns=["mapped_primary", "mapped_duplicates"])
+    for key in stats:
+        df.loc[key, :] = stats[key]['mapped_primary'], stats[key]['mapped_duplicates']
+    df.to_string(outstats, float_format=lambda x: f"{x:.6f}")
+    logger.info(f"mapping stats written to {outstats}")
+    # with open(outstats, 'w') as out:
+    #     out.write("sample\tmapped_primary\tmapped_duplicates\n")
+    #     for key in sorted(stats):
+    #         out.write(f"{key}\t{stats[key]['mapped_primary']}\t{stats[key]['mapped_duplicates']}\n")
+
 
 
 if __name__ == "__main__":
     pass
-    # PATHS = sorted(Path("/tmp/").glob("test.trimmed.*.gz"))
-    # REF = Path("/home/deren/Documents/tools/ipyrad2/examples/LiuLiu-genome/Pcr.genome.1.0.fasta")
-    # assert REF.exists()
-    # fastq_dict = get_fastq_tuples_dict_from_paths_list(PATHS)
-    # fastqs = fastq_dict["test.trimmed.R"]
-    # map_filter_sort(
-    #     "test",
-    #     fastqs,
-    #     REF,
-    #     "/tmp",
-    #     4,
-    # )
+

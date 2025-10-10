@@ -36,10 +36,10 @@ def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = N
         "-o", "--out", metavar="Path", type=Path, default="./MAPPED",
         help="Directory to write trimmed read files. Will be created if it doesn't exist. [default=MAPPED]",
     )
-    # tool.add_argument(
-    #     "-i", "--imap", metavar="Path", type=Path,
-    #     help="Optional file with sample\tgroup to assign samples to read groups.",
-    # )
+    tool.add_argument(
+        "-i", "--imap", metavar="Path", type=Path,
+        help=r"Imap file with sample\tpop on each line to rename or combine samples to pop name",
+    )
     tool.add_argument(
         "-q", "--min-map-q", metavar="int", type=int, default=1,
         help="Min read alignment score (MAPQ). [default=1]",
