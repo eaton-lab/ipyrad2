@@ -15,4 +15,5 @@ dependencies:
   - bcftools
   - fastp
   - bwa-mem2
+  - vsearch
   # - toytree >=3.0.1
