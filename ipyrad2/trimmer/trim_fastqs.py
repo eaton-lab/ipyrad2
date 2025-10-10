@@ -140,7 +140,7 @@ def write_stats_summary(snames: List[str], outdir: Path):
     # get a new stats outfile path in outdir
     idx = 0
     while 1:
-        outfile = outdir / f"trim_stats_{idx}.txt"
+        outfile = outdir / f"ipyrad_trim_stats_{idx}.txt"
         if outfile.exists():
             idx += 1
         else:
