@@ -210,9 +210,9 @@ def map_filter_sort_pairs(sname: str, fastqs: Tuple[Path, Path], reference: Path
 
     cmd4 = [
         BIN_SAMTOOLS, "view",
+        "-b", "-u",
         "-e", '((flag&4)==0) && ((flag&8)==0) && (rnext=="=" || rnext==rname) && (tlen>=-2000 && tlen<=2000)',
         "--save-counts", str(tmp_stats3),
-        "--write-index",
         "-o", "-",
     ]
 
@@ -222,9 +222,10 @@ def map_filter_sort_pairs(sname: str, fastqs: Tuple[Path, Path], reference: Path
         "-m", "256M",                # per-thread memory
         "-T", str(tmp_prefix),
         "-@", str(sort_threads),
-        "--write_index",
+        "--write-index",
         "-O", "bam",                 # explicity ask for bam format to be safe
         "-o", str(out_bam),
+        "-",
     ]
     cmds = [cmd1, cmd2, cmd3, cmd4, cmd5]
     run_pipeline(cmds)
