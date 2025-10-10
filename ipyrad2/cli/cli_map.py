@@ -41,8 +41,8 @@ def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = N
     #     help="Optional file with sample\tgroup to assign samples to read groups.",
     # )
     tool.add_argument(
-        "-q", "--min-map-q", metavar="int", type=int, default=15,
-        help="Min read alignment score (MAPQ). [default=15]",
+        "-q", "--min-map-q", metavar="int", type=int, default=1,
+        help="Min read alignment score (MAPQ). [default=1]",
     )
     tool.add_argument(
         "-m", "--mark-dups-by-coords", action="store_true",
