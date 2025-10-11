@@ -428,7 +428,7 @@ def run_mapper(
     # get a new stats outfile path in outdir
     idx = 0
     while 1:
-        outstats = outdir / f"ipyrad_trim_stats_{idx}.txt"
+        outstats = outdir / f"ipyrad_map_stats_{idx}.txt"
         if outstats.exists():
             idx += 1
         else:
