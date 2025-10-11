@@ -136,7 +136,7 @@ def run_assembler(
     all_dict = {i: all_dict[i] for i in snames}
 
     # ---------------------------------------------
-    logger.info(f"running up to {workers} parallel jobs each using up to {threads} threads")
+    logger.info(f"using up to {cores} cores (up to {workers} multithreaded jobs using {threads} threads)")
     logger.debug("fetching reference scaffold order")
     get_reference_sort_order(reference, tmpdir)
 
@@ -191,7 +191,9 @@ def run_assembler(
     # ---- VARIANT CALLING ---------------------------------------------
     # ------------------------------------------------------------------
     logger.info("calling variants in locus beds")
-    nchunks = max(10, workers)
+    # Each variant calling worker can effectively use ~3 threads
+    vworkers = int(cores // 3)
+    nchunks = max(10, vworkers)
     locus_chunks = get_chunked_loci_beds(tmpdir, nchunks)
     jobs = {}
     for chunk in locus_chunks:
@@ -201,23 +203,23 @@ def run_assembler(
             bam_files=list(all_dict.values()),
             min_base_q=min_base_q,
             locus_chunk=chunk,
-            threads=threads,
+            threads=3,
         )
         jobs[chunk] = (get_group_called_variants_in_vcf_chunks, kwargs)
-    # variant calling effectively runs on 1-2 threads, but can use a
-    # lot of RAM... do we want a different threading scheme here?
-    run_with_pool(jobs, log_level, max(1, int(cores / 2)))  # only slightly multithreaded jobs.
+    # each job does not use much RAM, so run many at 1-3 threads per job
+    run_with_pool(jobs, log_level, vworkers)      # <=3 threads per job
     get_concat_chunk_vcfs(tmpdir, threads)
 
     logger.info("filtering variants")
     # TODO: consider other quality filters here?
-    get_filtered_vcf(tmpdir, min_sample_depth, min_geno_q, min_site_q, cores)
+    # view can only benefit from ~6 threads
+    get_filtered_vcf(tmpdir, min_sample_depth, min_geno_q, min_site_q, threads)
 
     logger.info("resolving indels and snps")
-    get_vcf_with_indels_resolved(tmpdir, reference, cores)
+    get_vcf_with_indels_resolved(tmpdir, reference, threads)
 
     # optional: maybe wait til after locus filtering...
-    stats = get_locus_and_snp_stats_in_loci_bed(tmpdir, cores)
+    stats = get_locus_and_snp_stats_in_loci_bed(tmpdir, threads)
 
     # ------------------------------------------------------------------
     # ---- CONSENSUS CALLING -------------------------------------------

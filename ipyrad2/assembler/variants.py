@@ -152,9 +152,9 @@ def get_group_called_variants_in_vcf_chunks(tmpdir: Path, reference: Path, bam_f
     out_vcf_gz = tmpdir / "vcfs" / locus_chunk.with_suffix(".vcf.gz").name
 
     # divide threads
-    threads_mpileup = max(1, threads // 2)
-    threads_call = max(1, threads - threads_mpileup - 1)
-    threads_view = 1
+    threads_mpileup = max(1, min(3, threads))
+    # threads_call = max(1, threads - threads_mpileup - 1)
+    # threads_view = 1
 
     # get genotype likelihoods at all sites in Region with decent mapping.
     # Applies the same map_q here for variant calling as used in the bed
@@ -181,12 +181,12 @@ def get_group_called_variants_in_vcf_chunks(tmpdir: Path, reference: Path, bam_f
         # "-G", str(groups_file),
         "--ploidy", "2",          # TODO: expose as option to user?
         "-Ou",
-        "--threads", str(threads_call),
+        "--threads", "1", #str(threads_call),
     ]
     cmd3 = [
         BIN_BCF, "view",
         "-v", "snps,indels",
-        "--threads", str(threads_view),
+        "--threads", "1", #str(threads_view),
         "-Oz", "-o", str(out_vcf_gz),
     ]
     # logger.debug(f"{' '.join(cmd1)} | {' '.join(cmd2)} | {' '.join(cmd3)}")

@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from collections import Counter
 import numpy as np
+import pandas as pd
 from loguru import logger
 from ..utils.seqs import comp
 from ..utils.jit_funcs import snp_count_numba, max_heteros_count_numba
@@ -417,8 +418,7 @@ def write_loci_and_stats_files(
     # stats
     keys = ["min_length", "min_samples", "max_variant_frequency", "max_shared_hetero_frequency"]
     total_filters = {i: 0 for i in keys}
-    total_sample_cov = {i: 0 for i in snames}
-    total_sample_cov[refname] = 0
+    total_sample_cov = {i: 0 for i in [refname] + snames}
     total_locus_cov = Counter()
     total_stats = {
         "variant_sites": 0,
@@ -503,9 +503,8 @@ def write_loci_and_stats_files(
             out.write("".join(loci))
 
     # write locus stats -----------------------------------------------
-    with open(outdir / f"{name}.stats_filters.tsv", "w") as out:
+    with open(outdir / f"{name}.stats_counts.tsv", "w") as out:
         out.write("# Locus stats and filtering (nloci tagged and excluded for each filter; one locus can hit multile filters)\n")
-
         out.write(f"nloci_before_filtering\t{lidx}\n")
         for key in total_filters:
             out.write(f"{key}_filter\t{total_filters[key]}\n")
@@ -514,23 +513,17 @@ def write_loci_and_stats_files(
             out.write(f"{key}\t{total_stats[key]}\n")
 
     # write sample coverage -------------------------------------------
-    with open(outdir / f"{name}.stats_samples.tsv", "w") as out:
-        out.write("# Sample coverage (number of loci containing each sample)\n")
-        out.write("sample\tnloci\n")
-        # write reference coverage (nloci) first
-        if not exclude_reference:
-            out.write(f"assembly_reference_sequence\t{total_sample_cov["assembly_reference_sequence"]}\n")
-        for key in sorted(total_sample_cov):
-            if key != "assembly_reference_sequence":
-                out.write(f"{key}\t{total_sample_cov[key]}\n")
+    sample_cov = pd.DataFrame(index=["nloci"], data={i: total_sample_cov[i] for i in total_sample_cov}).T
+    sample_cov.to_string(outdir / f"{name}.stats_sample_cov.txt")
+    logger.warning(sample_cov)
 
     # write locus coverage stats --------------------------------------
-    with open(outdir / f"{name}.stats_coverage.tsv", "w") as out:
-        out.write("# Locus coverage (histogram of number of loci containing N samples)\n")
-        out.write("nsamples\tnloci\n")
-        for key in range(len(snames) + 1):
-            out.write(f"{key}\t{total_locus_cov[key]}\n")
-    logger.debug(f"wrote loci file to {loci_file}")
+    # TODO: add pre-filtered bed stats here.
+    locus_cov = pd.DataFrame(index=['nloci'], data={i: total_locus_cov[i] for i in range(len(snames) + 1)}).T
+    locus_cov.to_string(outdir / f"{name}.stats_locus_coverage.txt")
+    logger.warning(locus_cov)
+
+    # report stats files to user
     logger.debug(f"wrote stats files to {outdir / f'{name}.stats_*'}")
 
     # write a bed file with beds of loci filtered and sites trimmed to

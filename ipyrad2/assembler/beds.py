@@ -69,7 +69,7 @@ def get_fragment_beds(sname: str, bam_file: Path, threads: int, tmpdir: Path) ->
     coll_dir.mkdir(exist_ok=True)
     cmd1 = [
         BIN_SAM, "collate",
-        "-@", str(threads),
+        "-@", str(min(threads, 4)),             # doesn't benefit from >4
         "-T", str(coll_dir / f"{sname}"),
         "-r", "1000000",
         "-u",
@@ -81,6 +81,7 @@ def get_fragment_beds(sname: str, bam_file: Path, threads: int, tmpdir: Path) ->
     cmd4 = [BIN_BED, "sort", "-i", "-"]
     run_pipeline([cmd1, cmd2, cmd3, cmd4], out_path)
     shutil.rmtree(coll_dir)
+    logger.debug(f"wrote fragment beds for {sname}")
     return out_path
 
 
