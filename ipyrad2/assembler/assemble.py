@@ -136,7 +136,7 @@ def run_assembler(
     all_dict = {i: all_dict[i] for i in snames}
 
     # ---------------------------------------------
-    logger.info(f"using up to {cores} cores (up to {workers} multithreaded jobs using {threads} threads)")
+    logger.info(f"using up to {cores} cores (up to {workers} multi-threaded jobs using {threads} threads)")
     logger.debug("fetching reference scaffold order")
     get_reference_sort_order(reference, tmpdir)
 

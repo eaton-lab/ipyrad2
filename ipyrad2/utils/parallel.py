@@ -1,8 +1,10 @@
 #!/usr/bin/env python
+
+"""
+POSIX-only robust ProcessPool with hard Ctrl-C and subprocess cleanup.
+"""
+
 from __future__ import annotations
-
-# POSIX-only robust ProcessPool with hard Ctrl-C and subprocess cleanup.
-
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple, Callable
 import atexit
 import multiprocessing as mp
@@ -75,110 +77,6 @@ def _init_worker_with_pid(
     signal.signal(signal.SIGTERM, _worker_signal_handler)
     atexit.register(_kill_all_children)
     setup_loguru_worker(log_level)
-
-
-# ---------- Pipeline runner (supports optional outfile) ----------
-
-# def run_pipeline(
-#     cmds: List[Sequence[str]],
-#     outfile: Optional[Path] = None,
-#     stdin_text: Optional[str] = None,
-#     stdin_encoding: str = "utf-8",
-# ) -> Tuple[int, bytes, bytes]:
-#     """Run a shell-like pipeline of cmds; kill safely on exceptions."""
-#     procs: List[sp.Popen] = []
-#     fout = None
-#     try:
-#         prev = None
-#         for i, argv in enumerate(cmds):
-#             is_first = i == 0
-#             is_last = i == len(cmds) - 1
-
-#             if is_last and outfile is not None:
-#                 outfile.parent.mkdir(parents=True, exist_ok=True)
-#                 fout = outfile.open("wb")
-#                 stdout_target = fout
-#             else:
-#                 stdout_target = sp.PIPE
-
-#             stdin_source = sp.PIPE if (is_first and stdin_text is not None) else (None if prev is None else prev.stdout)
-
-#             p = safe_popen(
-#                 argv,
-#                 stdin=stdin_source,
-#                 stdout=stdout_target,
-#                 stderr=sp.PIPE,
-#                 text=False,
-#             )
-
-#             if prev is not None and prev.stdout is not None and not is_last:
-#                 prev.stdout.close()
-
-#             procs.append(p)
-#             prev = p
-
-#         if stdin_text is not None and procs and procs[0].stdin is not None:
-#             data = stdin_text.encode(stdin_encoding, errors="strict")
-#             procs[0].stdin.write(data)
-#             procs[0].stdin.close()
-#             procs[0].stdin = None
-
-#         last = procs[-1]
-
-#         if outfile is not None:
-#             _, err = last.communicate()
-#             rc = last.returncode
-#             for p in procs[:-1]:
-#                 try:
-#                     if p.stderr:
-#                         p.stderr.read()
-#                 except Exception:
-#                     pass
-#             if fout is not None:
-#                 try:
-#                     fout.flush()
-#                 finally:
-#                     fout.close()
-#                     fout = None
-#             if rc != 0:
-#                 raise RuntimeError(
-#                     f"pipeline failed (rc={rc}): {cmds[-1]}\n{err.decode(errors='replace')}"
-#                 )
-#             return rc, b"", err
-
-#         out, err = last.communicate()
-#         rc = last.returncode
-#         for p in procs[:-1]:
-#             try:
-#                 if p.stderr:
-#                     p.stderr.read()
-#             except Exception:
-#                 pass
-#         if rc != 0:
-#             raise RuntimeError(
-#                 f"pipeline failed (rc={rc}): {cmds[-1]}\n{err.decode(errors='replace')}"
-#             )
-#         return rc, out, err
-
-#     except Exception:
-#         _kill_all_children()
-#         raise
-#     finally:
-#         try:
-#             if fout is not None:
-#                 fout.close()
-#         except Exception:
-#             pass
-#         for p in procs:
-#             try:
-#                 if p.poll() is None:
-#                     p.wait(timeout=0.01)
-#             except Exception:
-#                 pass
-#             try:
-#                 _CHILD_PROCS.discard(p)
-#             except Exception:
-#                 pass
 
 
 def run_pipeline(
