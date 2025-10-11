@@ -7,6 +7,7 @@
 from typing import List, Dict, Any
 import sys
 import tempfile
+import shutil
 from pathlib import Path
 import numpy as np
 from loguru import logger
@@ -62,13 +63,16 @@ def get_fragment_beds(sname: str, bam_file: Path, threads: int, tmpdir: Path) ->
     out_path = bed_dir / f"{sname}.fragments.bed"
     bed_dir.mkdir(parents=True, exist_ok=True)
 
-    # CHECK that this properly pipes on large files...
-    # Lots of parallelization leads to heavy I/O if many samples are sorting
-    # simultaneously. It may be better to run fewer high threaded jobs here.
+    # CHECKED that this properly pipes on large files. It does.
+    # Note: collate has heavy I/O writing tmp files here.
+    coll_dir = tmpdir / f"{sname}.collate"
+    coll_dir.mkdir(exist_ok=True)
     cmd1 = [
         BIN_SAM, "collate",
         "-@", str(threads),
-        "-T", str(tmpdir / f"{sname}"),
+        "-T", str(coll_dir / f"{sname}"),
+        "-r", "1000000",
+        "-u",
         "-O",
         str(bam_file),
     ]
@@ -76,6 +80,7 @@ def get_fragment_beds(sname: str, bam_file: Path, threads: int, tmpdir: Path) ->
     cmd3 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
     cmd4 = [BIN_BED, "sort", "-i", "-"]
     run_pipeline([cmd1, cmd2, cmd3, cmd4], out_path)
+    shutil.rmtree(coll_dir)
     return out_path
 
 

@@ -217,7 +217,7 @@ def run_assembler(
     get_vcf_with_indels_resolved(tmpdir, reference, cores)
 
     # optional: maybe wait til after locus filtering...
-    stats = get_locus_and_snp_stats_in_loci_bed(tmpdir, loci_bed, cores)
+    stats = get_locus_and_snp_stats_in_loci_bed(tmpdir, cores)
 
     # ------------------------------------------------------------------
     # ---- CONSENSUS CALLING -------------------------------------------

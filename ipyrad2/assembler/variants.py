@@ -69,6 +69,7 @@ BIN_BCF = str(BIN / "bcftools")
 def get_locus_and_snp_stats_in_loci_bed(tmpdir: Path, loci_bed: Path, threads: int = 4):
     """Return dict with stats"""
     # file paths
+    loci_bed = tmpdir / "beds" / "loci.bed"
     raw_vcf = tmpdir / "vcfs" / "loci.raw.vcf.gz"
     vcf = tmpdir / "vcfs" / "variants.resolved.vcf.gz"
 
