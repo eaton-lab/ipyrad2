@@ -31,11 +31,11 @@ def samtools_index_reference(reference: Path, threads: int) -> None:
     return
 
 
-def get_reference_sort_order(reference: Path, outdir: Path) -> Path:
+def get_reference_sort_order(reference: Path, tmpdir: Path) -> Path:
     """Get scaff order from sam indexed REF file.
     """
     # destination file
-    out_path = outdir / "REF_info.txt"
+    out_path = tmpdir / "REF_info.txt"
 
     # write fai file if it doesn't exist
     fai_path = reference.with_suffix(reference.suffix + ".fai")
@@ -48,7 +48,7 @@ def get_reference_sort_order(reference: Path, outdir: Path) -> Path:
     return out_path
 
 
-def get_fragment_beds(sname: str, bam_file: Path, threads: int, outdir: Path) -> Path:
+def get_fragment_beds(sname: str, bam_file: Path, threads: int, tmpdir: Path) -> Path:
     r"""Produce a fragments BED (full inserts) from a coordinate-sorted BAM.
 
     Shell command
@@ -58,7 +58,7 @@ def get_fragment_beds(sname: str, bam_file: Path, threads: int, outdir: Path) ->
     >>>   | awk 'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}' \
     >>>   | bedtools sort -i - > S1.fragments.bed
     """
-    bed_dir = outdir / "beds"
+    bed_dir = tmpdir / "beds"
     out_path = bed_dir / f"{sname}.fragments.bed"
     bed_dir.mkdir(parents=True, exist_ok=True)
 
@@ -66,7 +66,7 @@ def get_fragment_beds(sname: str, bam_file: Path, threads: int, outdir: Path) ->
     cmd1 = [
         BIN_SAM, "collate",
         "-@", str(threads),
-        "-T", str(outdir / f"{sname}"),
+        "-T", str(tmpdir / f"{sname}"),
         "-O",
         str(bam_file),
     ]
@@ -77,13 +77,13 @@ def get_fragment_beds(sname: str, bam_file: Path, threads: int, outdir: Path) ->
     return out_path
 
 
-def get_fragment_coverage_beds(sname: str, reference: Path, outdir: Path) -> Path:
+def get_fragment_coverage_beds(sname: str, reference: Path, tmpdir: Path) -> Path:
     """write depth filtered bed for each sample.
 
     >>> $ bedtools genomecov -i BED -g REF.scaflens -bg > fragments.bedgraph
     """
     # create a tmp file with REF scaffold length
-    bed_dir = outdir / "beds"
+    bed_dir = tmpdir / "beds"
     fragment_bed = bed_dir / f"{sname}.fragments.bed"
     out_path = bed_dir / f"{sname}.fragments.bedgraph"
     fai_path = reference.with_suffix(reference.suffix + ".fai")
@@ -101,14 +101,14 @@ def get_fragment_coverage_beds(sname: str, reference: Path, outdir: Path) -> Pat
     return out_path
 
 
-def get_fragment_merged_coverage_beds(sname: str, outdir: Path):
+def get_fragment_merged_coverage_beds(sname: str, tmpdir: Path):
     """write bed with intervals of coverage above {min_depth_majrule}.
 
     >>> $ awk -v MIN=3 '$4>=MIN' sname.fragments.bedgraph \
     >>>   | bedtools merge -i - > sname.loci.min3.bed
     """
     # paths
-    bed_dir = outdir / "beds"
+    bed_dir = tmpdir / "beds"
     bedgraph = bed_dir / f"{sname}.fragments.bedgraph"
     out_path = bed_dir / f"{sname}.fragments.merged.bed"
 
@@ -125,7 +125,7 @@ def get_across_sample_loci_bed(
     min_sample_coverage: int,
     min_merge_distance: int,
     min_locus_length: int,
-    outdir: Path,
+    tmpdir: Path,
 ) -> Dict[str, Any]:
     """Merge beds across samples to get joint bed regions (loci)
 
@@ -135,8 +135,8 @@ def get_across_sample_loci_bed(
     - drop low cov regions
     - merge remaining nearbys
     """
-    ref_info = outdir / "REF_info.txt"
-    bed_dir = outdir / "beds"
+    ref_info = tmpdir / "REF_info.txt"
+    bed_dir = tmpdir / "beds"
     bed_files = [bed_dir / f"{sname}.fragments.merged.bed" for sname in names]
     bed_path = bed_dir / "loci.bed"
 
@@ -172,10 +172,10 @@ def get_across_sample_loci_bed(
     return bed_path
 
 
-def get_sample_coverage_stats_in_loci_bed(bam_file: Path, outdir: Path) -> Dict[str, float]:
+def get_sample_coverage_stats_in_loci_bed(bam_file: Path, tmpdir: Path) -> Dict[str, float]:
     """Return dict with stats of sampling mapping per locus bed.
     """
-    loci_bed = outdir / "beds" / "loci.bed"
+    loci_bed = tmpdir / "beds" / "loci.bed"
 
     # commands
     cmd1 = [

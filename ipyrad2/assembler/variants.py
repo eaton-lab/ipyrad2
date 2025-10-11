@@ -66,15 +66,11 @@ BIN_BCF = str(BIN / "bcftools")
 # ==========================================================================
 
 
-
-
-
-def get_locus_and_snp_stats_in_loci_bed(outdir: Path, threads: int = 4):
+def get_locus_and_snp_stats_in_loci_bed(tmpdir: Path, loci_bed: Path, threads: int = 4):
     """Return dict with stats"""
     # file paths
-    loci_bed = outdir / "beds" / "loci.bed"
-    raw_vcf = outdir / "vcfs" / "loci.raw.vcf.gz"
-    vcf = outdir / "vcfs" / "variants.resolved.vcf.gz"
+    raw_vcf = tmpdir / "vcfs" / "loci.raw.vcf.gz"
+    vcf = tmpdir / "vcfs" / "variants.resolved.vcf.gz"
 
     # get the number of loci beds
     cmd1 = ["wc", "-l", str(loci_bed)]
@@ -123,17 +119,17 @@ def get_locus_and_snp_stats_in_loci_bed(outdir: Path, threads: int = 4):
     return {"nloci": nloci, "nvariants": nsnps + nindels, "nsnps": nsnps, "nindels": nindels, "nvariants_raw": nraw}
 
 
-def get_chunked_loci_beds(outdir: Path, nchunks: int) -> List[Path]:
-    """Return a list of Paths from breaking loci.bed into chunks.
+def get_chunked_loci_beds(tmpdir: Path, nchunks: int) -> List[Path]:
+    """Return a list of Paths from breaking loci.bed into chunks in tmpdir.
     """
-    loci_bed = outdir / "beds" / "loci.bed"
+    loci_bed = tmpdir / "beds" / "loci.bed"
     lines = loci_bed.read_text().split("\n")
     q, r = divmod(len(lines), nchunks)
 
     paths = []
     i = 0
     for k in range(nchunks):
-        chunk_bed = outdir / "beds" / f"chunk-{i}.bed"
+        chunk_bed = tmpdir / "beds" / f"chunk-{i}.bed"
         size = q + (1 if k < r else 0)
         chunk = lines[i: i+size]
         with open(chunk_bed, 'w') as out:
@@ -143,7 +139,7 @@ def get_chunked_loci_beds(outdir: Path, nchunks: int) -> List[Path]:
     return paths
 
 
-def get_group_called_variants_in_vcf_chunks(outdir: Path, reference: Path, bam_files: List[Path], locus_chunk: Path, min_base_q: int, threads: int):
+def get_group_called_variants_in_vcf_chunks(tmpdir: Path, reference: Path, bam_files: List[Path], locus_chunk: Path, min_base_q: int, threads: int):
     """Make variant calls for all samples using -G (groups).
 
     >>> $ bcftools mpileup \
@@ -152,9 +148,7 @@ def get_group_called_variants_in_vcf_chunks(outdir: Path, reference: Path, bam_f
     >>>   | bcftools call -m -a GQ -G GROUPS.tsv -W -Oz -o out.vcf.gz
     """
     # file paths
-    vcf_dir = outdir / "vcfs"
-    vcf_dir.mkdir(parents=True, exist_ok=True)
-    out_vcf_gz = vcf_dir / locus_chunk.with_suffix(".vcf.gz").name
+    out_vcf_gz = tmpdir / "vcfs" / locus_chunk.with_suffix(".vcf.gz").name
 
     # divide threads
     threads_mpileup = max(1, threads // 2)
@@ -184,6 +178,7 @@ def get_group_called_variants_in_vcf_chunks(outdir: Path, reference: Path, bam_f
         "-a", "GQ",
         "-G", "-",
         # "-G", str(groups_file),
+        "--ploidy", "2",          # TODO: expose as option to user?
         "-Ou",
         "--threads", str(threads_call),
     ]
@@ -198,13 +193,13 @@ def get_group_called_variants_in_vcf_chunks(outdir: Path, reference: Path, bam_f
     return out_vcf_gz
 
 
-def get_concat_chunk_vcfs(outdir: Path, threads: int):
+def get_concat_chunk_vcfs(tmpdir: Path, threads: int):
     """Concatenate filtered vcf chunks back into one large vcf.
 
     The vcfs should already be indexed. This will re-sort just in case.
     # bcftools concat V1 V2 V3 ... -Oz -o loci.vcf.gz --threads 8 -W
     """
-    vcf_dir = outdir / "vcfs"
+    vcf_dir = tmpdir / "vcfs"
     out_vcf_gz = vcf_dir / "loci.raw.vcf.gz"
     chunk_vcfs = list(vcf_dir.glob("chunk-*.vcf.gz"))
     sorted_vcfs = sorted(chunk_vcfs, key=lambda x: int(x.name.split(".")[0].split("-")[-1]))
@@ -225,7 +220,7 @@ def get_concat_chunk_vcfs(outdir: Path, threads: int):
     return out_vcf_gz
 
 
-def get_filtered_vcf(outdir: Path, min_read_depth: int, min_geno_q: int, min_site_q: int, threads: int) -> Path:
+def get_filtered_vcf(tmpdir: Path, min_read_depth: int, min_geno_q: int, min_site_q: int, threads: int) -> Path:
     """Apply filtering to raw genotype calls by depth and quality
 
     QUAL answers “Is there a variant here?”;
@@ -238,8 +233,8 @@ def get_filtered_vcf(outdir: Path, min_read_depth: int, min_geno_q: int, min_sit
     TODO: record how many alleles are masked by [1] and how
     many sites are masked by [2].
     """
-    in_vcf_gz = outdir / "vcfs" / "loci.raw.vcf.gz"
-    out_vcf_gz = outdir / "vcfs" / "loci.filtered.vcf.gz"
+    in_vcf_gz = tmpdir / "vcfs" / "loci.raw.vcf.gz"
+    out_vcf_gz = tmpdir / "vcfs" / "loci.filtered.vcf.gz"
     out_vcf_tmp = out_vcf_gz.with_suffix(out_vcf_gz.suffix + ".tmp")
 
     dp_min: int = min_read_depth                   # DP<X (pser sample DP)
@@ -309,7 +304,7 @@ def get_filtered_vcf(outdir: Path, min_read_depth: int, min_geno_q: int, min_sit
     return out_vcf_gz
 
 
-def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) -> Path:
+def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) -> Path:
     """Resolve overlapping snps and indels. Keep indel type when overlapping.
 
     If no indels are present then it just renames the vcf.
@@ -322,10 +317,10 @@ def get_vcf_with_indels_resolved(outdir: Path, reference: Path, threads: int) ->
       5) concat + sort
       6) collapse biallelic back to multiallelic + sort
     """
-    in_vcf_gz = outdir / "vcfs" / "loci.filtered.vcf.gz"
-    out_vcf_gz = outdir / "vcfs" / "variants.resolved.vcf.gz"
-    vcf_dir = outdir / "vcfs"
-    bed_dir = outdir / "beds"
+    in_vcf_gz = tmpdir / "vcfs" / "loci.filtered.vcf.gz"
+    out_vcf_gz = tmpdir / "vcfs" / "variants.resolved.vcf.gz"
+    vcf_dir = tmpdir / "vcfs"
+    bed_dir = tmpdir / "beds"
     indel_beds = bed_dir / 'indel.regions.bed'
 
     # ------------------------------------------------------------
@@ -496,8 +491,6 @@ if __name__ == "__main__":
     # load assembly and select a sample
     data = ip.load_json(f"../../{DIR}/{NAME}.json")
     data.stepdir = data.json_file.parent / f"{NAME}_clusters_within"
-    logs = data.stepdir / "logs"
-    logs.mkdir(exist_ok=True)
 
     # get_vcf_with_indels_resolved(data, 10)
 

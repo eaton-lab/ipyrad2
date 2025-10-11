@@ -25,24 +25,23 @@ BIN_BCF = str(BIN / "bcftools")
 BIN_BED = str(BIN / "bedtools")
 
 
-def write_sam_faidx(outdir: Path) -> Path:
+def write_sam_faidx(tmpdir: Path) -> Path:
     """Convert loci beds (0-based) to faidx 1-based (Chr:start-end).
     """
-    loci_bed = outdir / "beds" / "loci.bed"
-    fai_path = outdir / "loci.faidx.txt"
+    loci_bed = tmpdir / "beds" / "loci.bed"
+    fai_path = tmpdir / "loci.faidx.txt"
     awk_prog = 'BEGIN{OFS=""}{print $1,":",$2+1,"-",$3}'
     cmd = ["awk", awk_prog, str(loci_bed)]
     run_pipeline([cmd], fai_path)
     return fai_path
 
 
-def get_reference_in_loci_beds(outdir: Path, reference: Path) -> Path:
+def get_reference_in_loci_beds(tmpdir: Path, reference: Path) -> Path:
     """Write the reference sequence as a sample to the consensus folder
     for all loci windows.
     """
-    loci = outdir / "loci.faidx.txt"
-    consensus_dir = outdir / "consensus_seqs"
-    consensus_dir.mkdir(parents=True, exist_ok=True)
+    loci = tmpdir / "loci.faidx.txt"
+    consensus_dir = tmpdir / "consensus_seqs"
     out_fasta = consensus_dir / "assembly_reference_sequence.consensus.fa"
 
     # run pipeline
@@ -51,20 +50,20 @@ def get_reference_in_loci_beds(outdir: Path, reference: Path) -> Path:
     return out_fasta
 
 
-def get_consensus(sname: str, reference: Path, outdir: Path, keep_insertions: bool) -> Path:
+def get_consensus(sname: str, reference: Path, tmpdir: Path, keep_insertions: bool) -> Path:
     """Write consensus sequences for one sample.
 
     Create FASTA for `sample_name` only over loci in `loci_bed`,
     applying variants from `vcf_gz` and masking `zero_bed` regions to N.
     """
     # step data files
-    loci = outdir / "loci.faidx.txt"
-    vcf_gz = outdir / "vcfs" / "variants.resolved.vcf.gz"
-    consensus_dir = outdir / "consensus_seqs"
+    loci = tmpdir / "loci.faidx.txt"
+    vcf_gz = tmpdir / "vcfs" / "variants.resolved.vcf.gz"
+    consensus_dir = tmpdir / "consensus_seqs"
     consensus_dir.mkdir(parents=True, exist_ok=True)
 
     # sample files
-    mask_bed = outdir / "beds" / f"{sname}.mask.bed"
+    mask_bed = tmpdir / "beds" / f"{sname}.mask.bed"
     out_fasta = consensus_dir / f"{sname}.consensus.fa"
 
     cmd1 = [BIN_SAM, "faidx", str(reference), "-r", str(loci)]
@@ -89,7 +88,7 @@ def get_consensus(sname: str, reference: Path, outdir: Path, keep_insertions: bo
     return out_fasta
 
 
-def get_sample_masked_beds(sname: str, bam_file: Path, min_sample_depth: int, outdir: Path) -> Path:
+def get_sample_masked_beds(sname: str, bam_file: Path, min_sample_depth: int, tmpdir: Path) -> Path:
     """Write bed files to mask <min_depth or filtered sites per sample.
 
     Where is the mask used?
@@ -100,7 +99,7 @@ def get_sample_masked_beds(sname: str, bam_file: Path, min_sample_depth: int, ou
     If the sample is variant relative to the reference then the variant
     will be applied during consens writing.
     """
-    bed_dir = outdir / "beds"
+    bed_dir = tmpdir / "beds"
     loci_bed = bed_dir / "loci.bed"
     out_path = bed_dir / f"{sname}.mask.bed"
 
@@ -185,13 +184,13 @@ def build_locus_fasta_database(
     name: str,
     snames: List[str],
     reference: Path,
-    outdir: Path,
+    tmpdir: Path,
     exclude_reference: bool,
     masks: List[str],
 ) -> Tuple[Path, Path]:
     """..."""
     # get sorted consensus fastas with reference on top
-    consensus_dir = outdir / "consensus_seqs"
+    consensus_dir = tmpdir / "consensus_seqs"
     fastas = [consensus_dir / f"{i}.consensus.fa" for i in sorted(snames)]
 
     # insert reference as first sample unless explicitly excluded
@@ -203,8 +202,8 @@ def build_locus_fasta_database(
     snames = [i.name.rsplit(".consensus.fa")[0] for i in fastas]
 
     # file paths
-    database = outdir / f"{name}.database.fa"
-    bed_mask = outdir / f"{name}.re_mask.bed"
+    database = tmpdir / f"{name}.database.fa"
+    bed_mask = tmpdir / f"{name}.re_mask.bed"
 
     # restriction site sequences to be masked
     re_masks = []

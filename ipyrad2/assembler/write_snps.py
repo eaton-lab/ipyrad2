@@ -289,7 +289,6 @@ def iter_vcf_filtered_snps_with_bed(
     vcf_path: Union[str, Path],
     bed_path: Union[str, Path],
     snames: List[str],
-    scaffold_order: Optional[List[str]] = None,
 ) -> Iterator[Tuple[int, int, int, int, int, str, str, str, str, np.ndarray]]:
     """Iterate a VCF(.gz) and yield records with FILTER==PASS and NOT 'INDEL' in INFO.
 
@@ -308,7 +307,7 @@ def iter_vcf_filtered_snps_with_bed(
       - ValueError if any `snames` are absent from the VCF header
       - ValueError if a record lacks a GT field in FORMAT
     """
-    bed_index, scaff2idx = load_bed_index_nonoverlap(bed_path, scaffold_order)
+    bed_index, scaff2idx = load_bed_index_nonoverlap(bed_path)
 
     # per-interval counters (for var_idx_in_bed)
     counters: Dict[str, np.ndarray] = {
