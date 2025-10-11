@@ -214,6 +214,7 @@ def command_line():
             reference=args.reference,
             outdir=args.out,
             name=args.name,
+            loci_bed=args.loci_bed,
             min_site_q=args.min_site_q,
             min_geno_q=args.min_geno_q,
             min_base_q=args.min_base_q,

@@ -46,6 +46,7 @@ def run_assembler(
     reference: Path,
     outdir: Path,
     name: str,
+    loci_bed: Path | None,
     min_site_q: int,
     min_geno_q: int,
     min_base_q: int,
@@ -127,38 +128,39 @@ def run_assembler(
     # ---------------------------------------------
     logger.info(f"running up to {workers} parallel jobs each using up to {threads} threads")
     logger.debug("fetching reference scaffold order")
+    get_reference_sort_order(reference, tmpdir)
 
     # ------------------------------------------------------------------
     # ---- LOCUS DELIMITING --------------------------------------------
     # ------------------------------------------------------------------
-    get_reference_sort_order(reference, tmpdir)
-    logger.info("delimiting sample coverage beds")
-    jobs = {}
-    for sname, bam_file in bam_dict.items():
-        kwargs = dict(sname=sname, bam_file=bam_file, threads=threads, outdir=tmpdir)
-        jobs[sname] = (get_fragment_beds, kwargs)
-    run_with_pool(jobs, log_level, cores)
+    if loci_bed is None:
+        logger.info("delimiting sample coverage beds")
+        jobs = {}
+        for sname, bam_file in bam_dict.items():
+            kwargs = dict(sname=sname, bam_file=bam_file, threads=threads, outdir=tmpdir)
+            jobs[sname] = (get_fragment_beds, kwargs)
+        run_with_pool(jobs, log_level, cores)
 
-    jobs = {}
-    for sname, bam_file in bam_dict.items():
-        kwargs = dict(sname=sname, reference=reference, outdir=tmpdir)
-        jobs[sname] = (get_fragment_coverage_beds, kwargs)
-    run_with_pool(jobs, log_level, cores)              # single-threaded
+        jobs = {}
+        for sname, bam_file in bam_dict.items():
+            kwargs = dict(sname=sname, reference=reference, outdir=tmpdir)
+            jobs[sname] = (get_fragment_coverage_beds, kwargs)
+        run_with_pool(jobs, log_level, cores)              # single-threaded
 
-    jobs = {}
-    for sname, bam_file in bam_dict.items():
-        kwargs = dict(sname=sname, outdir=tmpdir)
-        jobs[sname] = (get_fragment_merged_coverage_beds, kwargs)
-    run_with_pool(jobs, log_level, cores)              # single-threaded
+        jobs = {}
+        for sname, bam_file in bam_dict.items():
+            kwargs = dict(sname=sname, outdir=tmpdir)
+            jobs[sname] = (get_fragment_merged_coverage_beds, kwargs)
+        run_with_pool(jobs, log_level, cores)              # single-threaded
 
-    logger.info("delimiting shared coverage beds (loci)")
-    get_across_sample_loci_bed(
-        list(bam_dict),
-        min_locus_sample_coverage,
-        min_locus_merge_distance,
-        min_locus_length,
-        tmpdir,
-    )
+        logger.info("delimiting shared coverage beds (loci)")
+        get_across_sample_loci_bed(
+            list(bam_dict),
+            min_locus_sample_coverage,
+            min_locus_merge_distance,
+            min_locus_length,
+            tmpdir,
+        )
 
     # Maybe not necessary, we measure coverage on the filtered loci later.
     logger.info("measuring sample coverage in loci")
@@ -174,7 +176,7 @@ def run_assembler(
     # ---- VARIANT CALLING ---------------------------------------------
     # ------------------------------------------------------------------
     logger.info("calling variants in locus beds")
-    nchunks = max(4, int(workers / threads) * 2)
+    nchunks = max(4, workers)
     locus_chunks = get_chunked_loci_beds(tmpdir, nchunks)
     jobs = {}
     for chunk in locus_chunks:

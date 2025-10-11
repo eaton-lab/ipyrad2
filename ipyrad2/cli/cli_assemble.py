@@ -40,10 +40,10 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         "-r", "--reference", metavar="Path", type=Path, required=True,
         help="Path to the reference fasta used in the mapping step",
     )
-    # tool.add_argument(
-    #     "-b", "--loci-bed", metavar="Path", type=Path,
-    #     help="Optional bed file delimiting loci on the reference genome.",
-    # )
+    tool.add_argument(
+        "-b", "--loci-bed", metavar="Path", type=Path,
+        help="Optional bed file delimiting loci on the reference genome.",
+    )
     tool.add_argument(
         "-n", "--name", metavar="str", type=str, default="assembly",
         help="Prefix name for output files. [default=assembly]",
