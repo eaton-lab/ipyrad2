@@ -262,17 +262,24 @@ def concat_tech_reps_into_tmpdir(imap: Path, tmpdir: Path, fastq_dict: Dict[str,
     for pname, tups in pop2tups.items():
         snames = pop2snames[pname]
         logger.info(f"{pname}{' ' * (maxlen - len(pname))} <- {' + '.join(snames)}")
-        out1 = tmpdir / f"{pname}.tmp.R1.fastq.gz"
-        cmd = ["cat"] + [str(i[0]) for i in tups]
-        run_pipeline([cmd], out1)
 
-        if tups[0][1] is not None:
-            out2 = tmpdir / f"{pname}.tmp.R2.fastq.gz"
-            cmd = ["cat"] + [str(i[1]) for i in tups]
-            run_pipeline([cmd], out2)
-            fastq_dict[pname] = (out1, out2)
+        # renaming, do not run pipe
+        if len(snames) == 1:
+            fastq_dict[pname] = tups
+
+        # concating, run pipe
         else:
-            fastq_dict[pname] = (out1, None)
+            out1 = tmpdir / f"{pname}.tmp.R1.fastq.gz"
+            cmd = ["cat"] + [str(i[0]) for i in tups]
+            run_pipeline([cmd], out1)
+
+            if tups[0][1] is not None:
+                out2 = tmpdir / f"{pname}.tmp.R2.fastq.gz"
+                cmd = ["cat"] + [str(i[1]) for i in tups]
+                run_pipeline([cmd], out2)
+                fastq_dict[pname] = (out1, out2)
+            else:
+                fastq_dict[pname] = (out1, None)
     return fastq_dict
 
 
