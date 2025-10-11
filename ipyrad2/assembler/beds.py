@@ -63,6 +63,8 @@ def get_fragment_beds(sname: str, bam_file: Path, threads: int, tmpdir: Path) ->
     bed_dir.mkdir(parents=True, exist_ok=True)
 
     # CHECK that this properly pipes on large files...
+    # Lots of parallelization leads to heavy I/O if many samples are sorting
+    # simultaneously. It may be better to run fewer high threaded jobs here.
     cmd1 = [
         BIN_SAM, "collate",
         "-@", str(threads),

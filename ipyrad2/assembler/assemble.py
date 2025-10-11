@@ -144,7 +144,7 @@ def run_assembler(
     # ---- LOCUS DELIMITING --------------------------------------------
     # ------------------------------------------------------------------
     if loci_bed is not None:
-        # copy input loci file to outdir/tmpdir/beds/loci.bed
+        # copy input loci file to tmpdir/beds/loci.bed
         loci_bed = shutil.copy2(loci_bed, tmpdir / "beds" / "loci.bed")
         loci_bed = tmpdir / "beds" / "loci.bed"
     else:
@@ -163,7 +163,7 @@ def run_assembler(
 
         jobs = {}
         for sname, bam_file in bam_dict.items():
-            kwargs = dict(sname=sname, outdir=tmpdir)
+            kwargs = dict(sname=sname, tmpdir=tmpdir)
             jobs[sname] = (get_fragment_merged_coverage_beds, kwargs)
         run_with_pool(jobs, log_level, cores)              # single-threaded
 
