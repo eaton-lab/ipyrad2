@@ -153,7 +153,7 @@ def run_assembler(
         for sname, bam_file in bam_dict.items():
             kwargs = dict(sname=sname, bam_file=bam_file, threads=threads, tmpdir=tmpdir)
             jobs[sname] = (get_fragment_beds, kwargs)
-        run_with_pool(jobs, log_level, cores)
+        run_with_pool(jobs, log_level, workers)            # multithreaded
 
         jobs = {}
         for sname, bam_file in bam_dict.items():
@@ -191,7 +191,7 @@ def run_assembler(
     # ---- VARIANT CALLING ---------------------------------------------
     # ------------------------------------------------------------------
     logger.info("calling variants in locus beds")
-    nchunks = max(4, workers)
+    nchunks = max(10, workers)
     locus_chunks = get_chunked_loci_beds(tmpdir, nchunks)
     jobs = {}
     for chunk in locus_chunks:
@@ -204,7 +204,9 @@ def run_assembler(
             threads=threads,
         )
         jobs[chunk] = (get_group_called_variants_in_vcf_chunks, kwargs)
-    run_with_pool(jobs, log_level, workers)   # multithreaded jobs.
+    # variant calling effectively runs on 1-2 threads, but can use a
+    # lot of RAM... do we want a different threading scheme here?
+    run_with_pool(jobs, log_level, max(1, int(cores / 2)))  # only slightly multithreaded jobs.
     get_concat_chunk_vcfs(tmpdir, threads)
 
     logger.info("filtering variants")
