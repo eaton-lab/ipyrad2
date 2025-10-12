@@ -16,6 +16,8 @@ def read_params(paramsfile: str):
     """
     with open(paramsfile) as infile:
         params = tomlkit.load(infile)
+
+    params = _replace_values(params.unwrap(), -1, None)
     params = RecursiveNamespace(**params)
     return params
 
@@ -86,6 +88,19 @@ class RecursiveNamespace(SimpleNamespace):
         elif isinstance(entry, list):
             return [self._map_entry(item) for item in entry]
         return entry
+
+
+def _replace_values(d, old, new):
+    """
+    Helper function for reading in params and replacing `-1` values
+    with None. toml doesn't have a native None type.
+    """
+    for k, v in d.items():
+        if isinstance(v, dict):
+            _replace_values(v, old, new)
+        elif v == old:
+            d[k] = new
+    return d
 
 
 def _get_arg_defaults(parser):

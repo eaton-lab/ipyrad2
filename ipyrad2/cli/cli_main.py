@@ -20,7 +20,7 @@ from ..assembler import run_assembler
 from ..analysis.window_extracter import run_window_extracter
 from ..utils.logger import set_log_level
 from ..utils.exceptions import IPyradError
-from ..utils.params import write_params
+from ..utils.params import read_params, write_params
 from loguru import logger
 import ipyrad2 as ip
 
@@ -108,7 +108,8 @@ def command_line():
         sys.exit(0)
 
     if args.params is not None:
-        print(args.params)
+        params = read_params(args.params)
+        print(params)
 
     # LOGGING: -----------------------------------------------------
     if hasattr(args, "log_level"):
