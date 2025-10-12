@@ -7,6 +7,7 @@
 from typing import List, Dict, Any
 import sys
 import tempfile
+import shutil
 from pathlib import Path
 import numpy as np
 from loguru import logger
@@ -31,11 +32,11 @@ def samtools_index_reference(reference: Path, threads: int) -> None:
     return
 
 
-def get_reference_sort_order(reference: Path, outdir: Path) -> Path:
+def get_reference_sort_order(reference: Path, tmpdir: Path) -> Path:
     """Get scaff order from sam indexed REF file.
     """
     # destination file
-    out_path = outdir / "REF_info.txt"
+    out_path = tmpdir / "REF_info.txt"
 
     # write fai file if it doesn't exist
     fai_path = reference.with_suffix(reference.suffix + ".fai")
@@ -48,7 +49,54 @@ def get_reference_sort_order(reference: Path, outdir: Path) -> Path:
     return out_path
 
 
-def get_fragment_beds(sname: str, bam_file: Path, threads: int, outdir: Path) -> Path:
+def get_coverage_bed_graphs(sname: str, bam_file: Path, reference: Path, tmpdir: Path, min_map_q: int, threads: int):
+    r"""Produce a fragments BED (full inserts) from a coordinate-sorted BAM.
+
+    Shell command
+    -------------
+    >>> $ samtools collate -u -@ 2 -O S1.sorted.bam \
+    >>>   | bedtools bamtobed -bedpe -i - \
+    >>>   | awk 'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}' \
+    >>>   | bedtools sort -i - \
+    >>>   | bedtools genomecov -i - -g REF.info -bg > S1.bedgraph
+    """
+    bed_dir = tmpdir / "beds"
+    bed_dir.mkdir(parents=True, exist_ok=True)
+    coll_dir = tmpdir / f"{sname}.collate"
+    coll_dir.mkdir(exist_ok=True)
+    out_path = bed_dir / f"{sname}.fragments.bedgraph"
+    fai_path = reference.with_suffix(reference.suffix + ".fai")
+
+    # CHECKED that this properly pipes on large files. It does.
+    # Note: collate has heavy I/O writing tmp files here.
+    cmd1 = [
+        BIN_SAM, "collate",
+        "-@", str(min(threads, 4)),             # doesn't benefit from >4
+        "-T", str(coll_dir / f"{sname}"),
+        "-r", "1000000",
+        "-u",
+        "-O",
+        str(bam_file),
+    ]
+    # stream the bed for each read pair
+    cmd2 = [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]
+    # filter pairs on mapq: applies same mapq min as in variants.py
+    cmd3 = ["awk", "-v", f'q={min_map_q}', r'BEGIN{OFS="\t"} ($8+0) >= q']
+    # check and pull out only chrom, start, end
+    cmd4 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
+    # sort beds
+    cmd5 = [BIN_BED, "sort", "-i", "-"]
+    # get coverage for each site from overlapping beds
+    cmd6 = [BIN_BED, "genomecov", "-i", "-", "-g", str(fai_path), "-bg"]
+    # pipeline
+    run_pipeline([cmd1, cmd2, cmd3, cmd4, cmd5, cmd6], out_path)
+    shutil.rmtree(coll_dir)
+    logger.debug(f"wrote bed graph for {sname}")
+    return out_path
+
+
+
+def get_fragment_beds(sname: str, bam_file: Path, threads: int, tmpdir: Path) -> Path:
     r"""Produce a fragments BED (full inserts) from a coordinate-sorted BAM.
 
     Shell command
@@ -58,15 +106,20 @@ def get_fragment_beds(sname: str, bam_file: Path, threads: int, outdir: Path) ->
     >>>   | awk 'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}' \
     >>>   | bedtools sort -i - > S1.fragments.bed
     """
-    bed_dir = outdir / "beds"
+    bed_dir = tmpdir / "beds"
     out_path = bed_dir / f"{sname}.fragments.bed"
     bed_dir.mkdir(parents=True, exist_ok=True)
 
-    # CHECK that this properly pipes on large files...
+    # CHECKED that this properly pipes on large files. It does.
+    # Note: collate has heavy I/O writing tmp files here.
+    coll_dir = tmpdir / f"{sname}.collate"
+    coll_dir.mkdir(exist_ok=True)
     cmd1 = [
         BIN_SAM, "collate",
-        "-@", str(threads),
-        "-T", str(outdir / f"{sname}"),
+        "-@", str(min(threads, 4)),             # doesn't benefit from >4
+        "-T", str(coll_dir / f"{sname}"),
+        "-r", "1000000",
+        "-u",
         "-O",
         str(bam_file),
     ]
@@ -74,16 +127,18 @@ def get_fragment_beds(sname: str, bam_file: Path, threads: int, outdir: Path) ->
     cmd3 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
     cmd4 = [BIN_BED, "sort", "-i", "-"]
     run_pipeline([cmd1, cmd2, cmd3, cmd4], out_path)
+    shutil.rmtree(coll_dir)
+    logger.debug(f"wrote fragment beds for {sname}")
     return out_path
 
 
-def get_fragment_coverage_beds(sname: str, reference: Path, outdir: Path) -> Path:
+def get_fragment_coverage_beds(sname: str, reference: Path, tmpdir: Path) -> Path:
     """write depth filtered bed for each sample.
 
     >>> $ bedtools genomecov -i BED -g REF.scaflens -bg > fragments.bedgraph
     """
     # create a tmp file with REF scaffold length
-    bed_dir = outdir / "beds"
+    bed_dir = tmpdir / "beds"
     fragment_bed = bed_dir / f"{sname}.fragments.bed"
     out_path = bed_dir / f"{sname}.fragments.bedgraph"
     fai_path = reference.with_suffix(reference.suffix + ".fai")
@@ -101,14 +156,14 @@ def get_fragment_coverage_beds(sname: str, reference: Path, outdir: Path) -> Pat
     return out_path
 
 
-def get_fragment_merged_coverage_beds(sname: str, outdir: Path):
+def get_fragment_merged_coverage_beds(sname: str, tmpdir: Path):
     """write bed with intervals of coverage above {min_depth_majrule}.
 
     >>> $ awk -v MIN=3 '$4>=MIN' sname.fragments.bedgraph \
     >>>   | bedtools merge -i - > sname.loci.min3.bed
     """
     # paths
-    bed_dir = outdir / "beds"
+    bed_dir = tmpdir / "beds"
     bedgraph = bed_dir / f"{sname}.fragments.bedgraph"
     out_path = bed_dir / f"{sname}.fragments.merged.bed"
 
@@ -125,7 +180,7 @@ def get_across_sample_loci_bed(
     min_sample_coverage: int,
     min_merge_distance: int,
     min_locus_length: int,
-    outdir: Path,
+    tmpdir: Path,
 ) -> Dict[str, Any]:
     """Merge beds across samples to get joint bed regions (loci)
 
@@ -135,8 +190,8 @@ def get_across_sample_loci_bed(
     - drop low cov regions
     - merge remaining nearbys
     """
-    ref_info = outdir / "REF_info.txt"
-    bed_dir = outdir / "beds"
+    ref_info = tmpdir / "REF_info.txt"
+    bed_dir = tmpdir / "beds"
     bed_files = [bed_dir / f"{sname}.fragments.merged.bed" for sname in names]
     bed_path = bed_dir / "loci.bed"
 
@@ -172,10 +227,10 @@ def get_across_sample_loci_bed(
     return bed_path
 
 
-def get_sample_coverage_stats_in_loci_bed(bam_file: Path, outdir: Path) -> Dict[str, float]:
+def get_sample_coverage_stats_in_loci_bed(bam_file: Path, tmpdir: Path) -> Dict[str, float]:
     """Return dict with stats of sampling mapping per locus bed.
     """
-    loci_bed = outdir / "beds" / "loci.bed"
+    loci_bed = tmpdir / "beds" / "loci.bed"
 
     # commands
     cmd1 = [

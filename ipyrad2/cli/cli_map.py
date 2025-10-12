@@ -41,8 +41,8 @@ def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = N
         help=r"Imap file with sample\tpop on each line to rename or combine samples to pop name",
     )
     tool.add_argument(
-        "-q", "--min-map-q", metavar="int", type=int, default=1,
-        help="Min read alignment score (MAPQ). [default=1]",
+        "-q", "--min-map-q", metavar="int", type=int, default=10,
+        help="Min read alignment score (MAPQ). [default=10]",
     )
     tool.add_argument(
         "-m", "--mark-dups-by-coords", action="store_true",

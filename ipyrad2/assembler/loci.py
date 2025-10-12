@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from collections import Counter
 import numpy as np
+import pandas as pd
 from loguru import logger
 from ..utils.seqs import comp
 from ..utils.jit_funcs import snp_count_numba, max_heteros_count_numba
@@ -25,24 +26,23 @@ BIN_BCF = str(BIN / "bcftools")
 BIN_BED = str(BIN / "bedtools")
 
 
-def write_sam_faidx(outdir: Path) -> Path:
+def write_sam_faidx(tmpdir: Path) -> Path:
     """Convert loci beds (0-based) to faidx 1-based (Chr:start-end).
     """
-    loci_bed = outdir / "beds" / "loci.bed"
-    fai_path = outdir / "loci.faidx.txt"
+    loci_bed = tmpdir / "beds" / "loci.bed"
+    fai_path = tmpdir / "loci.faidx.txt"
     awk_prog = 'BEGIN{OFS=""}{print $1,":",$2+1,"-",$3}'
     cmd = ["awk", awk_prog, str(loci_bed)]
     run_pipeline([cmd], fai_path)
     return fai_path
 
 
-def get_reference_in_loci_beds(outdir: Path, reference: Path) -> Path:
+def get_reference_in_loci_beds(tmpdir: Path, reference: Path) -> Path:
     """Write the reference sequence as a sample to the consensus folder
     for all loci windows.
     """
-    loci = outdir / "loci.faidx.txt"
-    consensus_dir = outdir / "consensus_seqs"
-    consensus_dir.mkdir(parents=True, exist_ok=True)
+    loci = tmpdir / "loci.faidx.txt"
+    consensus_dir = tmpdir / "consensus_seqs"
     out_fasta = consensus_dir / "assembly_reference_sequence.consensus.fa"
 
     # run pipeline
@@ -51,20 +51,20 @@ def get_reference_in_loci_beds(outdir: Path, reference: Path) -> Path:
     return out_fasta
 
 
-def get_consensus(sname: str, reference: Path, outdir: Path, keep_insertions: bool) -> Path:
+def get_consensus(sname: str, reference: Path, tmpdir: Path, keep_insertions: bool) -> Path:
     """Write consensus sequences for one sample.
 
     Create FASTA for `sample_name` only over loci in `loci_bed`,
     applying variants from `vcf_gz` and masking `zero_bed` regions to N.
     """
     # step data files
-    loci = outdir / "loci.faidx.txt"
-    vcf_gz = outdir / "vcfs" / "variants.resolved.vcf.gz"
-    consensus_dir = outdir / "consensus_seqs"
+    loci = tmpdir / "loci.faidx.txt"
+    vcf_gz = tmpdir / "vcfs" / "variants.resolved.vcf.gz"
+    consensus_dir = tmpdir / "consensus_seqs"
     consensus_dir.mkdir(parents=True, exist_ok=True)
 
     # sample files
-    mask_bed = outdir / "beds" / f"{sname}.mask.bed"
+    mask_bed = tmpdir / "beds" / f"{sname}.mask.bed"
     out_fasta = consensus_dir / f"{sname}.consensus.fa"
 
     cmd1 = [BIN_SAM, "faidx", str(reference), "-r", str(loci)]
@@ -89,7 +89,7 @@ def get_consensus(sname: str, reference: Path, outdir: Path, keep_insertions: bo
     return out_fasta
 
 
-def get_sample_masked_beds(sname: str, bam_file: Path, min_sample_depth: int, outdir: Path) -> Path:
+def get_sample_masked_beds(sname: str, bam_file: Path, min_sample_depth: int, tmpdir: Path) -> Path:
     """Write bed files to mask <min_depth or filtered sites per sample.
 
     Where is the mask used?
@@ -100,7 +100,7 @@ def get_sample_masked_beds(sname: str, bam_file: Path, min_sample_depth: int, ou
     If the sample is variant relative to the reference then the variant
     will be applied during consens writing.
     """
-    bed_dir = outdir / "beds"
+    bed_dir = tmpdir / "beds"
     loci_bed = bed_dir / "loci.bed"
     out_path = bed_dir / f"{sname}.mask.bed"
 
@@ -185,13 +185,13 @@ def build_locus_fasta_database(
     name: str,
     snames: List[str],
     reference: Path,
-    outdir: Path,
+    tmpdir: Path,
     exclude_reference: bool,
     masks: List[str],
 ) -> Tuple[Path, Path]:
     """..."""
     # get sorted consensus fastas with reference on top
-    consensus_dir = outdir / "consensus_seqs"
+    consensus_dir = tmpdir / "consensus_seqs"
     fastas = [consensus_dir / f"{i}.consensus.fa" for i in sorted(snames)]
 
     # insert reference as first sample unless explicitly excluded
@@ -203,8 +203,8 @@ def build_locus_fasta_database(
     snames = [i.name.rsplit(".consensus.fa")[0] for i in fastas]
 
     # file paths
-    database = outdir / f"{name}.database.fa"
-    bed_mask = outdir / f"{name}.re_mask.bed"
+    database = tmpdir / f"{name}.database.fa"
+    bed_mask = tmpdir / f"{name}.re_mask.bed"
 
     # restriction site sequences to be masked
     re_masks = []
@@ -418,8 +418,7 @@ def write_loci_and_stats_files(
     # stats
     keys = ["min_length", "min_samples", "max_variant_frequency", "max_shared_hetero_frequency"]
     total_filters = {i: 0 for i in keys}
-    total_sample_cov = {i: 0 for i in snames}
-    total_sample_cov[refname] = 0
+    total_sample_cov = {i: 0 for i in [refname] + snames}
     total_locus_cov = Counter()
     total_stats = {
         "variant_sites": 0,
@@ -458,11 +457,11 @@ def write_loci_and_stats_files(
                 total_filters[key] += int(result[4][key])
 
             # tmp debugging code
-            if sum(filters.values()):
-                logger.debug(result[4])
-                logger.debug(header)
-                for sname, seq in zip(tnames, tseqs):
-                    logger.debug(f"\n{padded[sname]}{bytes(seq).decode()}")
+            # if sum(filters.values()):
+            #     logger.debug(result[4])
+            #     logger.debug(header)
+            #     for sname, seq in zip(tnames, tseqs):
+            #         logger.debug(f"\n{padded[sname]}{bytes(seq).decode()}")
 
             # store for writing if locus passed filters
             if not sum(filters.values()):
@@ -504,9 +503,8 @@ def write_loci_and_stats_files(
             out.write("".join(loci))
 
     # write locus stats -----------------------------------------------
-    with open(outdir / f"{name}.stats_filters.tsv", "w") as out:
+    with open(outdir / f"{name}.stats_counts.tsv", "w") as out:
         out.write("# Locus stats and filtering (nloci tagged and excluded for each filter; one locus can hit multile filters)\n")
-
         out.write(f"nloci_before_filtering\t{lidx}\n")
         for key in total_filters:
             out.write(f"{key}_filter\t{total_filters[key]}\n")
@@ -515,23 +513,15 @@ def write_loci_and_stats_files(
             out.write(f"{key}\t{total_stats[key]}\n")
 
     # write sample coverage -------------------------------------------
-    with open(outdir / f"{name}.stats_samples.tsv", "w") as out:
-        out.write("# Sample coverage (number of loci containing each sample)\n")
-        out.write("sample\tnloci\n")
-        # write reference coverage (nloci) first
-        if not exclude_reference:
-            out.write(f"assembly_reference_sequence\t{total_sample_cov["assembly_reference_sequence"]}\n")
-        for key in sorted(total_sample_cov):
-            if key != "assembly_reference_sequence":
-                out.write(f"{key}\t{total_sample_cov[key]}\n")
+    sample_cov = pd.DataFrame(index=["nloci"], data={i: total_sample_cov[i] for i in total_sample_cov}).T
+    sample_cov.to_string(outdir / f"{name}.stats_sample_cov.txt")
 
     # write locus coverage stats --------------------------------------
-    with open(outdir / f"{name}.stats_coverage.tsv", "w") as out:
-        out.write("# Locus coverage (histogram of number of loci containing N samples)\n")
-        out.write("nsamples\tnloci\n")
-        for key in range(len(snames) + 1):
-            out.write(f"{key}\t{total_locus_cov[key]}\n")
-    logger.debug(f"wrote loci file to {loci_file}")
+    # TODO: add pre-filtered bed stats here.
+    locus_cov = pd.DataFrame(index=['nloci'], data={i: total_locus_cov[i] for i in range(len(snames) + 1)}).T
+    locus_cov.to_string(outdir / f"{name}.stats_locus_coverage.txt")
+
+    # report stats files to user
     logger.debug(f"wrote stats files to {outdir / f'{name}.stats_*'}")
 
     # write a bed file with beds of loci filtered and sites trimmed to

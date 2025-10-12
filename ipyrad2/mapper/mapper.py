@@ -10,9 +10,11 @@ map --fastqs DATA --ref REF -out MAP
 from typing import Tuple, Dict
 import os
 import sys
+import json
 from collections import defaultdict
 from pathlib import Path
 from loguru import logger
+import numpy as np
 import pandas as pd
 from ..utils.exceptions import IPyradError
 from ..utils.names import get_name_to_fastq_dict
@@ -48,10 +50,10 @@ def map_filter_sort_mark_pairs(sname: str, fastqs: Tuple[Path, Path], reference:
     bam_coordsort = outdir / f"{sname}.tmp.coordsort.bam"
     bam_markdup = outdir / f"{sname}.tmp.markdup.bam"
     tmp_prefix = outdir / f"{sname}.tmp.pre"
-    tmp_stats1 = outdir / f"{sname}.tmp.stats1.tsv"
-    tmp_stats2 = outdir / f"{sname}.tmp.stats2.tsv"
-    tmp_stats3 = outdir / f"{sname}.tmp.stats3.tsv"
-    tmp_stats_dups = outdir / f"{sname}.tmp.stats_dups.tsv"
+    tmp_stats1 = outdir / f"{sname}.tmp.stats1.json"
+    tmp_stats2 = outdir / f"{sname}.tmp.stats2.json"
+    tmp_stats3 = outdir / f"{sname}.tmp.stats3.json"
+    tmp_stats_dups = outdir / f"{sname}.tmp.stats_dups.txt"
 
     # Split threads between BWA and samtools
     bwa_threads = max(1, int(threads * 0.75))
@@ -78,12 +80,12 @@ def map_filter_sort_mark_pairs(sname: str, fastqs: Tuple[Path, Path], reference:
     cmd2 = [
         BIN_SAMTOOLS, "view",
         "-b", "-u",
-        "-o", "-",
         "-F", "0x100",    # secondary
         "-F", "0x200",    # qcfail
         "-F", "0x800",    # supplemental
         # "-F", "0xB00", # 0x100, 0x200, 0x800
         "--save-counts", str(tmp_stats1),
+        "-o", "-",
     ]
 
     # name sort is required for fixmate
@@ -126,7 +128,7 @@ def map_filter_sort_mark_pairs(sname: str, fastqs: Tuple[Path, Path], reference:
         BIN_SAMTOOLS, "markdup",
         "-r",
         "-T", str(tmp_prefix),
-        "-s",                   # write stats
+        "-s",                       # write stats
         "-f", str(tmp_stats_dups),  # write stats to this file
         "-@", str(threads),
         "--write-index",
@@ -156,6 +158,8 @@ def map_filter_sort_mark_pairs(sname: str, fastqs: Tuple[Path, Path], reference:
     ]
     run_pipeline([cmd7, cmd8])
     logger.debug(f"finished mapping: {sname}")
+    bam_markdup.unlink()
+    bam_markdup.with_suffix(bam_markdup.suffix + '.csi').unlink()
     return out_bam
 
 
@@ -165,12 +169,12 @@ def map_filter_sort_pairs(sname: str, fastqs: Tuple[Path, Path], reference: Path
     This pipeline is for PE data w/o duplication marking information.
     """
     # paths
-    out_bam = outdir / f"{sname}.sorted.filtered.bam"
+    out_bam = outdir / f"{sname}.filtered.bam"
     # tmp_bam = outdir / f"{sname}.bam.tmp"
-    tmp_prefix = outdir / f"{sname}.sam.tmp"
-    tmp_stats1 = outdir / f"{sname}.tmp_stats1.tsv"
-    tmp_stats2 = outdir / f"{sname}.tmp_stats2.tsv"
-    tmp_stats3 = outdir / f"{sname}.tmp_stats3.tsv"
+    tmp_prefix = outdir / "tmpdir" / f"{sname}.tmp.pre"
+    tmp_stats1 = outdir / "tmpdir" / f"{sname}.tmp.stats1.json"
+    tmp_stats2 = outdir / "tmpdir" / f"{sname}.tmp.stats2.json"
+    tmp_stats3 = outdir / "tmpdir" / f"{sname}.tmp.stats3.json"
 
     # Split threads between BWA and samtools
     bwa_threads = max(1, int(threads * 0.75))
@@ -179,9 +183,9 @@ def map_filter_sort_pairs(sname: str, fastqs: Tuple[Path, Path], reference: Path
     # mapping command
     cmd1 = [
         BIN_BWA, "mem",
-        "-Y",                     # soft-clip supplementary. Wouldn't hurt, but not necessary.
-        "-T", "20",               # minimum score to output (default=30). Keep lower scores for now, can filter on higher MAPQ later.
-        "-R", f"@RG\\tID:{sname}\\tSM:{sname}\\tPL:ILLUMINA",  # store sample names in bam.
+        # "-Y",                     # soft-clip supplementary. Wouldn't hurt, but not necessary.
+        "-T", "20",               # minimum score to output (default=30). Keep lower scores for now, we filter on MAPQ later.
+        "-R", f"@RG\\tID:{sname}\\tSM:{sname}",  # store sample names in bam.
         "-K", "50000000",         # stable chunk size. Improves repeatability.
         "-v", "1",                # less verbose.
         "-t", str(bwa_threads),
@@ -262,37 +266,95 @@ def concat_tech_reps_into_tmpdir(imap: Path, tmpdir: Path, fastq_dict: Dict[str,
     for pname, tups in pop2tups.items():
         snames = pop2snames[pname]
         logger.info(f"{pname}{' ' * (maxlen - len(pname))} <- {' + '.join(snames)}")
-        out1 = tmpdir / f"{pname}.tmp.R1.fastq.gz"
-        cmd = ["cat"] + [str(i[0]) for i in tups]
-        run_pipeline([cmd], out1)
 
-        if tups[0][1] is not None:
-            out2 = tmpdir / f"{pname}.tmp.R2.fastq.gz"
-            cmd = ["cat"] + [str(i[1]) for i in tups]
-            run_pipeline([cmd], out2)
-            fastq_dict[pname] = (out1, out2)
+        # renaming, do not run pipe
+        if len(snames) == 1:
+            fastq_dict[pname] = tups
+
+        # concating, run pipe
         else:
-            fastq_dict[pname] = (out1, None)
+            out1 = tmpdir / f"{pname}.tmp.R1.fastq.gz"
+            cmd = ["cat"] + [str(i[0]) for i in tups]
+            run_pipeline([cmd], out1)
+
+            if tups[0][1] is not None:
+                out2 = tmpdir / f"{pname}.tmp.R2.fastq.gz"
+                cmd = ["cat"] + [str(i[1]) for i in tups]
+                run_pipeline([cmd], out2)
+                fastq_dict[pname] = (out1, out2)
+            else:
+                fastq_dict[pname] = (out1, None)
     return fastq_dict
 
 
-def count_mapped_reads(bam_file: Path, threads: int) -> int:
+def count_mapped_reads(sname: str, outdir: Path) -> int:
     """Return the number of mapped reads in the filtered/sorted bam.
 
     Note that for PE data this is the still nreads, so divide by 2 to
     get the n read pairs.
     """
-    # Count number of mapped read pairs
-    cmd1 = [BIN_SAMTOOLS, "flagstat", "--threads", str(threads), bam_file]
-    _, out, _ = run_pipeline([cmd1])
-    lines = out.decode().strip().split("\n")
-    for line in lines:
-        parts = line.split()
-        if parts[-1] == "primary":
-            primary_mapped = int(parts[0])
-        elif parts[-1] == "duplicates":
-            primary_duplicates = int(parts[0])
-    return {"mapped_primary": primary_mapped, "mapped_duplicates": primary_duplicates}
+    # tmp.stats1.json contains filter to remove secondary, supplementary, qcfail
+    s1 = outdir / "tmpdir" / f"{sname}.tmp.stats1.json"
+    with s1.open('r') as indata:
+        d1 = json.loads(indata.read())
+
+    # tmp.stats_dups.json (if present) contains filter to remove dups
+    sd = outdir / "tmpdir" / f"{sname}.tmp.stats_dups.txt"
+    if sd.exists():
+        with sd.open('r') as indata:
+            a = d1['records_filter_accepted']
+            b = [int(i.split()[-1]) for i in indata.readlines() if i.startswith("DUPLICATE TOTAL")][0]
+            dd = {
+                'records_processed': a,
+                'records_filter_accepted': a - b,
+                'records_filter_rejected': b,
+            }
+    else:
+        dd = {"records_filter_rejected": 0}
+
+    # tmp.stats2.json contains filter to remove mapping quality < q
+    s2 = outdir / "tmpdir" / f"{sname}.tmp.stats2.json"
+    with s2.open('r') as indata:
+        d2 = json.loads(indata.read())
+
+    # tmp stats3.json contains filter to remove bad pairs.
+    s3 = outdir / "tmpdir" / f"{sname}.tmp.stats3.json"
+    with s3.open('r') as indata:
+        d3 = json.loads(indata.read())
+
+    # get mean, std of mapq
+    bam_file = outdir / f"{sname}.filtered.bam"
+    cmd1 = [BIN_SAMTOOLS, "view", str(bam_file)]
+    cmd2 = ["cut", "-f", "5"]
+    _, out, _ = run_pipeline([cmd1, cmd2])
+    out = np.array(list(map(int, out.decode().strip().split())))
+    if out.size:
+        mean_mapq = np.mean(out)
+        median_mapq = np.median(out)
+        stdev_mapq = np.std(out)
+    else:
+        mean_mapq = float('nan')
+        median_mapq = float('nan')
+        stdev_mapq = float('nan')
+
+    data = {
+        "nreads_processed": d1["records_processed"],
+        "nreads_filtered_by_not_primary": d1["records_filter_rejected"],
+        "nreads_filtered_by_duplicates": dd["records_filter_rejected"],
+        "nreads_filtered_by_min_mapq": d2["records_filter_rejected"],
+        "nreads_filtered_by_bad_pairing": d3["records_filter_rejected"],
+        "nreads_passed_filters": d3["records_filter_accepted"],
+        "proportion_reads_passed_filters": float(d3["records_filter_accepted"] / d1["records_processed"]),
+        "mapq_mean_after_filters": float(mean_mapq),
+        "mapq_median_after_filters": float(median_mapq),
+        "mapq_stdev_after_filters": float(stdev_mapq),
+    }
+    s1.unlink()
+    s2.unlink()
+    s3.unlink()
+    if sd.exists():
+        sd.unlink()
+    return data
 
 
 def index_ref_with_bwa(reference: Path) -> None:
@@ -390,7 +452,8 @@ def run_mapper(
 
     # run map, filter, sort
     logger.info(f"mapping and filtering {len(fastq_dict)} inputs to bams in {outdir}")
-    logger.info(f"running up to {workers} parallel jobs each using up to {threads} threads")
+    logger.info(f"using up to {cores} cores (up to {workers} multi-threaded jobs using {threads} threads)")
+    # logger.info(f"running up to {workers} parallel jobs each using up to {threads} threads")
     jobs = {}
     for sname, fastq_tuple in fastq_dict.items():
         kwargs = dict(
@@ -410,34 +473,41 @@ def run_mapper(
         else:
             raise NotImplementedError("TODO: SE data.")
     # run mapping jobs in parallel
-    bam_dict = run_with_pool(jobs, log_level, workers)
+    run_with_pool(jobs, log_level, workers)
 
     # get bam file stats and write to a file
     jobs = {}
-    for sname, bam_file in bam_dict.items():
-        jobs[sname] = (count_mapped_reads, dict(bam_file=bam_file, threads=threads))
+    for sname in fastq_dict:
+        jobs[sname] = (count_mapped_reads, dict(sname=sname, outdir=outdir))
     stats = run_with_pool(jobs, log_level, workers)
 
     # get a new stats outfile path in outdir
     idx = 0
     while 1:
-        outstats = outdir / f"ipyrad_trim_stats_{idx}.txt"
+        outstats = outdir / f"ipyrad_map_stats_{idx}.txt"
         if outstats.exists():
             idx += 1
         else:
             break
 
     # write stats
-    df = pd.DataFrame(index=sorted(fastq_dict), columns=["mapped_primary", "mapped_duplicates"])
-    for key in stats:
-        df.loc[key, :] = stats[key]['mapped_primary'], stats[key]['mapped_duplicates']
-    df.to_string(outstats, float_format=lambda x: f"{x:.6f}")
+    df = pd.DataFrame(stats).T
+    df.to_string(
+        outstats,
+        formatters={
+            "nreads_processed": lambda x: f"{int(x)}",
+            "nreads_filtered_by_not_primary": lambda x: f"{int(x)}",
+            "nreads_filtered_by_duplicates": lambda x: f"{int(x)}",
+            "nreads_filtered_by_min_mapq": lambda x: f"{int(x)}",
+            "nreads_filtered_by_bad_pairing": lambda x: f"{int(x)}",
+            "nreads_passed_filters": lambda x: f"{int(x)}",
+            "proportion_reads_passed_filters": lambda x: f"{x:.3f}",
+            "mapq_mean_after_filters": lambda x: f"{x:.3f}",
+            "mapq_median_after_filters": lambda x: f"{x:.3f}",
+            "mapq_stdev_after_filters": lambda x: f"{x:.3f}",
+        },
+    )
     logger.info(f"mapping stats written to {outstats}")
-    # with open(outstats, 'w') as out:
-    #     out.write("sample\tmapped_primary\tmapped_duplicates\n")
-    #     for key in sorted(stats):
-    #         out.write(f"{key}\t{stats[key]['mapped_primary']}\t{stats[key]['mapped_duplicates']}\n")
-
 
 
 if __name__ == "__main__":

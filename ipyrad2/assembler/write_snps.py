@@ -61,18 +61,19 @@ def get_fai_values(reference: Path, key: str) -> np.ndarray:
 def _choose_chunk_snps(
     nsamples: int,
     target_mb: int = 16,
-    typical_window: int = 100_000,
-    min_snps: int = 8_192,
-    max_snps: int = 262_144,
+    # typical_window: int = 100_000,
+    # min_snps: int = 8_192,
+    # max_snps: int = 262_144,
 ) -> int:
     """#SNPs per chunk so each genos chunk ≈ target_mb and aligns with your window."""
     bytes_per_snp = max(1, nsamples * 3)             # uint8 * 3 planes
     by_size = int((target_mb * 1024 * 1024) // bytes_per_snp)
-    snps = min(max(by_size, min_snps), max_snps)
-    # bias toward your window (don’t exceed it much)
-    snps = min(snps, typical_window)
-    # round to nice boundary
-    return max(4096, (snps // 4096) * 4096)
+    return by_size
+    # snps = min(max(by_size, min_snps), max_snps)
+    # # bias toward your window (don’t exceed it much)
+    # snps = min(snps, typical_window)
+    # # round to nice boundary
+    # return max(4096, (snps // 4096) * 4096)
 
 
 def write_snps_hdf5(
@@ -80,7 +81,6 @@ def write_snps_hdf5(
     outdir: Path,
     snames: List[str],
     reference: Path,
-    scaffold_order: Optional[List[str]] = None,
 ):
     """Stream VCF→HDF5 with read-optimized chunking."""
     # paths
@@ -95,7 +95,7 @@ def write_snps_hdf5(
     nsamples = len(snames)
 
     # pick chunk size along SNP axis (tuned for read-many)
-    chunk_snps = _choose_chunk_snps(nsamples, target_mb=256, typical_window=100_000)
+    chunk_snps = _choose_chunk_snps(nsamples, target_mb=256)#, typical_window=100_000)
 
     # HDF5 file/open options
     kwargs = dict(libver="latest", rdcc_nbytes=512*1024*1024, rdcc_nslots=2_000_003)
@@ -165,7 +165,7 @@ def write_snps_hdf5(
             total = new_total
 
         # drain generator
-        it = iter_vcf_filtered_snps_with_bed(vcf_path, loci_bed, snames, scaffold_order)
+        it = iter_vcf_filtered_snps_with_bed(vcf_path, loci_bed, snames)
         for bed_idx, var_idx_in_bed, offset_in_bed, scaff_idx, pos0, scaff_name, REF, ALT, QUAL, GT in it:
             # map row
             buf_map[fill, 0] = np.uint64(bed_idx)
@@ -189,31 +189,23 @@ def write_snps_hdf5(
     logger.debug(f"wrote snps dataset to {database} (nsnps={total:,})")
 
 
-def load_bed_index_nonoverlap(
-    bed_path: Union[str, Path],
-    scaffold_order: Optional[List[str]] = None,
-) -> Tuple[Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]], Dict[str, int]]:
+def load_bed_index_nonoverlap(bed_path: Union[str, Path]) -> Tuple[Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]], Dict[str, int]]:
     """Load a non-overlapping BED into per-chrom arrays and a scaffold index map."""
-    bed_path = str(bed_path)
-    compression = "gzip" if bed_path.endswith(".gz") else None
-
     df = pd.read_csv(
         bed_path,
         sep="\t",
         header=None,
-        comment="#",
-        compression=compression,
-        dtype={0: str, 1: "Int64", 2: "Int64"},
+        dtype={0: str, 1: "Int64", 2: "Int64", 3: "Int64"},
         engine="c",
         na_filter=False,
     )
-    if df.shape[1] < 3:
-        raise ValueError("BED must have at least 3 columns (chrom, start, end).")
-
     df = df[[0, 1, 2]].rename(columns={0: "chrom", 1: "start", 2: "end"})
-    df = df[df["start"].notna() & df["end"].notna() & (df["start"] >= 0) & (df["end"] > df["start"])]
+
+    # unneccesary
+    # df = df[df["start"].notna() & df["end"].notna() & (df["start"] >= 0) & (df["end"] > df["start"])]
     df["bed_idx"] = df.index.to_numpy()
 
+    # iterate over chroms filling bed_index and chrom_order dicts
     bed_index: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
     chrom_order: List[str] = []
 
@@ -227,8 +219,8 @@ def load_bed_index_nonoverlap(
             raise ValueError(f"BED intervals overlap on {chrom}, but non-overlap was assumed.")
         bed_index[chrom] = (starts, ends, idxs)
 
-    scaff2idx = {name: i for i, name in enumerate(scaffold_order)} if scaffold_order \
-                else {name: i for i, name in enumerate(chrom_order)}
+    # make dict mapping {scaff-name: scaff-idx}
+    scaff2idx = {name: i for i, name in enumerate(chrom_order)}
     return bed_index, scaff2idx
 
 
@@ -297,11 +289,10 @@ def iter_vcf_filtered_snps_with_bed(
     vcf_path: Union[str, Path],
     bed_path: Union[str, Path],
     snames: List[str],
-    scaffold_order: Optional[List[str]] = None,
 ) -> Iterator[Tuple[int, int, int, int, int, str, str, str, str, np.ndarray]]:
-    """
-    Iterate a VCF(.gz) and yield records with FILTER==PASS and NOT having 'INDEL' in INFO.
-    For each record, also return genotypes for `snames` as a (nsamples, 3) uint8 array:
+    """Iterate a VCF(.gz) and yield records with FILTER==PASS and NOT 'INDEL' in INFO.
+
+    For each record, returns genotypes for `snames` as a (nsamples, 3) uint8 array:
       [:,0:2] = allele indexes (0=REF, 1=first ALT, ...; 255=missing)
       [:,2]   = ASCII ord of a single-letter call:
                 'N' for missing/undeterminable,
@@ -316,7 +307,7 @@ def iter_vcf_filtered_snps_with_bed(
       - ValueError if any `snames` are absent from the VCF header
       - ValueError if a record lacks a GT field in FORMAT
     """
-    bed_index, scaff2idx = load_bed_index_nonoverlap(bed_path, scaffold_order)
+    bed_index, scaff2idx = load_bed_index_nonoverlap(bed_path)
 
     # per-interval counters (for var_idx_in_bed)
     counters: Dict[str, np.ndarray] = {
@@ -324,12 +315,9 @@ def iter_vcf_filtered_snps_with_bed(
         for chrom in bed_index
     }
 
-    vcf_path = str(vcf_path)
-    _open = gzip.open if vcf_path.endswith(".gz") else open
-
     sample_cols: Optional[List[int]] = None
 
-    with _open(vcf_path, "rt") as fh:
+    with gzip.open(vcf_path, "rt") as fh:
         for line in fh:
             if line.startswith("##"):
                 continue
@@ -342,14 +330,14 @@ def iter_vcf_filtered_snps_with_bed(
                     raise ValueError(f"Samples not found in VCF header: {missing}")
                 sample_cols = [name_to_col[s] for s in snames]
                 continue
-
+            # format check
             if sample_cols is None:
                 raise ValueError("VCF header (#CHROM) not found before records.")
-
+            # parse record; format check
             parts = line.rstrip("\n").split("\t")
             if len(parts) < 8:
                 continue
-
+            # parse record parts
             chrom, spos, _id, REF, ALT, QUAL, FILTER, INFO = parts[:8]
 
             # gates
@@ -358,6 +346,7 @@ def iter_vcf_filtered_snps_with_bed(
             if "INDEL" in INFO.split(";"):
                 continue
 
+            # get position zero-indexed and scaff name and idx zero-ind
             try:
                 pos = int(spos)
             except ValueError:
@@ -366,6 +355,7 @@ def iter_vcf_filtered_snps_with_bed(
             scaff_name = chrom
             scaff_idx = scaff2idx.get(scaff_name, -1)
 
+            # ... returns (starts, ends, bedidx)
             tup = bed_index.get(chrom)
             if tup is None:
                 raise ValueError(f"Variant {chrom}:{pos} not covered by BED (chrom absent).")

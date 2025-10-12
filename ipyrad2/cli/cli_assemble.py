@@ -40,10 +40,10 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         "-r", "--reference", metavar="Path", type=Path, required=True,
         help="Path to the reference fasta used in the mapping step",
     )
-    # tool.add_argument(
-    #     "-b", "--loci-bed", metavar="Path", type=Path,
-    #     help="Optional bed file delimiting loci on the reference genome.",
-    # )
+    tool.add_argument(
+        "-b", "--loci-bed", metavar="Path", type=Path,
+        help="Optional bed file delimiting loci on the reference genome.",
+    )
     tool.add_argument(
         "-n", "--name", metavar="str", type=str, default="assembly",
         help="Prefix name for output files. [default=assembly]",
@@ -51,6 +51,10 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
     tool.add_argument(
         "-o", "--out", metavar="Path", type=Path, default="./OUT",
         help="Directory for results and stat files. Created if it doesn't exist. [default=./OUT]",
+    )
+    tool.add_argument(
+        "-qm", "--min-map-q", metavar="int", type=int, default=10,
+        help="Min mapping quality (MAPQ: 'confidence in the alignment'). [default=10]."
     )
     tool.add_argument(
         "-qs", "--min-site-q", metavar="int", type=int, default=20,

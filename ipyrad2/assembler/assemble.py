@@ -11,9 +11,8 @@ import pandas as pd
 from .beds import (
     get_name_from_bam,
     get_reference_sort_order,
-    get_fragment_beds,
-    get_fragment_coverage_beds,
     get_fragment_merged_coverage_beds,
+    get_coverage_bed_graphs,
     get_across_sample_loci_bed,
     get_sample_coverage_stats_in_loci_bed,
 )
@@ -46,6 +45,8 @@ def run_assembler(
     reference: Path,
     outdir: Path,
     name: str,
+    loci_bed: Path | None,
+    min_map_q: int,
     min_site_q: int,
     min_geno_q: int,
     min_base_q: int,
@@ -64,11 +65,11 @@ def run_assembler(
     force: bool,
     log_level: str,
     ):
-    # check reference and outdir paths
+    # expand paths
+    loci_bed = loci_bed.expanduser().absolute() if loci_bed else None
     reference = reference.expanduser().absolute()
     outdir = outdir.expanduser().absolute()
     tmpdir = outdir / "tmpdir"
-    tmpdir.mkdir(exist_ok=True, parents=True)
 
     # run this many multithreaded jobs concurrently
     workers = max(1, cores // threads)
@@ -94,12 +95,21 @@ def run_assembler(
                 if r.exists():
                     r.unlink()
 
+    # ensure directory structure
+    outdir.mkdir(exist_ok=True, parents=True)
+    tmpdir.mkdir(exist_ok=True)
+    bed_dir = tmpdir / "beds"
+    bed_dir.mkdir(exist_ok=True)
+    vcf_dir = tmpdir / "vcfs"
+    vcf_dir.mkdir(exist_ok=True)
+    consensus_dir = tmpdir / "consensus_seqs"
+    consensus_dir.mkdir(exist_ok=True)
+
     # raises exception if no RAD bams found. Fills {name: bam, ...}
     bam_dict = {}
     if rad_bams:
         for bam_file in rad_bams:
             sname = get_name_from_bam(bam_file)
-            # currently do not support, but should we?
             if sname in bam_dict:
                 raise IPyradError(f"Multiple input files of sample name {sname}")
             bam_dict[sname] = bam_file.expanduser().absolute()
@@ -112,7 +122,6 @@ def run_assembler(
     if wgs_bams:
         for bam_file in wgs_bams:
             sname = get_name_from_bam(bam_file)
-            # currently do not support, but should we?
             if sname in wgs_dict:
                 raise IPyradError(f"Multiple input files of sample name {sname}")
             wgs_dict[sname] = bam_file.expanduser().absolute()
@@ -125,46 +134,47 @@ def run_assembler(
     all_dict = {i: all_dict[i] for i in snames}
 
     # ---------------------------------------------
-    logger.info(f"running up to {workers} parallel jobs each using up to {threads} threads")
+    logger.info(f"using up to {cores} cores (up to {workers} multi-threaded jobs using {threads} threads)")
     logger.debug("fetching reference scaffold order")
+    get_reference_sort_order(reference, tmpdir)
 
     # ------------------------------------------------------------------
     # ---- LOCUS DELIMITING --------------------------------------------
     # ------------------------------------------------------------------
-    get_reference_sort_order(reference, tmpdir)
-    logger.info("delimiting sample coverage beds")
-    jobs = {}
-    for sname, bam_file in bam_dict.items():
-        kwargs = dict(sname=sname, bam_file=bam_file, threads=threads, outdir=tmpdir)
-        jobs[sname] = (get_fragment_beds, kwargs)
-    run_with_pool(jobs, log_level, cores)
+    if loci_bed is not None:
+        # copy input loci file to tmpdir/beds/loci.bed
+        loci_bed = shutil.copy2(loci_bed, tmpdir / "beds" / "loci.bed")
+        loci_bed = tmpdir / "beds" / "loci.bed"
+    else:
+        logger.info("delimiting sample coverage beds")
 
-    jobs = {}
-    for sname, bam_file in bam_dict.items():
-        kwargs = dict(sname=sname, reference=reference, outdir=tmpdir)
-        jobs[sname] = (get_fragment_coverage_beds, kwargs)
-    run_with_pool(jobs, log_level, cores)              # single-threaded
+        jobs = {}
+        for sname, bam_file in bam_dict.items():
+            kwargs = dict(sname=sname, bam_file=bam_file, reference=reference, min_map_q=10, threads=threads, tmpdir=tmpdir)
+            jobs[sname] = (get_coverage_bed_graphs, kwargs)
+        run_with_pool(jobs, log_level, workers)            # multithreaded
 
-    jobs = {}
-    for sname, bam_file in bam_dict.items():
-        kwargs = dict(sname=sname, outdir=tmpdir)
-        jobs[sname] = (get_fragment_merged_coverage_beds, kwargs)
-    run_with_pool(jobs, log_level, cores)              # single-threaded
+        jobs = {}
+        for sname, bam_file in bam_dict.items():
+            kwargs = dict(sname=sname, tmpdir=tmpdir)
+            jobs[sname] = (get_fragment_merged_coverage_beds, kwargs)
+        run_with_pool(jobs, log_level, cores)              # single-threaded
 
-    logger.info("delimiting shared coverage beds (loci)")
-    get_across_sample_loci_bed(
-        list(bam_dict),
-        min_locus_sample_coverage,
-        min_locus_merge_distance,
-        min_locus_length,
-        tmpdir,
-    )
+        logger.info("delimiting shared coverage beds (loci)")
+        get_across_sample_loci_bed(
+            list(bam_dict),
+            min_locus_sample_coverage,
+            min_locus_merge_distance,
+            min_locus_length,
+            tmpdir,
+        )
 
     # Maybe not necessary, we measure coverage on the filtered loci later.
     logger.info("measuring sample coverage in loci")
     jobs = {}
     for sname, bam_file in all_dict.items():
-        jobs[sname] = (get_sample_coverage_stats_in_loci_bed, dict(bam_file=bam_file, outdir=tmpdir))
+        kwargs = dict(bam_file=bam_file, tmpdir=tmpdir)
+        jobs[sname] = (get_sample_coverage_stats_in_loci_bed, kwargs)
     cov_stats = run_with_pool(jobs, log_level, workers)
     nr_loci = sum([cov_stats[sname]["nloci_with_nonzero_mapping"] for sname in jobs])
     if not nr_loci:
@@ -174,31 +184,36 @@ def run_assembler(
     # ---- VARIANT CALLING ---------------------------------------------
     # ------------------------------------------------------------------
     logger.info("calling variants in locus beds")
-    nchunks = max(4, int(workers / threads) * 2)
+    # Each variant calling worker can effectively use ~3 threads
+    vworkers = int(cores // 3)
+    nchunks = max(10, vworkers)
     locus_chunks = get_chunked_loci_beds(tmpdir, nchunks)
     jobs = {}
     for chunk in locus_chunks:
         kwargs = dict(
-            outdir=tmpdir,
+            tmpdir=tmpdir,
             reference=reference,
             bam_files=list(all_dict.values()),
             min_base_q=min_base_q,
+            min_map_q=min_map_q,
             locus_chunk=chunk,
-            threads=threads,
+            threads=3,
         )
         jobs[chunk] = (get_group_called_variants_in_vcf_chunks, kwargs)
-    run_with_pool(jobs, log_level, workers)   # multithreaded jobs.
+    # each job does not use much RAM, so run many at 1-3 threads per job
+    run_with_pool(jobs, log_level, vworkers)      # <=3 threads per job
     get_concat_chunk_vcfs(tmpdir, threads)
 
     logger.info("filtering variants")
-    # TODO: condier other quality filters here?
-    get_filtered_vcf(tmpdir, min_sample_depth, min_geno_q, min_site_q, cores)
+    # TODO: consider other quality filters here?
+    # view can only benefit from ~6 threads
+    get_filtered_vcf(tmpdir, min_sample_depth, min_geno_q, min_site_q, threads)
 
     logger.info("resolving indels and snps")
-    get_vcf_with_indels_resolved(tmpdir, reference, cores)
+    get_vcf_with_indels_resolved(tmpdir, reference, threads)
 
     # optional: maybe wait til after locus filtering...
-    stats = get_locus_and_snp_stats_in_loci_bed(tmpdir, cores)
+    stats = get_locus_and_snp_stats_in_loci_bed(tmpdir, threads)
 
     # ------------------------------------------------------------------
     # ---- CONSENSUS CALLING -------------------------------------------
@@ -210,14 +225,14 @@ def run_assembler(
     logger.info("building coverage masks")
     jobs = {}
     for sname, bam_file in all_dict.items():
-        kwargs = dict(sname=sname, bam_file=bam_file, min_sample_depth=min_sample_depth, outdir=tmpdir)
+        kwargs = dict(sname=sname, bam_file=bam_file, min_sample_depth=min_sample_depth, tmpdir=tmpdir)
         jobs[sname] = (get_sample_masked_beds, kwargs)
     _ = run_with_pool(jobs, log_level, workers)  # returns redundant stats info
 
     logger.info("extracting consensus sequences")
     jobs = {}
     for sname, bam_file in all_dict.items():
-        kwargs = dict(sname=sname, reference=reference, outdir=tmpdir, keep_insertions=False)
+        kwargs = dict(sname=sname, reference=reference, tmpdir=tmpdir, keep_insertions=False)
         jobs[sname] = (get_consensus, kwargs)
     run_with_pool(jobs, log_level, workers)
 
@@ -273,7 +288,7 @@ def run_assembler(
     logger.info("writing snps database (.hdf5)")
     write_snps_hdf5(name, outdir, list(all_dict), reference)
 
-    # final stats stuff?
+    # final stats stuff? TODO: write to file with other stuff...
     logger.warning(f"\n{stats}")
     logger.warning(f"\n{pd.DataFrame(cov_stats).T}")
     # shutil.rmtree(tmpdir)
