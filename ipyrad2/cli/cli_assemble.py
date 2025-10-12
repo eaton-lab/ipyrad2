@@ -53,6 +53,10 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="Directory for results and stat files. Created if it doesn't exist. [default=./OUT]",
     )
     tool.add_argument(
+        "-qm", "--min-map-q", metavar="int", type=int, default=10,
+        help="Min mapping quality (MAPQ: 'confidence in the alignment'). [default=10]."
+    )
+    tool.add_argument(
         "-qs", "--min-site-q", metavar="int", type=int, default=20,
         help="Min variant site quality (QUAL: 'confidence a site is variant'). [default=20]."
     )

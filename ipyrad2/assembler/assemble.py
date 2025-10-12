@@ -11,9 +11,8 @@ import pandas as pd
 from .beds import (
     get_name_from_bam,
     get_reference_sort_order,
-    get_fragment_beds,
-    get_fragment_coverage_beds,
     get_fragment_merged_coverage_beds,
+    get_coverage_bed_graphs,
     get_across_sample_loci_bed,
     get_sample_coverage_stats_in_loci_bed,
 )
@@ -47,6 +46,7 @@ def run_assembler(
     outdir: Path,
     name: str,
     loci_bed: Path | None,
+    min_map_q: int,
     min_site_q: int,
     min_geno_q: int,
     min_base_q: int,
@@ -110,7 +110,6 @@ def run_assembler(
     if rad_bams:
         for bam_file in rad_bams:
             sname = get_name_from_bam(bam_file)
-            # currently do not support, but should we?
             if sname in bam_dict:
                 raise IPyradError(f"Multiple input files of sample name {sname}")
             bam_dict[sname] = bam_file.expanduser().absolute()
@@ -123,7 +122,6 @@ def run_assembler(
     if wgs_bams:
         for bam_file in wgs_bams:
             sname = get_name_from_bam(bam_file)
-            # currently do not support, but should we?
             if sname in wgs_dict:
                 raise IPyradError(f"Multiple input files of sample name {sname}")
             wgs_dict[sname] = bam_file.expanduser().absolute()
@@ -149,17 +147,12 @@ def run_assembler(
         loci_bed = tmpdir / "beds" / "loci.bed"
     else:
         logger.info("delimiting sample coverage beds")
-        jobs = {}
-        for sname, bam_file in bam_dict.items():
-            kwargs = dict(sname=sname, bam_file=bam_file, threads=threads, tmpdir=tmpdir)
-            jobs[sname] = (get_fragment_beds, kwargs)
-        run_with_pool(jobs, log_level, workers)            # multithreaded
 
         jobs = {}
         for sname, bam_file in bam_dict.items():
-            kwargs = dict(sname=sname, reference=reference, tmpdir=tmpdir)
-            jobs[sname] = (get_fragment_coverage_beds, kwargs)
-        run_with_pool(jobs, log_level, cores)              # single-threaded
+            kwargs = dict(sname=sname, bam_file=bam_file, reference=reference, min_map_q=10, threads=threads, tmpdir=tmpdir)
+            jobs[sname] = (get_coverage_bed_graphs, kwargs)
+        run_with_pool(jobs, log_level, workers)            # multithreaded
 
         jobs = {}
         for sname, bam_file in bam_dict.items():
@@ -202,6 +195,7 @@ def run_assembler(
             reference=reference,
             bam_files=list(all_dict.values()),
             min_base_q=min_base_q,
+            min_map_q=min_map_q,
             locus_chunk=chunk,
             threads=3,
         )

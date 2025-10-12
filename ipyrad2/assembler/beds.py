@@ -49,6 +49,53 @@ def get_reference_sort_order(reference: Path, tmpdir: Path) -> Path:
     return out_path
 
 
+def get_coverage_bed_graphs(sname: str, bam_file: Path, reference: Path, tmpdir: Path, min_map_q: int, threads: int):
+    r"""Produce a fragments BED (full inserts) from a coordinate-sorted BAM.
+
+    Shell command
+    -------------
+    >>> $ samtools collate -u -@ 2 -O S1.sorted.bam \
+    >>>   | bedtools bamtobed -bedpe -i - \
+    >>>   | awk 'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}' \
+    >>>   | bedtools sort -i - \
+    >>>   | bedtools genomecov -i - -g REF.info -bg > S1.bedgraph
+    """
+    bed_dir = tmpdir / "beds"
+    bed_dir.mkdir(parents=True, exist_ok=True)
+    coll_dir = tmpdir / f"{sname}.collate"
+    coll_dir.mkdir(exist_ok=True)
+    out_path = bed_dir / f"{sname}.fragments.bedgraph"
+    fai_path = reference.with_suffix(reference.suffix + ".fai")
+
+    # CHECKED that this properly pipes on large files. It does.
+    # Note: collate has heavy I/O writing tmp files here.
+    cmd1 = [
+        BIN_SAM, "collate",
+        "-@", str(min(threads, 4)),             # doesn't benefit from >4
+        "-T", str(coll_dir / f"{sname}"),
+        "-r", "1000000",
+        "-u",
+        "-O",
+        str(bam_file),
+    ]
+    # stream the bed for each read pair
+    cmd2 = [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]
+    # filter pairs on mapq: applies same mapq min as in variants.py
+    cmd3 = ["awk", "-v", f'q={min_map_q}', r'BEGIN{OFS="\t"} ($8+0) >= q']
+    # check and pull out only chrom, start, end
+    cmd4 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
+    # sort beds
+    cmd5 = [BIN_BED, "sort", "-i", "-"]
+    # get coverage for each site from overlapping beds
+    cmd6 = [BIN_BED, "genomecov", "-i", "-", "-g", str(fai_path), "-bg"]
+    # pipeline
+    run_pipeline([cmd1, cmd2, cmd3, cmd4, cmd5, cmd6], out_path)
+    shutil.rmtree(coll_dir)
+    logger.debug(f"wrote bed graph for {sname}")
+    return out_path
+
+
+
 def get_fragment_beds(sname: str, bam_file: Path, threads: int, tmpdir: Path) -> Path:
     r"""Produce a fragments BED (full inserts) from a coordinate-sorted BAM.
 

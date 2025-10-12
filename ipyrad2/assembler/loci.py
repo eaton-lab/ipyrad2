@@ -457,11 +457,11 @@ def write_loci_and_stats_files(
                 total_filters[key] += int(result[4][key])
 
             # tmp debugging code
-            if sum(filters.values()):
-                logger.debug(result[4])
-                logger.debug(header)
-                for sname, seq in zip(tnames, tseqs):
-                    logger.debug(f"\n{padded[sname]}{bytes(seq).decode()}")
+            # if sum(filters.values()):
+            #     logger.debug(result[4])
+            #     logger.debug(header)
+            #     for sname, seq in zip(tnames, tseqs):
+            #         logger.debug(f"\n{padded[sname]}{bytes(seq).decode()}")
 
             # store for writing if locus passed filters
             if not sum(filters.values()):
@@ -515,13 +515,11 @@ def write_loci_and_stats_files(
     # write sample coverage -------------------------------------------
     sample_cov = pd.DataFrame(index=["nloci"], data={i: total_sample_cov[i] for i in total_sample_cov}).T
     sample_cov.to_string(outdir / f"{name}.stats_sample_cov.txt")
-    logger.warning(sample_cov)
 
     # write locus coverage stats --------------------------------------
     # TODO: add pre-filtered bed stats here.
     locus_cov = pd.DataFrame(index=['nloci'], data={i: total_locus_cov[i] for i in range(len(snames) + 1)}).T
     locus_cov.to_string(outdir / f"{name}.stats_locus_coverage.txt")
-    logger.warning(locus_cov)
 
     # report stats files to user
     logger.debug(f"wrote stats files to {outdir / f'{name}.stats_*'}")

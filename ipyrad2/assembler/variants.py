@@ -140,7 +140,7 @@ def get_chunked_loci_beds(tmpdir: Path, nchunks: int) -> List[Path]:
     return paths
 
 
-def get_group_called_variants_in_vcf_chunks(tmpdir: Path, reference: Path, bam_files: List[Path], locus_chunk: Path, min_base_q: int, threads: int):
+def get_group_called_variants_in_vcf_chunks(tmpdir: Path, reference: Path, bam_files: List[Path], locus_chunk: Path, min_map_q: int, min_base_q: int, threads: int):
     """Make variant calls for all samples using -G (groups).
 
     >>> $ bcftools mpileup \
@@ -162,8 +162,8 @@ def get_group_called_variants_in_vcf_chunks(tmpdir: Path, reference: Path, bam_f
     cmd1 = [
         BIN_BCF, "mpileup",
         "-f", str(reference),     # reference genome fa
-        "-q", "1",                # note the default is 0, but 1 is recommended
-        # "-q", str(min_map_q),   # if we apply -q here we need to apply same in beds.py
+        # "-q", "1",                # note the default is 0, but 1 is recommended
+        "-q", str(min_map_q),   # if we apply -q here we need to apply same in beds.py
         "-Q", str(min_base_q),    # default in mpileup is 13, but many use 20
         "-d", str(10_000),        # TODO: expose as param
         "-a", "FMT/DP,FMT/AD",    #
