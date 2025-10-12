@@ -22,7 +22,7 @@ def read_params(paramsfile: str):
     return params
 
 
-def write_params(outfile: str = None, force: bool = False):
+def new_params(name: str = None, force: bool = False):
     """ 
     Write out the parameters of this assembly to a file properly
     formatted as input for `ipyrad -p <params.txt>`. A good and
@@ -30,10 +30,10 @@ def write_params(outfile: str = None, force: bool = False):
     This is also the function that's used by __main__ to
     generate default params.txt files for `ipyrad -n`
     """
-    if outfile is None:
+    if name is None:
         outfile = "params-default.txt"
     else:
-        outfile = f"params-{outfile}.txt"
+        outfile = f"params-{name}.txt"
 
     ## Test if params file already exists?
     ## If not forcing, test for file and bail out if it exists
@@ -46,6 +46,15 @@ def write_params(outfile: str = None, force: bool = False):
         header = "# ------- ipyrad params file (v.{})".format(ip.__version__)
         header += ("-" * (80 - len(header))) + "\n"
         paramsfile.write(header + "\n")
+
+        doc = tomlkit.document()
+        main = {"main":{"name":name,
+                        "project_dir":"./",
+                        "raw_fastq_path":"/path/to/fastqs/*.gz",
+                        "barcodes_path":"/path/to/bcodes.txt",
+                        "reference_sequence":"/path/to/ref.fa"}}
+        doc.update(main)
+        paramsfile.write(tomlkit.dumps(doc) + "\n")
 
         parser = ip.cli.cli_main.setup_parsers()
         arg_defaults = _get_arg_defaults(parser)
@@ -150,7 +159,7 @@ PARAMS_EXISTS = """
 
 if __name__ == "__main__":
 
-        write_params(force=True)
+        new_params(force=True)
 
 # A different way to parse out params, but i think it's worse
 #def new_params(paramsfile: str):
