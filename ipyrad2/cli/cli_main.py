@@ -20,7 +20,6 @@ from ..assembler import run_assembler
 from ..analysis.window_extracter import run_window_extracter
 from ..utils.logger import set_log_level
 from ..utils.exceptions import IPyradError
-from ..utils.params import read_params, write_params
 from loguru import logger
 import ipyrad2 as ip
 
@@ -67,8 +66,6 @@ def setup_parsers() -> argparse.ArgumentParser:
         add_help=False,
     )
     parser.add_argument('-h', '--help', action='help', help=argparse.SUPPRESS)
-    parser.add_argument("-n", action='store', dest='new', help="create new file 'params-{new}.txt' in current directory")
-    parser.add_argument("-p", action='store', dest='params', help="path to params file for Assembly")
     parser.add_argument("-v", "--version", action='version', version=f"ipyrad {VERSION}")
     subparser = parser.add_subparsers(help="sub-commands", dest="subcommand")
 
@@ -103,18 +100,14 @@ def command_line():
     parser = setup_parsers()
     args = parser.parse_args()
 
-    if args.new:
-        _flagnew(args.new)
-        sys.exit(0)
-
-    if args.params is not None:
-        params = read_params(args.params)
-        print(params)
-
     # LOGGING: -----------------------------------------------------
     if hasattr(args, "log_level"):
         set_log_level(args.log_level, args.log_file)
 
+    run_subcommand(args)
+
+
+def run_subcommand(args):
     # DEMUX: -------------------------------------------------------
     if args.subcommand == "demux":
         logger.info("---------------------------------------------------------")
@@ -274,13 +267,6 @@ def command_line():
     # NO SUBCOMMAND: print help
     parser.print_help()
     sys.exit(0)
-
-
-def _flagnew(name):
-
-        write_params(name)
-        # print log to screen
-        print(f"\n  New file 'params-{name}.txt' created\n")
 
 
 
