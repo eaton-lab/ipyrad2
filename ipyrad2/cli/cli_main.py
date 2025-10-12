@@ -20,6 +20,7 @@ from ..assembler import run_assembler
 from ..analysis.window_extracter import run_window_extracter
 from ..utils.logger import set_log_level
 from ..utils.exceptions import IPyradError
+from ..utils.params import write_params
 from loguru import logger
 import ipyrad2 as ip
 
@@ -63,7 +64,11 @@ def setup_parsers() -> argparse.ArgumentParser:
         description=f"{HEADER}\n{DESCRIPTION}",
         epilog=EPILOG,
         formatter_class=make_wide(argparse.RawDescriptionHelpFormatter),
+        add_help=False,
     )
+    parser.add_argument('-h', '--help', action='help', help=argparse.SUPPRESS)
+    parser.add_argument("-n", action='store', dest='new', help="create new file 'params-{new}.txt' in current directory")
+    parser.add_argument("-p", action='store', dest='params', help="path to params file for Assembly")
     parser.add_argument("-v", "--version", action='version', version=f"ipyrad {VERSION}")
     subparser = parser.add_subparsers(help="sub-commands", dest="subcommand")
 
@@ -97,6 +102,13 @@ def main():
 def command_line():
     parser = setup_parsers()
     args = parser.parse_args()
+
+    if args.new:
+        _flagnew(args.new)
+        sys.exit(0)
+
+    if args.params is not None:
+        print(args.params)
 
     # LOGGING: -----------------------------------------------------
     if hasattr(args, "log_level"):
@@ -259,6 +271,14 @@ def command_line():
     # NO SUBCOMMAND: print help
     parser.print_help()
     sys.exit(0)
+
+
+def _flagnew(name):
+
+        write_params(name)
+        # print log to screen
+        print(f"\n  New file 'params-{name}.txt' created\n")
+
 
 
 if __name__ == "__main__":
