@@ -46,6 +46,7 @@ Issues = "https://github.com/eaton-lab/ipyrad2/issues"
 
 [project.scripts]
 ipyrad2 = "ipyrad2.cli:main"
+ipyrad2-classic = "ipyrad2.classic:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
