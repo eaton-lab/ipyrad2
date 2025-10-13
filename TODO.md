@@ -1,6 +1,7 @@
 
 # TODO
-- parallel: stderr writes temporarily to $TMPDIR. Allow user to set? Or use outdir/tmpdir?
+- assemble: add option --min-loci-per-sample (or similar?) to exclude samples from outfiles if < nloci
+- parallel: stderr writes temporarily to $TMPDIR. Instead set to outdir/tmpdir?
 - trim: allow users to enter their own (additional) adapters.
 - demux: update to parallelize using run_with_pool like all other code.
 - assemble: replace numba code to be pure numpy and remove numba as a dependency.
@@ -33,10 +34,14 @@
 - checkpointing: don't bail out if one result exists, skip finished ones and do unfinished ones?
 - option to keep genotype likelihoods, instead of discarding (easy).
 - denovo: WHY NOT use spades/assembly for denovo step instead of vsearch pipeline?
+  - ideas: assemble all samples data together, or per-sample and then find consensus?
+  - if former: does spades do poorly when samples are highly divergent?
+  - if former: can we implement graph splitting similar to current vsearch pipeline?
+  - if latter: the need to align and get consensus makes this not so different from current vsearch pipeline.
 - cli: develop `ipyrad {subcommand}` easy one-liner for full assembly from raw fastqs to outputs.
 - cli_main: log only a subset of the CMD because it looks ugly when too many file paths are expanded by the shell.
 - assemble: should we include insertions and do a MSA on final loci? Optional? Downsides: much slower,
-  and unaligns loci with the VCF.
+  and unaligns loci with the VCF positions, so relabel coordinates needed.
 - assemble: add a max-len arg to assemble. It will help to identify when users accidentally
   input WGS bams as rad data, and the assembled beds are waaay too big.
 
