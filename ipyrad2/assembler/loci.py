@@ -307,6 +307,7 @@ def filter_trim_locus(
         "min_samples": False,
         "max_variant_frequency": False,
         "max_shared_hetero_frequency": False,
+        "max_depth_outlier": False,
     }
     stats = {
         "locus_cov": 0,       # number of samples in locus
@@ -399,6 +400,7 @@ def write_loci_and_stats_files(
     min_locus_length: int,
     max_locus_hetero_frequency: float,
     max_locus_variant_frequency: float,
+    read_depth_mask: np.ndarray,
 ):
     """
     """
@@ -416,10 +418,15 @@ def write_loci_and_stats_files(
     padded = {n: n + (" " * (max_len - len(n))) for n in snames}
 
     # stats
-    keys = ["min_length", "min_samples", "max_variant_frequency", "max_shared_hetero_frequency"]
-    total_filters = {i: 0 for i in keys}
-    total_sample_cov = {i: 0 for i in [refname] + snames}
     total_locus_cov = Counter()
+    total_sample_cov = {i: 0 for i in [refname] + snames}
+    total_filters = {
+        "min_length": 0,
+        "min_samples": 0,
+        "max_variant_frequency": 0,
+        "max_shared_hetero_frequency": 0,
+        "max_depth_outlier": 0,
+    }
     total_stats = {
         "variant_sites": 0,
         "variant_phylo_informative_sites": 0,
@@ -433,12 +440,21 @@ def write_loci_and_stats_files(
     # build
     beds = []
     loci = []
-    lidx = 0
-    flidx = 0
+    lidx = 0    # counter of all loci
+    flidx = 0   # counter of loci that passed filters
     # locus_iter = iter_parse_loci(database)
     with open(loci_file, 'w') as out:
         # for lidx, liter in enumerate(locus_iter):
         for oheader, ldict in iter_parse_loci(database):
+
+            # skip if masked by max depth zscore
+            if read_depth_mask[lidx]:
+                lidx += 1
+                total_filters["max_depth_outlier"] += 1
+                logger.debug(f"filtered by max_depth_outlier: locus {lidx}")
+                continue
+
+            # apply trim and filters to locus
             args = (
                 oheader,
                 ldict,
@@ -450,7 +466,6 @@ def write_loci_and_stats_files(
             )
             result = filter_trim_locus(*args)
             header, tnames, tseqs, snpsarr, filters, stats = result
-            # logger.warning(filters)
 
             # update total dicts
             for key in total_filters:

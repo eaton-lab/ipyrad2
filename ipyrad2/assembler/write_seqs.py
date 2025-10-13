@@ -85,6 +85,7 @@ def write_seqs_hdf5(
     min_locus_length: int,
     max_locus_hetero_frequency: float,
     max_locus_variant_frequency: float,
+    read_depth_mask: np.ndarray,
 ):
     """Write seqs h5 database from loci file.
     """
@@ -106,7 +107,7 @@ def write_seqs_hdf5(
     )
 
     # get the data generator
-    params = (min_locus_sample_coverage, min_locus_trim_sample_coverage, min_locus_length, max_locus_hetero_frequency, max_locus_variant_frequency)
+    params = (min_locus_sample_coverage, min_locus_trim_sample_coverage, min_locus_length, max_locus_hetero_frequency, max_locus_variant_frequency, read_depth_mask)
     iter_chunks = iter_super_matrix_chunks_from_database(snames, database, reference, chunk_size, *params)
 
     # open H5: 512 MB raw data chunk cache, many hash slots reduces collisions
@@ -174,6 +175,7 @@ def iter_super_matrix_chunks_from_database(
     min_locus_length: int,
     max_locus_hetero_frequency: float,
     max_locus_variant_frequency: float,
+    read_depth_mask: np.ndarray,
 ):
     """Parse and filter loci and yield in chunks."""
 
@@ -192,7 +194,14 @@ def iter_super_matrix_chunks_from_database(
     # iterate to fill chunkarr
     phypos = 0
     cursor = 0
+    lidx = 0
     for oheader, ldict in iter_parse_loci(database):
+        # skip if locus failed depth outlier filter
+        if read_depth_mask[lidx]:
+            lidx += 1
+            continue
+
+        # trim and filter the locus
         args = (
             oheader,
             ldict,
@@ -231,6 +240,7 @@ def iter_super_matrix_chunks_from_database(
                 # chunkarr = np.zeros((nsamples, CHUNKSIZE * 2), dtype=np.uint8)
                 chunkmap = []
                 cursor = 0  # reset cursor but not phypos
+        lidx += 1
 
     # trim extra, fill empty to N, convert map to array
     if cursor:

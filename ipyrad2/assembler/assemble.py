@@ -7,6 +7,7 @@ from typing import List
 import shutil
 from pathlib import Path
 from loguru import logger
+import numpy as np
 import pandas as pd
 from .beds import (
     get_name_from_bam,
@@ -147,7 +148,6 @@ def run_assembler(
         loci_bed = tmpdir / "beds" / "loci.bed"
     else:
         logger.info("delimiting sample coverage beds")
-
         jobs = {}
         for sname, bam_file in bam_dict.items():
             kwargs = dict(sname=sname, bam_file=bam_file, reference=reference, min_map_q=10, threads=threads, tmpdir=tmpdir)
@@ -161,24 +161,30 @@ def run_assembler(
         run_with_pool(jobs, log_level, cores)              # single-threaded
 
         logger.info("delimiting shared coverage beds (loci)")
-        get_across_sample_loci_bed(
-            list(bam_dict),
-            min_locus_sample_coverage,
-            min_locus_merge_distance,
-            min_locus_length,
-            tmpdir,
-        )
+        args = (list(bam_dict), min_locus_sample_coverage, min_locus_merge_distance, min_locus_length, tmpdir)
+        get_across_sample_loci_bed(*args)
 
-    # Maybe not necessary, we measure coverage on the filtered loci later.
-    logger.info("measuring sample coverage in loci")
+    # if tmpdir/beds/loci.bed is empty, bail
+    if (tmpdir / "beds" / "loci.bed").stat().st_size == 0:
+        logger.error("No loci passed filtering")
+        raise SystemExit(1)
+
+    # write the final stats of coverage per loci
+    logger.info("measuring per locus stats")
     jobs = {}
     for sname, bam_file in all_dict.items():
-        kwargs = dict(bam_file=bam_file, tmpdir=tmpdir)
+        kwargs = dict(bam_file=bam_file, name=name, loci_bed=tmpdir / "beds" / "loci.bed")
         jobs[sname] = (get_sample_coverage_stats_in_loci_bed, kwargs)
-    cov_stats = run_with_pool(jobs, log_level, workers)
-    nr_loci = sum([cov_stats[sname]["nloci_with_nonzero_mapping"] for sname in jobs])
-    if not nr_loci:
-        raise IPyradError("No loci have sample coverage >= 'min_locus_sample_coverage'. Consider lowering this parameter.")
+    results = run_with_pool(jobs, log_level, workers)
+
+    # store locus stats before filtering.
+    stats_before = pd.DataFrame(data={i: results[i][0] for i in snames}).T
+
+    # store read depth outlier mask
+    covs = [i[1] for i in results.values()]
+    read_depth_zscores = np.vstack(covs).mean(axis=0)
+    read_depth_mask = read_depth_zscores > 5.0
+    # logger.warning(read_depth_mask)
 
     # ------------------------------------------------------------------
     # ---- VARIANT CALLING ---------------------------------------------
@@ -202,18 +208,16 @@ def run_assembler(
         jobs[chunk] = (get_group_called_variants_in_vcf_chunks, kwargs)
     # each job does not use much RAM, so run many at 1-3 threads per job
     run_with_pool(jobs, log_level, vworkers)      # <=3 threads per job
+
+    # write concatenated loci chunks
     get_concat_chunk_vcfs(tmpdir, threads)
 
     logger.info("filtering variants")
     # TODO: consider other quality filters here?
-    # view can only benefit from ~6 threads
     get_filtered_vcf(tmpdir, min_sample_depth, min_geno_q, min_site_q, threads)
 
     logger.info("resolving indels and snps")
     get_vcf_with_indels_resolved(tmpdir, reference, threads)
-
-    # optional: maybe wait til after locus filtering...
-    stats = get_locus_and_snp_stats_in_loci_bed(tmpdir, threads)
 
     # ------------------------------------------------------------------
     # ---- CONSENSUS CALLING -------------------------------------------
@@ -227,7 +231,7 @@ def run_assembler(
     for sname, bam_file in all_dict.items():
         kwargs = dict(sname=sname, bam_file=bam_file, min_sample_depth=min_sample_depth, tmpdir=tmpdir)
         jobs[sname] = (get_sample_masked_beds, kwargs)
-    _ = run_with_pool(jobs, log_level, workers)  # returns redundant stats info
+    run_with_pool(jobs, log_level, cores)
 
     logger.info("extracting consensus sequences")
     jobs = {}
@@ -240,14 +244,8 @@ def run_assembler(
     # ---- LOCUS BUILDING ----------------------------------------------
     # ------------------------------------------------------------------
     logger.info("assembling loci")
-    build_locus_fasta_database(
-        name,
-        snames,
-        reference,
-        tmpdir,
-        exclude_reference,
-        masks,
-    )
+    args = (name, snames, reference, tmpdir, exclude_reference, masks)
+    build_locus_fasta_database(*args)
 
     # ------------------------------------------------------------------
     # ---- DATABASE WRITING --------------------------------------------
@@ -264,6 +262,7 @@ def run_assembler(
             min_locus_length=min_locus_length,
             max_locus_hetero_frequency=max_locus_hetero_frequency,
             max_locus_variant_frequency=max_locus_variant_frequency,
+            read_depth_mask=read_depth_mask,
         )),
         "seqs": (write_seqs_hdf5, dict(
             name=name,
@@ -276,6 +275,7 @@ def run_assembler(
             min_locus_length=min_locus_length,
             max_locus_hetero_frequency=max_locus_hetero_frequency,
             max_locus_variant_frequency=max_locus_variant_frequency,
+            read_depth_mask=read_depth_mask,
         ))
     }
     run_with_pool(jobs, log_level, workers)
@@ -288,10 +288,42 @@ def run_assembler(
     logger.info("writing snps database (.hdf5)")
     write_snps_hdf5(name, outdir, list(all_dict), reference)
 
-    # final stats stuff? TODO: write to file with other stuff...
-    logger.warning(f"\n{stats}")
-    logger.warning(f"\n{pd.DataFrame(cov_stats).T}")
-    # shutil.rmtree(tmpdir)
+    # ------------------------------------------------------------------
+    # ---- STATS CALC/WRITING ------------------------------------------
+    # ------------------------------------------------------------------
+    # calculate and write depths per (final) loci for each sample.
+    logger.info("measuring per locus stats")
+    jobs = {}
+    for sname, bam_file in all_dict.items():
+        kwargs = dict(bam_file=bam_file, name=name, loci_bed=outdir / f"{name}.bed")
+        jobs[sname] = (get_sample_coverage_stats_in_loci_bed, kwargs)
+    results = run_with_pool(jobs, log_level, workers)
+    df = pd.DataFrame(data={i: results[i][0] for i in snames}).T
+    df["nloci_before_filtering"] = stats_before["nloci"]
+    df["mean_depth_per_locus_with_nonzero_mapping_before_filtering"] = stats_before["mean_depth_per_locus_with_nonzero_mapping"]
+    df["median_depth_per_locus_with_nonzero_mapping_before_filtering"] = stats_before["median_depth_per_locus_with_nonzero_mapping"]
+    df["std_depth_per_locus_with_nonzero_mapping_before_filtering"] = stats_before["std_depth_per_locus_with_nonzero_mapping"]
+    df.to_string(
+        outdir / f"{name}.stats_depths.txt",
+        formatters={
+            "nloci": lambda x: f"{int(x)}",
+            "nloci_before_filtering": lambda x: f"{int(x)}",
+            "mean_depth_per_locus_total": lambda x: f"{x:.3f}",
+            "median_depth_per_locus_total": lambda x: f"{int(x)}",
+            "std_depth_per_locus_total": lambda x: f"{x:.3f}",
+            "mean_depth_per_locus_with_nonzero_mapping": lambda x: f"{x:.3f}",
+            "median_depth_per_locus_with_nonzero_mapping": lambda x: f"{int(x)}",
+            "std_depth_per_locus_with_nonzero_mapping": lambda x: f"{x:.3f}",
+            "mean_depth_per_locus_with_nonzero_mapping_before_filtering": lambda x: f"{x:.3f}",
+            "median_depth_per_locus_with_nonzero_mapping_before_filtering": lambda x: f"{int(x)}",
+            "std_depth_per_locus_with_nonzero_mapping_before_filtering": lambda x: f"{x:.3f}",
+        },
+    )
+
+    # calculate and report number of variants in final loci
+    # covs = [i[1] for i in results.values()]
+    stats = get_locus_and_snp_stats_in_loci_bed(tmpdir, threads)
+    logger.debug(f"{stats}")
 
 
 if __name__ == "__main__":

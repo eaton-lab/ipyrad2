@@ -11,6 +11,7 @@ import shutil
 from pathlib import Path
 import numpy as np
 from loguru import logger
+from ..utils.exceptions import IPyradError
 from ..utils.parallel import run_pipeline
 
 BIN = Path(sys.prefix) / "bin"
@@ -96,64 +97,64 @@ def get_coverage_bed_graphs(sname: str, bam_file: Path, reference: Path, tmpdir:
 
 
 
-def get_fragment_beds(sname: str, bam_file: Path, threads: int, tmpdir: Path) -> Path:
-    r"""Produce a fragments BED (full inserts) from a coordinate-sorted BAM.
+# def get_fragment_beds(sname: str, bam_file: Path, threads: int, tmpdir: Path) -> Path:
+#     r"""Produce a fragments BED (full inserts) from a coordinate-sorted BAM.
 
-    Shell command
-    -------------
-    >>> $ samtools collate -u -@ 2 -O S1.sorted.bam \
-    >>>   | bedtools bamtobed -bedpe -i - \
-    >>>   | awk 'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}' \
-    >>>   | bedtools sort -i - > S1.fragments.bed
-    """
-    bed_dir = tmpdir / "beds"
-    out_path = bed_dir / f"{sname}.fragments.bed"
-    bed_dir.mkdir(parents=True, exist_ok=True)
+#     Shell command
+#     -------------
+#     >>> $ samtools collate -u -@ 2 -O S1.sorted.bam \
+#     >>>   | bedtools bamtobed -bedpe -i - \
+#     >>>   | awk 'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}' \
+#     >>>   | bedtools sort -i - > S1.fragments.bed
+#     """
+#     bed_dir = tmpdir / "beds"
+#     out_path = bed_dir / f"{sname}.fragments.bed"
+#     bed_dir.mkdir(parents=True, exist_ok=True)
 
-    # CHECKED that this properly pipes on large files. It does.
-    # Note: collate has heavy I/O writing tmp files here.
-    coll_dir = tmpdir / f"{sname}.collate"
-    coll_dir.mkdir(exist_ok=True)
-    cmd1 = [
-        BIN_SAM, "collate",
-        "-@", str(min(threads, 4)),             # doesn't benefit from >4
-        "-T", str(coll_dir / f"{sname}"),
-        "-r", "1000000",
-        "-u",
-        "-O",
-        str(bam_file),
-    ]
-    cmd2 = [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]
-    cmd3 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
-    cmd4 = [BIN_BED, "sort", "-i", "-"]
-    run_pipeline([cmd1, cmd2, cmd3, cmd4], out_path)
-    shutil.rmtree(coll_dir)
-    logger.debug(f"wrote fragment beds for {sname}")
-    return out_path
+#     # CHECKED that this properly pipes on large files. It does.
+#     # Note: collate has heavy I/O writing tmp files here.
+#     coll_dir = tmpdir / f"{sname}.collate"
+#     coll_dir.mkdir(exist_ok=True)
+#     cmd1 = [
+#         BIN_SAM, "collate",
+#         "-@", str(min(threads, 4)),             # doesn't benefit from >4
+#         "-T", str(coll_dir / f"{sname}"),
+#         "-r", "1000000",
+#         "-u",
+#         "-O",
+#         str(bam_file),
+#     ]
+#     cmd2 = [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]
+#     cmd3 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
+#     cmd4 = [BIN_BED, "sort", "-i", "-"]
+#     run_pipeline([cmd1, cmd2, cmd3, cmd4], out_path)
+#     shutil.rmtree(coll_dir)
+#     logger.debug(f"wrote fragment beds for {sname}")
+#     return out_path
 
 
-def get_fragment_coverage_beds(sname: str, reference: Path, tmpdir: Path) -> Path:
-    """write depth filtered bed for each sample.
+# def get_fragment_coverage_beds(sname: str, reference: Path, tmpdir: Path) -> Path:
+#     """write depth filtered bed for each sample.
 
-    >>> $ bedtools genomecov -i BED -g REF.scaflens -bg > fragments.bedgraph
-    """
-    # create a tmp file with REF scaffold length
-    bed_dir = tmpdir / "beds"
-    fragment_bed = bed_dir / f"{sname}.fragments.bed"
-    out_path = bed_dir / f"{sname}.fragments.bedgraph"
-    fai_path = reference.with_suffix(reference.suffix + ".fai")
-    assert fai_path.exists(), "must call `samtools faidx $REF`"
+#     >>> $ bedtools genomecov -i BED -g REF.scaflens -bg > fragments.bedgraph
+#     """
+#     # create a tmp file with REF scaffold length
+#     bed_dir = tmpdir / "beds"
+#     fragment_bed = bed_dir / f"{sname}.fragments.bed"
+#     out_path = bed_dir / f"{sname}.fragments.bedgraph"
+#     fai_path = reference.with_suffix(reference.suffix + ".fai")
+#     assert fai_path.exists(), "must call `samtools faidx $REF`"
 
-    # get bedgraph format for storing depths
-    cmd = [
-        BIN_BED, "genomecov",
-        "-i", str(fragment_bed),
-        "-g", str(fai_path),          # genome file to define chrom lens
-        "-bg",                        # report depth in bedgraph format
-    ]
-    run_pipeline([cmd], out_path)
-    fragment_bed.unlink()
-    return out_path
+#     # get bedgraph format for storing depths
+#     cmd = [
+#         BIN_BED, "genomecov",
+#         "-i", str(fragment_bed),
+#         "-g", str(fai_path),          # genome file to define chrom lens
+#         "-bg",                        # report depth in bedgraph format
+#     ]
+#     run_pipeline([cmd], out_path)
+#     fragment_bed.unlink()
+#     return out_path
 
 
 def get_fragment_merged_coverage_beds(sname: str, tmpdir: Path):
@@ -227,11 +228,9 @@ def get_across_sample_loci_bed(
     return bed_path
 
 
-def get_sample_coverage_stats_in_loci_bed(bam_file: Path, tmpdir: Path) -> Dict[str, float]:
+def get_sample_coverage_stats_in_loci_bed(bam_file: Path, name: str, loci_bed: Path) -> Dict[str, float]:
     """Return dict with stats of sampling mapping per locus bed.
     """
-    loci_bed = tmpdir / "beds" / "loci.bed"
-
     # commands
     cmd1 = [
         BIN_BED, "coverage",
@@ -243,12 +242,12 @@ def get_sample_coverage_stats_in_loci_bed(bam_file: Path, tmpdir: Path) -> Dict[
     _, out, _ = run_pipeline([cmd1, cmd2])
 
     stats = {
-        "nloci_with_nonzero_mapping": 0,
-        "median_depth_per_locus_with_nonzero_mapping": 0,
+        "nloci": 0,
         "mean_depth_per_locus_with_nonzero_mapping": 0,
+        "median_depth_per_locus_with_nonzero_mapping": 0,
         "std_depth_per_locus_with_nonzero_mapping": 0,
-        "median_depth_per_locus_total": 0,
         "mean_depth_per_locus_total": 0,
+        "median_depth_per_locus_total": 0,
         "std_depth_per_locus_total": 0,
     }
 
@@ -256,19 +255,24 @@ def get_sample_coverage_stats_in_loci_bed(bam_file: Path, tmpdir: Path) -> Dict[
     coverages = out.decode().strip().split("\n")
 
     # no loci has sufficient sample coverage
-    if not coverages:
-        return stats
+    if (coverages[0] == ""):
+        raise IPyradError(f"no regions in {loci_bed}")
 
     # get nloci with non-zero coverage
     covs = np.array(list(map(int, coverages)))
-    stats["nloci_with_nonzero_mapping"] = int(np.sum(covs > 0))
+    if not sum(covs):
+        return stats, np.zeros(len(coverages))
+    stats["nloci"] = int(np.sum(covs > 0))
     stats["median_depth_per_locus_with_nonzero_mapping"] = float(np.median(covs[covs > 0]))
     stats["mean_depth_per_locus_with_nonzero_mapping"] = float(np.mean(covs[covs > 0]))
     stats["std_depth_per_locus_with_nonzero_mapping"] = float(np.std(covs[covs > 0]))
     stats["median_depth_per_locus_total"] = float(np.median(covs))
     stats["mean_depth_per_locus_total"] = float(np.mean(covs))
     stats["std_depth_per_locus_total"] = float(np.std(covs))
-    return stats
+    _cmeans = covs[covs > 0].mean()
+    _cstds = np.clip(covs[covs > 0].std(), a_min=1.0, a_max=None)
+    read_depth_zscores = abs(covs - _cmeans) / _cstds
+    return stats, read_depth_zscores
 
 
 
