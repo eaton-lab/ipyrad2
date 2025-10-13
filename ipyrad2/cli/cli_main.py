@@ -104,10 +104,16 @@ def command_line():
     if hasattr(args, "log_level"):
         set_log_level(args.log_level, args.log_file)
 
-    run_subcommand(args)
+    if args.subcommand not in ["demux", "trim", "denovo", "map", "assemble", "wex"]:
+        # NO SUBCOMMAND: print help
+        parser.print_help()
+        sys.exit(0)
+    else:
+        run_subcommand(args)
 
 
-def run_subcommand(args):
+
+def run_subcommand(args, _exit=True):
     # DEMUX: -------------------------------------------------------
     if args.subcommand == "demux":
         logger.info("---------------------------------------------------------")
@@ -129,7 +135,7 @@ def run_subcommand(args):
             max_reads=args.max_reads,
             log_level=args.log_level,
         )
-        sys.exit(0)
+        if _exit: sys.exit(0)
 
     # TRIM: -------------------------------------------------------
     if args.subcommand == "trim":
@@ -158,7 +164,7 @@ def run_subcommand(args):
             force=args.force,
             log_level=args.log_level,
         )
-        sys.exit(0)
+        if _exit: sys.exit(0)
 
     # DENOVO: --------------------------------------------------------
     if args.subcommand == "denovo":
@@ -183,7 +189,7 @@ def run_subcommand(args):
             delim_idx=args.delim_idx,
             log_level=args.log_level,
         )
-        sys.exit(0)
+        if _exit: sys.exit(0)
 
     # MAP: --------------------------------------------------------
     if args.subcommand == "map":
@@ -206,7 +212,7 @@ def run_subcommand(args):
             delim_idx=args.delim_idx,
             log_level=args.log_level,
         )
-        sys.exit(0)
+        if _exit: sys.exit(0)
 
     # ASSEMBLE: ---------------------------------------------------
     if args.subcommand == "assemble":
@@ -240,7 +246,7 @@ def run_subcommand(args):
             force=args.force,
             log_level=args.log_level,
         )
-        sys.exit(0)
+        if _exit: sys.exit(0)
 
     # WEX: --------------------------------------------------------
     if args.subcommand == "wex":
@@ -262,12 +268,7 @@ def run_subcommand(args):
             stdout=args.stdout,
             force=args.force,
         )
-        sys.exit(0)
-
-    # NO SUBCOMMAND: print help
-    parser.print_help()
-    sys.exit(0)
-
+        if _exit: sys.exit(0)
 
 
 if __name__ == "__main__":

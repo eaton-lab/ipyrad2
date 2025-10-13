@@ -124,7 +124,7 @@ def command_line():
         s1_args.barcodes = params.main.barcodes_path
 
         s1_args.out = Path(params.main.project_dir) / (params.main.name + "_DEMUX")
-        ip.cli.cli_main.run_subcommand(s1_args)
+        ip.cli.cli_main.run_subcommand(s1_args, _exit=False)
 
     # TRIM: -------------------------------------------------------
     if "2" in args.steps:
@@ -133,7 +133,7 @@ def command_line():
         s2_args = Namespace(**{**vars(s2_args), **vars(args)})
         s2_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_DEMUX/*.gz")
         s2_args.out = Path(params.main.project_dir) / (params.main.name + "_TRIMMED")
-        ip.cli.cli_main.run_subcommand(s2_args)
+        ip.cli.cli_main.run_subcommand(s2_args, _exit=False)
 
     # DENOVO: --------------------------------------------------------
     if "3" in args.steps:
@@ -143,7 +143,7 @@ def command_line():
         s3_args = Namespace(**{**vars(s3_args), **vars(args)})
         s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_TRIMMED/*.gz")
         s3_args.out = Path(params.main.project_dir) / (params.main.name + "_CLUSTERS")
-        ip.cli.cli_main.run_subcommand(s3_args)
+        ip.cli.cli_main.run_subcommand(s3_args, _exit=False)
 
     # MAP: --------------------------------------------------------
     if "4" in args.steps:
@@ -154,7 +154,7 @@ def command_line():
         s4_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_TRIMMED/*.gz")
         s4_args.reference = Path(params.main.project_dir) / (params.main.name + "_CLUSTERS/denovo_reference.fa")
         s4_args.out = Path(params.main.project_dir) / (params.main.name + "_MAPPED")
-        ip.cli.cli_main.run_subcommand(s4_args)
+        ip.cli.cli_main.run_subcommand(s4_args, _exit=False)
 
     # ASSEMBLE: ---------------------------------------------------
     if "5" in args.steps:
@@ -166,7 +166,7 @@ def command_line():
         s5_args.rad_bams = [Path(x) for x in bams]
         s5_args.reference = Path(params.main.project_dir) / (params.main.name + "_CLUSTERS/denovo_reference.fa")
         s5_args.out = Path(params.main.project_dir) / (params.main.name + "_OUT")
-        ip.cli.cli_main.run_subcommand(s5_args)
+        ip.cli.cli_main.run_subcommand(s5_args, _exit=False)
 
     sys.exit(0)
 
