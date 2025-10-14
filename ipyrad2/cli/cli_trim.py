@@ -95,6 +95,11 @@ def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = 
         "-di", "--delim-idx", metavar="int", type=int, default=1,
         help="Set delim index. Extracts substring left of the 'di'-th 'dx' in filename. [default=1]",
     )
+    # TODO
+    tool.add_argument(
+        "-s", "--suffix", metavar="str", type=str,
+        help=r"Add a suffix to sample names (output: {name}{suffix}.trimmed._R*.fastq.gz). [default=None]",
+    )
     tool.add_argument(
         "-u", "--umi-tag-in-i5", action="store_true",
         help="Move i5 index into read name. Use if i5 contains UMIs for marking PCR duplicates.",

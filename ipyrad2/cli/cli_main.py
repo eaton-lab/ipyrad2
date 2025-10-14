@@ -135,7 +135,7 @@ def run_subcommand(args, _exit=True):
             max_reads=args.max_reads,
             log_level=args.log_level,
         )
-        if _exit: sys.exit(0)
+        if _exit: sys.exit(0)  # noqa: E701
 
     # TRIM: -------------------------------------------------------
     if args.subcommand == "trim":
@@ -160,11 +160,12 @@ def run_subcommand(args, _exit=True):
             threads=args.threads,
             delim_str=args.delim_str,
             delim_idx=args.delim_idx,
+            suffix=args.suffix,
             umi_tag_in_i5=args.umi_tag_in_i5,
             force=args.force,
             log_level=args.log_level,
         )
-        if _exit: sys.exit(0)
+        if _exit: sys.exit(0)  # noqa: E701
 
     # DENOVO: --------------------------------------------------------
     if args.subcommand == "denovo":
@@ -189,7 +190,7 @@ def run_subcommand(args, _exit=True):
             delim_idx=args.delim_idx,
             log_level=args.log_level,
         )
-        if _exit: sys.exit(0)
+        if _exit: sys.exit(0)  # noqa: E701
 
     # MAP: --------------------------------------------------------
     if args.subcommand == "map":
@@ -212,7 +213,7 @@ def run_subcommand(args, _exit=True):
             delim_idx=args.delim_idx,
             log_level=args.log_level,
         )
-        if _exit: sys.exit(0)
+        if _exit: sys.exit(0)  # noqa: E701
 
     # ASSEMBLE: ---------------------------------------------------
     if args.subcommand == "assemble":
@@ -246,7 +247,7 @@ def run_subcommand(args, _exit=True):
             force=args.force,
             log_level=args.log_level,
         )
-        if _exit: sys.exit(0)
+        if _exit: sys.exit(0)  # noqa: E701
 
     # WEX: --------------------------------------------------------
     if args.subcommand == "wex":
@@ -268,7 +269,7 @@ def run_subcommand(args, _exit=True):
             stdout=args.stdout,
             force=args.force,
         )
-        if _exit: sys.exit(0)
+        if _exit: sys.exit(0)  # noqa: E701
 
 
 if __name__ == "__main__":

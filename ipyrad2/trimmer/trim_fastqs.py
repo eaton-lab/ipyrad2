@@ -212,6 +212,7 @@ def run_trimmer(
     threads: int,
     delim_str: str | None,
     delim_idx: int,
+    suffix: str | None,
     umi_tag_in_i5: bool,
     force: bool,
     log_level: str,
@@ -219,7 +220,7 @@ def run_trimmer(
     # ------------------------------------------------------------
     # parse dict of {name: (r1, r2)}
     # fastq_dict = get_fastq_tuples_dict_from_paths_list(fastqs)
-    fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx)
+    fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx, suffix)
 
     # check outdir for existing and raise or remove
     result_files = [outdir / f"{sname}.R1.trimmed.fastq.gz" for sname in fastq_dict]

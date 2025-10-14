@@ -63,6 +63,7 @@ def get_name_to_fastq_dict(
     fastqs: List[Path | str],
     delim: str | None,
     delim_index: int | None,
+    suffix: str | None = None,
 ) -> Dict[str, Tuple[Path, Path | None]]:
     """
     """
@@ -71,6 +72,10 @@ def get_name_to_fastq_dict(
 
     # parse List[Path] to {name: (Path, Path)} or {name: (Path, None)}
     fastq_dict = get_pairs_or_single_by_trim(paths_list, delim, delim_index)
+
+    # add optional suffix
+    if suffix is not None:
+        fastq_dict = {f"{i}{suffix}": j for (i, j) in fastq_dict.items()}
 
     # report to logger
     total = len(fastq_dict)
