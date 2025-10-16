@@ -100,7 +100,7 @@ def command_line():
     args = parser.parse_args()
 
     if args.new:
-        _flagnew(args.new[0])
+        _flagnew(args.new)
         sys.exit(0)
 
     if args.params is not None:
