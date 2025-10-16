@@ -44,6 +44,7 @@ def map_filter_sort_mark_pairs(sname: str, fastqs: Tuple[Path, Path], reference:
     NB: this file will be used in both variants.py and beds.py in the next step.
     """
     # paths
+    logger.debug(f"starting mapping of {sname}: {fastqs}")
     out_bam = outdir / f"{sname}.filtered.bam"
     bam_namesort = outdir / "tmpdir" / f"{sname}.tmp.namesort.bam"
     bam_fixmate = outdir / "tmpdir" / f"{sname}.tmp.fixmate.bam"
@@ -458,8 +459,8 @@ def run_mapper(
     jobs = {}
     for sname, fastq_tuple in fastq_dict.items():
         kwargs = dict(
-            fastqs=fastq_tuple,
             sname=sname,
+            fastqs=fastq_tuple,
             outdir=outdir,
             reference=reference,
             min_map_q=min_map_q,
