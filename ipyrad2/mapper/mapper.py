@@ -45,15 +45,15 @@ def map_filter_sort_mark_pairs(sname: str, fastqs: Tuple[Path, Path], reference:
     """
     # paths
     out_bam = outdir / f"{sname}.filtered.bam"
-    bam_namesort = outdir / f"{sname}.tmp.namesort.bam"
-    bam_fixmate = outdir / f"{sname}.tmp.fixmate.bam"
-    bam_coordsort = outdir / f"{sname}.tmp.coordsort.bam"
-    bam_markdup = outdir / f"{sname}.tmp.markdup.bam"
-    tmp_prefix = outdir / f"{sname}.tmp.pre"
-    tmp_stats1 = outdir / f"{sname}.tmp.stats1.json"
-    tmp_stats2 = outdir / f"{sname}.tmp.stats2.json"
-    tmp_stats3 = outdir / f"{sname}.tmp.stats3.json"
-    tmp_stats_dups = outdir / f"{sname}.tmp.stats_dups.txt"
+    bam_namesort = outdir / "tmpdir" / f"{sname}.tmp.namesort.bam"
+    bam_fixmate = outdir / "tmpdir" / f"{sname}.tmp.fixmate.bam"
+    bam_coordsort = outdir / "tmpdir" / f"{sname}.tmp.coordsort.bam"
+    bam_markdup = outdir / "tmpdir" / f"{sname}.tmp.markdup.bam"
+    tmp_prefix = outdir / "tmpdir" / f"{sname}.tmp.pre"
+    tmp_stats1 = outdir / "tmpdir" / f"{sname}.tmp.stats1.json"
+    tmp_stats2 = outdir / "tmpdir" / f"{sname}.tmp.stats2.json"
+    tmp_stats3 = outdir / "tmpdir" / f"{sname}.tmp.stats3.json"
+    tmp_stats_dups = outdir / "tmpdir" / f"{sname}.tmp.stats_dups.txt"
 
     # Split threads between BWA and samtools
     bwa_threads = max(1, int(threads * 0.75))
@@ -434,7 +434,8 @@ def run_mapper(
         if mark_dups_by_umis:
             logger.warning("marking PCR duplicates. Data is expected to be RAD with i5 UMIs moved into read names")
 
-    # store whether reads are paired
+    # store whether reads are paired.
+    # TODO: this can raise an error when glob catches extras (e.g., not .fq, .gz, etc). Report that their glob might be bad?
     is_paired = False
     pairs_exist = [(r1.exists() and r2.exists()) for (r1, r2) in fastq_dict.values()]
     if any(pairs_exist):
