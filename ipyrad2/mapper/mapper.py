@@ -270,7 +270,7 @@ def concat_tech_reps_into_tmpdir(imap: Path, tmpdir: Path, fastq_dict: Dict[str,
 
         # renaming, do not run pipe
         if len(snames) == 1:
-            fastq_dict[pname] = tups
+            fastq_dict[pname] = tups[0]
 
         # concating, run pipe
         else:
