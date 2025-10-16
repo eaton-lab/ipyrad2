@@ -44,7 +44,7 @@ def map_filter_sort_mark_pairs(sname: str, fastqs: Tuple[Path, Path], reference:
     NB: this file will be used in both variants.py and beds.py in the next step.
     """
     # paths
-    logger.debug(f"starting mapping of {sname}: {fastqs}")
+    # logger.debug(f"starting mapping of {sname}: {fastqs}")
     out_bam = outdir / f"{sname}.filtered.bam"
     bam_namesort = outdir / "tmpdir" / f"{sname}.tmp.namesort.bam"
     bam_fixmate = outdir / "tmpdir" / f"{sname}.tmp.fixmate.bam"
@@ -412,16 +412,20 @@ def run_mapper(
     # parse dict of {name: (r1, r2)}
     fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx)
 
-    # check outdir for existing and raise or remove
-    result_files = [list(outdir.glob(f"{sname}.*.bam")) for sname in fastq_dict]
-    if any(result_files):
-        if not force:
-            raise IPyradError(".bam exists for >=1 of the selected samples in outdir. Use --force to overwrite.")
+    # check outdir for existing, warn if any exist, and skip or overwrite if (-f)
+    results = [sname for sname in fastq_dict if (outdir / f"{sname}.filtered.bam").exists()]
+    if any(results) and not force:
+        logger.warning(f"skipping {len(results)}/{len(fastq_dict)} samples that already have results (.bam) in outdir. Use --force to instead overwrite.")
+    for sname in results:
+        if force:
+            rfile = outdir / f"{sname}.filtered.bam"
+            rfile.unlink()
+            logger.debug(f"removing existing bam file: {rfile}")
         else:
-            for bam_list in result_files:
-                for bam_file in bam_list:
-                    if bam_file.exists():
-                        logger.debug(f"removing existing bam file: {bam_file}")
+            fastq_dict.pop(sname)
+    if not fastq_dict:
+        logger.info("all samples are completed.")
+        raise SystemExit(0)
 
     # check mark_dups suitability
     if mark_dups_by_coords or mark_dups_by_umis:
