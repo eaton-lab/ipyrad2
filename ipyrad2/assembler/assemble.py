@@ -169,11 +169,12 @@ def run_assembler(
         logger.error("No loci passed filtering")
         raise SystemExit(1)
 
-    # write the final stats of coverage per loci
+    # get the coverage stats per locus before filtering. We do this here
+    # so we can apply depth-outlier filters, and report filter stats later.
     logger.info("measuring per locus stats")
     jobs = {}
     for sname, bam_file in all_dict.items():
-        kwargs = dict(bam_file=bam_file, name=name, loci_bed=tmpdir / "beds" / "loci.bed")
+        kwargs = dict(bam_file=bam_file, loci_bed=tmpdir / "beds" / "loci.bed")
         jobs[sname] = (get_sample_coverage_stats_in_loci_bed, kwargs)
     results = run_with_pool(jobs, log_level, workers)
 
@@ -295,7 +296,7 @@ def run_assembler(
     logger.info("measuring per locus stats")
     jobs = {}
     for sname, bam_file in all_dict.items():
-        kwargs = dict(bam_file=bam_file, name=name, loci_bed=outdir / f"{name}.bed")
+        kwargs = dict(bam_file=bam_file, loci_bed=outdir / f"{name}.bed")
         jobs[sname] = (get_sample_coverage_stats_in_loci_bed, kwargs)
     results = run_with_pool(jobs, log_level, workers)
     df = pd.DataFrame(data={i: results[i][0] for i in snames}).T

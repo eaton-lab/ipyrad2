@@ -228,9 +228,13 @@ def get_across_sample_loci_bed(
     return bed_path
 
 
-def get_sample_coverage_stats_in_loci_bed(bam_file: Path, name: str, loci_bed: Path) -> Dict[str, float]:
+def get_sample_coverage_stats_in_loci_bed(bam_file: Path, loci_bed: Path) -> Dict[str, float]:
     """Return dict with stats of sampling mapping per locus bed.
     """
+    # this shouldn't happen, but sanity check.
+    if not bam_file.exists():
+        raise IPyradError(f"bam file {bam_file} does not exist.")
+
     # commands
     cmd1 = [
         BIN_BED, "coverage",
@@ -240,7 +244,7 @@ def get_sample_coverage_stats_in_loci_bed(bam_file: Path, name: str, loci_bed: P
     ]
     cmd2 = ["cut", "-f", "5"]
     _, out, _ = run_pipeline([cmd1, cmd2])
-
+    logger.debug((bam_file, out[:100]))
     stats = {
         "nloci": 0,
         "mean_depth_per_locus_with_nonzero_mapping": 0,
@@ -253,6 +257,7 @@ def get_sample_coverage_stats_in_loci_bed(bam_file: Path, name: str, loci_bed: P
 
     # parse stdout of cut
     coverages = out.decode().strip().split("\n")
+    del out
 
     # no loci has sufficient sample coverage
     if (coverages[0] == ""):
@@ -260,8 +265,10 @@ def get_sample_coverage_stats_in_loci_bed(bam_file: Path, name: str, loci_bed: P
 
     # get nloci with non-zero coverage
     covs = np.array(list(map(int, coverages)))
+    logger.debug((bam_file, covs[:100]))
     if not sum(covs):
         return stats, np.zeros(len(coverages))
+    del coverages
     stats["nloci"] = int(np.sum(covs > 0))
     stats["median_depth_per_locus_with_nonzero_mapping"] = float(np.median(covs[covs > 0]))
     stats["mean_depth_per_locus_with_nonzero_mapping"] = float(np.mean(covs[covs > 0]))
