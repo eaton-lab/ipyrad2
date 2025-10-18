@@ -228,23 +228,33 @@ def get_across_sample_loci_bed(
     return bed_path
 
 
-def get_sample_coverage_stats_in_loci_bed(bam_file: Path, loci_bed: Path) -> Dict[str, float]:
+def get_sample_coverage_stats_in_loci_bed(bam_file: Path, loci_bed: Path, min_map_q: int, ref_info: Path) -> Dict[str, float]:
     """Return dict with stats of sampling mapping per locus bed.
     """
     # this shouldn't happen, but sanity check.
     if not bam_file.exists():
         raise IPyradError(f"bam file {bam_file} does not exist.")
 
-    # commands
+    # apply mapq filter again here
     cmd1 = [
+        BIN_SAM, "view",
+        "-q", str(min_map_q),
+        "-u",
+        str(bam_file),
+    ]
+
+    # commands
+    cmd2 = [
         BIN_BED, "coverage",
         "-a", str(loci_bed),
-        "-b", str(bam_file),
+        "-b", "-",
+        "-g", str(ref_info),
+        "-sorted",
         "-counts",
     ]
-    cmd2 = ["cut", "-f", "5"]
-    _, out, _ = run_pipeline([cmd1, cmd2])
-    logger.debug((bam_file, out[:100]))
+    cmd3 = ["cut", "-f", "5"]
+    _, out, _ = run_pipeline([cmd1, cmd2, cmd3])
+
     stats = {
         "nloci": 0,
         "mean_depth_per_locus_with_nonzero_mapping": 0,
@@ -260,12 +270,12 @@ def get_sample_coverage_stats_in_loci_bed(bam_file: Path, loci_bed: Path) -> Dic
     del out
 
     # no loci has sufficient sample coverage
+    # TODO: raise warning and handle this instaed.
     if (coverages[0] == ""):
-        raise IPyradError(f"no regions in {loci_bed}")
+        raise IPyradError(f"{bam_file.name} has no regions in {loci_bed}")
 
     # get nloci with non-zero coverage
     covs = np.array(list(map(int, coverages)))
-    logger.debug((bam_file, covs[:100]))
     if not sum(covs):
         return stats, np.zeros(len(coverages))
     del coverages

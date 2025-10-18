@@ -174,7 +174,7 @@ def run_assembler(
     logger.info("measuring per locus stats")
     jobs = {}
     for sname, bam_file in all_dict.items():
-        kwargs = dict(bam_file=bam_file, loci_bed=tmpdir / "beds" / "loci.bed")
+        kwargs = dict(bam_file=bam_file, loci_bed=tmpdir / "beds" / "loci.bed", min_map_q=min_map_q, ref_info=tmpdir / "REF_info.txt")
         jobs[sname] = (get_sample_coverage_stats_in_loci_bed, kwargs)
     results = run_with_pool(jobs, log_level, workers)
 
@@ -296,7 +296,7 @@ def run_assembler(
     logger.info("measuring per locus stats")
     jobs = {}
     for sname, bam_file in all_dict.items():
-        kwargs = dict(bam_file=bam_file, loci_bed=outdir / f"{name}.bed")
+        kwargs = dict(bam_file=bam_file, loci_bed=outdir / f"{name}.bed", min_map_q=min_map_q, ref_info=tmpdir / "REF_info.txt")
         jobs[sname] = (get_sample_coverage_stats_in_loci_bed, kwargs)
     results = run_with_pool(jobs, log_level, workers)
     df = pd.DataFrame(data={i: results[i][0] for i in snames}).T
