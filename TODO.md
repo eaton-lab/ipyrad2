@@ -1,5 +1,6 @@
 
 # TODO
+- map: skip existing bams...
 - wex: check that alignments are correct when using -r or other exclude methods.
 - assemble: how to handle if many samples have >0 coverage of a locus, but none of its variant sites pass filtering? Currently it gets included but looks invariant.
 - assemble: add option --min-loci-per-sample (or similar?) to exclude samples from outfiles if < nloci
@@ -37,12 +38,19 @@
 # ideas to try/consider
 ```bash
 # write 500 loci randomly sampled from chroms 1-5 using random seed 123 and requiring loci to contain 10 samples
-ipyrad lex -d DATA.hdf5 -s Chr[1-5] -n 500 -m 10 -x 123 --format fasta
+ipyrad2 lex -d DATA.hdf5 -s Chr[1-5] -n 500 -m 10 -x 123 --format fasta
 # write 1000 loci randomly sampled from chr1 or chr2 requiring minlen, and that loci have MINMAP cov across IMAP population
-ipyrad lex -d DATA.hdf5 -s Chr1 Chr2 -n 1000 --min-len 100 --imap IMAP.tsv --minmap MINMAP.tsv --format fasta
+ipyrad2 lex -d DATA.hdf5 -s Chr1 Chr2 -n 1000 --min-len 100 --imap IMAP.tsv --minmap MINMAP.tsv --format fasta
 # write 500 loci from chroms 1-5 requiring data to be across at least 4 individuals in each pop.
-ipyrad lex -d DATA.hdf5 -s Chr[1-5] -n 500 --imap IMAP.tsv --minmap 4 --format bpp
+ipyrad2 lex -d DATA.hdf5 -s Chr[1-5] -n 500 --imap IMAP.tsv --minmap 4 --format bpp
 ...
+
+
+ipyrad2 analysis wex -d HDF5 ... -f phy
+ipyrad2 analysis lex -d HDF5 ... -f bpp
+ipyrad2 analysis tex -d HDF5 ... --scaffolds chr1 -c 20 -t 10 --binary raxml-ng --kwargs 'model=GTR+G,boots=100,trees=pars{10}'
+ipyrad2 analysis pca -d HDF5 ... --scaffolds [defaults to all] -n name-prefix -o dir --imap ... --minmap ...
+
 ```
 - checkpointing: don't bail out if one result exists, skip finished ones and do unfinished ones?
 - option to keep genotype likelihoods, instead of discarding (easy).
@@ -57,7 +65,7 @@ ipyrad lex -d DATA.hdf5 -s Chr[1-5] -n 500 --imap IMAP.tsv --minmap 4 --format b
 - assemble: add a max-len arg to assemble. It will help to identify when users accidentally
   input WGS bams as rad data, and the assembled beds are waaay too big.
 
-# ideas explored and abandoned
+# ideas explored and abandoned (maybe don't try these again)
 ...
 
 
