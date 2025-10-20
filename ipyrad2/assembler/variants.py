@@ -152,7 +152,7 @@ def get_group_called_variants_in_vcf_chunks(tmpdir: Path, reference: Path, bam_f
     out_vcf_gz = tmpdir / "vcfs" / locus_chunk.with_suffix(".vcf.gz").name
 
     # divide threads
-    threads_mpileup = max(1, min(3, threads))
+    threads_mpileup = max(1, threads)
     # threads_call = max(1, threads - threads_mpileup - 1)
     # threads_view = 1
 

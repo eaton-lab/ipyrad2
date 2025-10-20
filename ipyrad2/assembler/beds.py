@@ -201,12 +201,19 @@ def get_across_sample_loci_bed(
     with tempfile.TemporaryDirectory(prefix="bedmerge_") as tmpd:
         for i, src in enumerate(bed_files):
             dst = Path(tmpd) / f"{i:04d}_{src.name}.sorted.bed"
-            sort_cmd = [BIN_BED, "sort", "-g", ref_info, "-i", str(src)]
+            sort_cmd = [
+                BIN_BED, "sort",
+                "-g", ref_info,
+                "-i", str(src),
+            ]
             run_pipeline([sort_cmd], dst)
             sorted_paths.append(dst)
 
         # cmd1: bedtools multiinter
-        cmd1 = [BIN_BED, "multiinter", "-i"] + [str(p) for p in sorted_paths] + ["-names"] + names
+        cmd1 = [
+            BIN_BED, "multiinter",
+            "-g", str(ref_info),
+        "-i"] + [str(p) for p in sorted_paths] + ["-names"] + names
 
         # cmd2: threshold by K
         cmd2 = ["awk", f'BEGIN{{OFS="\\t"}} $4>={int(min_sample_coverage)} {{print $1,$2,$3,$4,$5}}']

@@ -169,8 +169,13 @@ def run_assembler(
         logger.error("No loci passed filtering")
         raise SystemExit(1)
 
+    # --------------------------------------------------------------------
+    # ---- STATS FOR DEPTH FILTERING (OPTIONAL?) -------------------------
+    # --------------------------------------------------------------------
     # get the coverage stats per locus before filtering. We do this here
     # so we can apply depth-outlier filters, and report filter stats later.
+    # This takes a while to run on large WGS samples, and doesn't seem to
+    # often lead to many filtered loci. Maybe make it optional?
     logger.info("measuring per locus stats")
     jobs = {}
     for sname, bam_file in all_dict.items():
@@ -191,10 +196,10 @@ def run_assembler(
     # ---- VARIANT CALLING ---------------------------------------------
     # ------------------------------------------------------------------
     logger.info("calling variants in locus beds")
-    # Each variant calling worker can effectively use ~3 threads
-    vworkers = int(cores // 3)
-    nchunks = max(10, vworkers)
-    locus_chunks = get_chunked_loci_beds(tmpdir, nchunks)
+    # Each variant calling worker can effectively use ~2 threads
+    vworkers = int(cores // 2)
+    # nchunks = max(10, vworkers)
+    locus_chunks = get_chunked_loci_beds(tmpdir, vworkers)
     jobs = {}
     for chunk in locus_chunks:
         kwargs = dict(
@@ -204,7 +209,7 @@ def run_assembler(
             min_base_q=min_base_q,
             min_map_q=min_map_q,
             locus_chunk=chunk,
-            threads=3,
+            threads=min(2, threads),
         )
         jobs[chunk] = (get_group_called_variants_in_vcf_chunks, kwargs)
     # each job does not use much RAM, so run many at 1-3 threads per job
