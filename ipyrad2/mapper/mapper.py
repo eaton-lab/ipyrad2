@@ -249,13 +249,16 @@ def concat_tech_reps_into_tmpdir(imap: Path, tmpdir: Path, fastq_dict: Dict[str,
     snames = set(fastq_dict)
     pop2tups = defaultdict(list)
     pop2snames = defaultdict(list)
+    warn_list = []
     for idx in df.index:
         sname, pname, *_ = df.loc[idx]
         if sname in snames:
             pop2tups[pname].append(fastq_dict.pop(sname))
             pop2snames[pname].append(sname)
         else:
-            logger.warning(f"sample name '{sname}' from imap file was not found in data. Skipping.")
+            warn_list.append(sname)
+    if warn_list:
+        logger.warning(f"One or more names in imap file did not match sample names and will be skipped: {' '.join(warn_list)}")
 
     # return original dict if nothing to merge/rename
     if not pop2snames:
@@ -400,9 +403,6 @@ def run_mapper(
     log_level: str,
 ):
     # ------------------------------------------------------------
-    # run at most this many concurrent jobs
-    workers = max(1, cores // threads)
-
     # check reference and outdir paths
     reference = reference.expanduser().absolute()
     outdir = outdir.expanduser().absolute()
@@ -426,6 +426,13 @@ def run_mapper(
     if not fastq_dict:
         logger.info("all samples are completed.")
         raise SystemExit(0)
+
+    # TODO: auto-tune threads based on nsamples and ncores?
+    # 12 cores, 1 sample; threads=12
+    # 12 cores, 12 samples; threads=4
+    # 24 cores, 2 samples;
+    # threads = max(cores, len(fastq_dict))
+    workers = max(1, cores // threads)
 
     # check mark_dups suitability
     if mark_dups_by_coords or mark_dups_by_umis:
@@ -497,7 +504,7 @@ def run_mapper(
             break
 
     # write stats
-    df = pd.DataFrame(stats).T
+    df = pd.DataFrame({i: stats[i] for i in sorted(stats)}).T
     df.to_string(
         outstats,
         formatters={
