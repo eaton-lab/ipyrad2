@@ -101,13 +101,13 @@ def trim_sample_with_fastp(
 
     # common arguments
     cmd.extend([
-        "--cut_front",
-        "--cut_tail",
-        # "-r",                                                    # move sliding window front to tail
-        "-M", str(min_quality + phred_qscore_offset - 33),       # mean quality in -r window
-        "-q", str(min_quality + phred_qscore_offset - 33),       # minqual
+        "-q", str(min_quality + phred_qscore_offset - 33), # threshold to determine low qual bases
+        "-u", "10",                                        # percentage of low qual bases allowed
+        "-M", str(min_quality + phred_qscore_offset - 33), # mean quality score used by --cut args
+        "--cut_front", "--cut_front_window_size", "4",
+        "--cut_tail", "--cut_tail_window_size", "4",
         "-l", str(min_trimmed_length),
-        "-x",                                                    # trims poly-x tails
+        "--trim_poly_g", "--trim_poly_x", "--poly_x_min_len", "10",
         "-y", "-Y", "50",                 # turns on and sets complexity filter to 50
         "--n_base_limit", str(max_low_quality_bases),
         "-j", str(stats_json),
