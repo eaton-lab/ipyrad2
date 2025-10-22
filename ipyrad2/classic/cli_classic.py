@@ -133,12 +133,15 @@ def command_line():
     # DENOVO: --------------------------------------------------------
     if "3" in args.steps:
         # TODO: Handle skipping step 3 if reference_sequence parameter is specified
-        s3_args = params.denovo
-        s3_args.subcommand = "denovo"
-        s3_args = Namespace(**{**vars(s3_args), **vars(args)})
-        s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
-        s3_args.out = Path(params.main.project_dir) / (params.main.name + "_reference")
-        ip.cli.cli_main.run_subcommand(s3_args, _exit=False)
+        if not os.path.exists(params.main.reference_sequence):
+            s3_args = params.denovo
+            s3_args.subcommand = "denovo"
+            s3_args = Namespace(**{**vars(s3_args), **vars(args)})
+            s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
+            s3_args.out = Path(params.main.project_dir) / (params.main.name + "_reference")
+            ip.cli.cli_main.run_subcommand(s3_args, _exit=False)
+        else:
+            logger.info("Reference sequence exists, skipping denovo reference assembly.")
 
     # MAP: --------------------------------------------------------
     if "4" in args.steps:
@@ -161,7 +164,12 @@ def command_line():
         s5_args.rad_bams = [Path(x) for x in bams]
         # TODO: Handle wgs_bams in classic mode
         s5_args.wgs_bams = None
-        s5_args.reference = Path(params.main.project_dir) / (params.main.name + "_reference/denovo_reference.fa")
+        # Toggle whether to use the passed in or denovo constructed reference sequence
+        if os.path.exists(params.main.reference_sequence):
+            s5_args.reference = params.main.reference_sequence
+        else:
+            s5_args.reference = Path(params.main.project_dir) / (params.main.name + "_reference/denovo_reference.fa")
+
         s5_args.out = Path(params.main.project_dir) / (params.main.name + "_outfiles")
         ip.cli.cli_main.run_subcommand(s5_args, _exit=False)
 

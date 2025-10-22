@@ -11,13 +11,12 @@ from .cli_trim import _setup_trim_subparser
 from .cli_denovo import _setup_denovo_subparser
 from .cli_map import _setup_map_subparser
 from .cli_assemble import _setup_assemble_subparser
-from .cli_wex import _setup_wex_subparser
+from .cli_analysis import _setup_analysis_subparser, run_analysis_tool
 from ..demuxer import run_demuxer
 from ..trimmer import run_trimmer
 from ..denovo import run_denovo
 from ..mapper import run_mapper
 from ..assembler import run_assembler
-from ..analysis.window_extracter import run_window_extracter
 from ..utils.logger import set_log_level
 from ..utils.exceptions import IPyradError
 from loguru import logger
@@ -75,7 +74,7 @@ def setup_parsers() -> argparse.ArgumentParser:
     _setup_denovo_subparser(subparser, f"{HEADER}\nipyrad denovo: construct a reference locus library")
     _setup_map_subparser(subparser, f"{HEADER}\nipyrad map: reference map, filter, and sort reads to bam files")
     _setup_assemble_subparser(subparser, f"{HEADER}\nipyrad assemble: delimit loci, call variants, and write outputs")
-    _setup_wex_subparser(subparser, f"{HEADER}\nipyrad wex: window extracter to filter and write concatenated alignments")
+    _setup_analysis_subparser(subparser, f"{HEADER}\nipyrad analysis: utilities for downstream analysis")
     return parser
 
 
@@ -104,7 +103,7 @@ def command_line():
     if hasattr(args, "log_level"):
         set_log_level(args.log_level, args.log_file)
 
-    if args.subcommand not in ["demux", "trim", "denovo", "map", "assemble", "wex"]:
+    if args.subcommand not in ["demux", "trim", "denovo", "map", "assemble", "analysis"]:
         # NO SUBCOMMAND: print help
         parser.print_help()
         sys.exit(0)
@@ -248,6 +247,10 @@ def run_subcommand(args, _exit=True):
             log_level=args.log_level,
         )
         if _exit: sys.exit(0)  # noqa: E701
+
+    if args.subcommand == "analysis":
+        run_analysis_tool(args)
+        sys.exit(0)
 
     # WEX: --------------------------------------------------------
     if args.subcommand == "wex":
