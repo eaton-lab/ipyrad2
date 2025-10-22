@@ -26,7 +26,6 @@
 - assemble: instead of warning about UMI tags on -u it could check for them.
 - assemble: check filters again, why no shared het hitting?
 - assemble: organize and write assemble stats
-- add analysis tools (wex/lex/treeslider) as 'analysis' subcommand
 - analysis:
     - test api with logger
     - pca
@@ -81,4 +80,4 @@ ipyrad2 analysis pca -d HDF5 ... --scaffolds [defaults to all] -n name-prefix -o
 - [x] assemble: write snps hdf5
 - [x] name: do not accept empty names as success.
 - [x] name: if splitting on _ from back fails, try from front.
-
+- [x] alaysis: add analysis tools (wex/lex/treeslider) as 'analysis' subcommand
