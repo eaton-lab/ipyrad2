@@ -8,18 +8,11 @@ import os
 import sys
 import argparse
 from ipyrad2.cli.make_wide import make_wide
-from ipyrad2.cli.cli_demux import _setup_demux_subparser
-from ipyrad2.cli.cli_trim import _setup_trim_subparser
-from ipyrad2.cli.cli_denovo import _setup_denovo_subparser
-from ipyrad2.cli.cli_map import _setup_map_subparser
-from ipyrad2.cli.cli_assemble import _setup_assemble_subparser
-from ipyrad2.cli.cli_wex import _setup_wex_subparser
 from ..demuxer import run_demuxer
 from ..trimmer import run_trimmer
 from ..denovo import run_denovo
 from ..mapper import run_mapper
 from ..assembler import run_assembler
-from ..analysis.window_extracter import run_window_extracter
 from ..utils.logger import set_log_level
 from ..utils.exceptions import IPyradError
 from ..utils.params import read_params, new_params
@@ -103,10 +96,12 @@ def command_line():
         _flagnew(args.new)
         sys.exit(0)
 
-    if args.params is not None:
+    elif args.params is not None:
         params = read_params(args.params)
         if not os.path.exists(params.main.project_dir):
             os.mkdir(params.main.project_dir)
+    else:
+        sys.exit("Classic mode requires either -n or -p")
 
     # LOGGING: -----------------------------------------------------
     if hasattr(args, "log_level"):
@@ -123,7 +118,7 @@ def command_line():
         s1_args.fastqs = params.main.raw_fastq_path
         s1_args.barcodes = params.main.barcodes_path
 
-        s1_args.out = Path(params.main.project_dir) / (params.main.name + "_DEMUX")
+        s1_args.out = Path(params.main.project_dir) / (params.main.name + "_fastqs")
         ip.cli.cli_main.run_subcommand(s1_args, _exit=False)
 
     # TRIM: -------------------------------------------------------
@@ -131,8 +126,8 @@ def command_line():
         s2_args = params.trim
         s2_args.subcommand = "trim"
         s2_args = Namespace(**{**vars(s2_args), **vars(args)})
-        s2_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_DEMUX/*.gz")
-        s2_args.out = Path(params.main.project_dir) / (params.main.name + "_TRIMMED")
+        s2_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_fastqs/*.gz")
+        s2_args.out = Path(params.main.project_dir) / (params.main.name + "_edits")
         ip.cli.cli_main.run_subcommand(s2_args, _exit=False)
 
     # DENOVO: --------------------------------------------------------
@@ -141,8 +136,8 @@ def command_line():
         s3_args = params.denovo
         s3_args.subcommand = "denovo"
         s3_args = Namespace(**{**vars(s3_args), **vars(args)})
-        s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_TRIMMED/*.gz")
-        s3_args.out = Path(params.main.project_dir) / (params.main.name + "_CLUSTERS")
+        s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
+        s3_args.out = Path(params.main.project_dir) / (params.main.name + "_reference")
         ip.cli.cli_main.run_subcommand(s3_args, _exit=False)
 
     # MAP: --------------------------------------------------------
@@ -151,9 +146,9 @@ def command_line():
         s4_args = params.map
         s4_args.subcommand = "map"
         s4_args = Namespace(**{**vars(s4_args), **vars(args)})
-        s4_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_TRIMMED/*.gz")
-        s4_args.reference = Path(params.main.project_dir) / (params.main.name + "_CLUSTERS/denovo_reference.fa")
-        s4_args.out = Path(params.main.project_dir) / (params.main.name + "_MAPPED")
+        s4_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
+        s4_args.reference = Path(params.main.project_dir) / (params.main.name + "_reference/denovo_reference.fa")
+        s4_args.out = Path(params.main.project_dir) / (params.main.name + "_mapped")
         ip.cli.cli_main.run_subcommand(s4_args, _exit=False)
 
     # ASSEMBLE: ---------------------------------------------------
@@ -162,10 +157,12 @@ def command_line():
         s5_args.subcommand = "assemble"
         s5_args = Namespace(**{**vars(s5_args), **vars(args)})
         s5_args.name = params.main.name
-        bams = glob.glob(str(Path(params.main.project_dir) / (params.main.name + "_MAPPED/*.bam")))
+        bams = glob.glob(str(Path(params.main.project_dir) / (params.main.name + "_mapped/*.bam")))
         s5_args.rad_bams = [Path(x) for x in bams]
-        s5_args.reference = Path(params.main.project_dir) / (params.main.name + "_CLUSTERS/denovo_reference.fa")
-        s5_args.out = Path(params.main.project_dir) / (params.main.name + "_OUT")
+        # TODO: Handle wgs_bams in classic mode
+        s5_args.wgs_bams = None
+        s5_args.reference = Path(params.main.project_dir) / (params.main.name + "_reference/denovo_reference.fa")
+        s5_args.out = Path(params.main.project_dir) / (params.main.name + "_outfiles")
         ip.cli.cli_main.run_subcommand(s5_args, _exit=False)
 
     sys.exit(0)
