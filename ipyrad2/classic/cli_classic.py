@@ -3,10 +3,11 @@
 """
 """
 
+import argparse
 import glob
 import os
 import sys
-import argparse
+import traceback
 from ipyrad2.cli.make_wide import make_wide
 from ..demuxer import run_demuxer
 from ..trimmer import run_trimmer
@@ -65,6 +66,7 @@ def setup_parsers() -> argparse.ArgumentParser:
         help="Log file. Logging to stdout is also appended to this file. [default=None]."
     )
     parser.add_argument("-f", "--force", action="store_true", help="force overwrite of existing data")
+    parser.add_argument("-d", "--debug", action="store_true", help="Print debug information")
     parser.add_argument("-v", "--version", action='version', version=f"ipyrad {VERSION}")
     parser.add_argument('-h', '--help', action='help', help=argparse.SUPPRESS)
 
