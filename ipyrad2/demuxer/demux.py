@@ -66,6 +66,8 @@ class Demux:
     _names_to_barcodes: Dict[str, Tuple[str, str]] = None
     """: A map of barcode strings to sample names, pre-expanded by off-by-N."""
     _filenames_to_fastqs: Dict[str, List[Tuple[str, str]]] = field(default_factory=dict)
+    """: Flag whether data is paired-end or single-end"""
+    _pe: bool = True
     """: Dict mapping file short names to tuples of paired fastqs."""
     _cuts1: List[str] = None
     """: List of enzyme overhang sites to match on read1s."""
@@ -100,7 +102,10 @@ class Demux:
 
     def _get_filenames_to_paired_fastqs(self) -> None:
         self._filenames_to_fastqs = get_name_to_fastq_dict(self.fastqs, None, None)
-
+        # Store information about pe vs se
+        if list(self._filenames_to_fastqs.values())[0][1] == None:
+            self._pe = False
+            logger.info("Found SE data")
     def _get_outdir(self) -> None:
         """Require an empty outdir to write to."""
         # get full path to the outdir
@@ -229,13 +234,7 @@ class Demux:
     def _check_restriction_overhangs(self) -> None:
         """Use kmer analysis to detect restriction overhangs in sequences."""
         read1s = [i[0] for i in self._filenames_to_fastqs.values()]
-        read2s = [i[1] for i in self._filenames_to_fastqs.values()]
-
-        # max_reads = int(200_000 / len(read1s))
-        # infer_cut1 = infer_overhang(read1s, max_len=20, max_reads=max_reads, anchored=False)
-        # infer_cut2 = infer_overhang(read2s, max_len=20, max_reads=max_reads, anchored=False)
         infer_cut1 = get_overhang_from_kmers(read1s, 20, 100_000, self.cores, self.log_level)
-        infer_cut2 = get_overhang_from_kmers(read2s, 20, 100_000, self.cores, self.log_level)
 
         if self.re1:
             if self.re1 != infer_cut1:
@@ -256,25 +255,30 @@ class Demux:
                 "overhang for R1s."
             )
 
-        if self.re2:
-            if self.re2 != infer_cut2:
-                logger.warning(
-                    f"user entered {self.re2} as the restriction overhang, but kmer "
-                    f"analysis suggests {infer_cut2} is the most likely restriction "
-                    "overhang in R2s."
-                )
-            else:
-                logger.info(
-                    f"kmer analysis confirms {self.re2} as the restriction "
-                    "overhang for R2s."
-                )
-        else:
-            self.re2 = infer_cut2
+        # skip r2 infer for SE data
+        read2s = [i[1] for i in self._filenames_to_fastqs.values()]
+        if read2s[0] != None:
+            infer_cut2 = get_overhang_from_kmers(read2s, 20, 100_000, self.cores, self.log_level)
+
             if self.re2:
-                logger.info(
-                    f"kmer analysis detected {self.re2} as the restriction "
-                    "overhang for R2s."
-                )
+                if self.re2 != infer_cut2:
+                    logger.warning(
+                        f"user entered {self.re2} as the restriction overhang, but kmer "
+                        f"analysis suggests {infer_cut2} is the most likely restriction "
+                        "overhang in R2s."
+                    )
+                else:
+                    logger.info(
+                        f"kmer analysis confirms {self.re2} as the restriction "
+                        "overhang for R2s."
+                    )
+            else:
+                self.re2 = infer_cut2
+                if self.re2:
+                    logger.info(
+                        f"kmer analysis detected {self.re2} as the restriction "
+                        "overhang for R2s."
+                    )
 
     def _get_cutters_expanded(self) -> None:
         """Fill `.cuts1` and `.cuts2` with ordered list of resolutions.
@@ -292,21 +296,23 @@ class Demux:
         else:
             cuts1 = [cuts1]
         cuts1 = cuts1 + list(set(itertools.chain(*[mutate(i) for i in cuts1])))
-
-        cuts2 = self.re2
-        if any(i in 'RKSYWM' for i in cuts2):
-            res1 = [AMBIGS[i][0] if i in "RKSYWM" else i for i in cuts2]
-            res2 = [AMBIGS[i][1] if i in "RKSYWM" else i for i in cuts2]
-            cuts2 = [res1, res2]
-        else:
-            cuts2 = [cuts2]
-        cuts2 = cuts2 + list(set(itertools.chain(*[mutate(i) for i in cuts2])))
-
         # convert all str to bytes
         self._cuts1 = [i.encode() for i in cuts1]
-        self._cuts2 = [i.encode() for i in cuts2]
         # logger.info(self._cuts1)
-        # logger.info(self._cuts2)
+
+        if self._pe:
+            cuts2 = self.re2
+            if any(i in 'RKSYWM' for i in cuts2):
+                res1 = [AMBIGS[i][0] if i in "RKSYWM" else i for i in cuts2]
+                res2 = [AMBIGS[i][1] if i in "RKSYWM" else i for i in cuts2]
+                cuts2 = [res1, res2]
+            else:
+                cuts2 = [cuts2]
+                cuts2 = cuts2 + list(set(itertools.chain(*[mutate(i) for i in cuts2])))
+
+            # convert all str to bytes
+            self._cuts2 = [i.encode() for i in cuts2]
+            # logger.info(self._cuts2)
 
     def _get_barcodes_to_names_map(self) -> None:
         """Fills .barcodes_to_names with all acceptable barcodes: name.
