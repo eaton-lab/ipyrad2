@@ -104,10 +104,17 @@ def perfect_pairs(ndict: Dict[str, List[Path]], paths: List[Path]) -> bool:
 
 def all_unique(ndict: Dict[str, List[Path]], paths: List[Path]) -> bool:
     """valid SE name"""
-    a = all(len(v) == 1 for v in ndict.values())
-    b = len(ndict) == len(paths)
-    c = len(set([i[-1] for i in ndict])) > 1
-    return a & b & c
+    if len(ndict) == 1:
+        # Only one fastq file, so unique by definition
+        return True
+    else:
+        # All names have one and only one fastq file
+        a = all(len(v) == 1 for v in ndict.values())
+        # The number of kv pairs in ndict equals the number of fq passed in
+        b = len(ndict) == len(paths)
+        # Checks that the last letter is not the same in all sample names
+        c = len(set([i[-1] for i in ndict])) > 1
+        return a & b & c
 
 
 def get_pairs_or_single_by_trim(
@@ -213,6 +220,11 @@ def get_pairs_or_single_by_trim(
             logger.info(f"parsed names by user args: -dx={delim} -di={delim_index}")
             return {i: (j[0], None) for i, j in names_to_paths.items()}
         logger.info("parsing names by user args failed. Falling back to auto-detection.")
+
+    # If only 1 SE file then assume it is un-demux data and not a sample
+    if len(fastqs) == 1:
+        stem = fastqs[0].name.rsplit(".", 2)[0]
+        return {stem: (fastqs[0], None)}
 
     # get get unique SE name by stripping characters from right
     hits = []
