@@ -252,28 +252,6 @@ def run_subcommand(args, _exit=True):
         run_analysis_tool(args)
         sys.exit(0)
 
-    # WEX: --------------------------------------------------------
-    if args.subcommand == "wex":
-        logger.info("-------------------------------------------------------")
-        logger.info("----- ipyrad wex: extract alignments from windows -----")
-        logger.info("-------------------------------------------------------")
-        logger.info(f"CMD: ipyrad {' '.join(sys.argv[1:])}")
-        run_window_extracter(
-            data=args.data,
-            name=args.name,
-            outdir=args.out,
-            windows=args.windows,
-            min_sample_coverage=args.min_sample_coverage,
-            max_sample_missing=args.max_sample_missing,
-            imap=args.imap,
-            minmap=args.minmap,
-            exclude=args.exclude,
-            print_scaffold_table=args.print_scaffold_table,
-            stdout=args.stdout,
-            force=args.force,
-        )
-        if _exit: sys.exit(0)  # noqa: E701
-
 
 if __name__ == "__main__":
 
