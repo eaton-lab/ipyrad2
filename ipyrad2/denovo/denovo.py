@@ -228,6 +228,8 @@ def run_denovo(
         logger.info("Aligning and writing denovo consensus reference")
         write_ordered_consensus_stream_to_file(outdir, log_level, max_workers=cores)
 
+    else:
+        logger.warning("SE data denovo unsupported")
     # -------------------------------------------
 
 
