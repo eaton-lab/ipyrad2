@@ -134,7 +134,6 @@ def command_line():
 
     # DENOVO: --------------------------------------------------------
     if "3" in args.steps:
-        # TODO: Handle skipping step 3 if reference_sequence parameter is specified
         if not os.path.exists(params.main.reference_sequence):
             s3_args = params.denovo
             s3_args.subcommand = "denovo"
@@ -147,12 +146,15 @@ def command_line():
 
     # MAP: --------------------------------------------------------
     if "4" in args.steps:
-        # TODO: Handle switching between denovo built reference vs user specified
         s4_args = params.map
         s4_args.subcommand = "map"
         s4_args = Namespace(**{**vars(s4_args), **vars(args)})
         s4_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
-        s4_args.reference = Path(params.main.project_dir) / (params.main.name + "_reference/denovo_reference.fa")
+        # If user passed in reference then use this else use the default ref from step 3
+        if os.path.exists(params.main.reference_sequence):
+            s4_args.reference = Path(params.main.reference_sequence)
+        else:
+            s4_args.reference = Path(params.main.project_dir) / (params.main.name + "_reference/denovo_reference.fa")
         s4_args.out = Path(params.main.project_dir) / (params.main.name + "_mapped")
         ip.cli.cli_main.run_subcommand(s4_args, _exit=False)
 
