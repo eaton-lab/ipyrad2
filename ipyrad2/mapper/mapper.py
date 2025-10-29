@@ -240,6 +240,79 @@ def map_filter_sort_pairs(sname: str, fastqs: Tuple[Path, Path], reference: Path
     return out_bam
 
 
+def map_filter_sort_single(sname: str, fastqs: Tuple[Path, Path], reference: Path, min_map_q: int, outdir: Path, threads: int, **kwargs) -> Path:
+    """Map reads to the reference to get a sorted bam.
+
+    This pipeline is for SE data w/o duplication marking information.
+    """
+    # paths
+    out_bam = outdir / f"{sname}.filtered.bam"
+    tmp_prefix = outdir / "tmpdir" / f"{sname}.tmp.pre"
+    tmp_stats1 = outdir / "tmpdir" / f"{sname}.tmp.stats1.json"
+    tmp_stats2 = outdir / "tmpdir" / f"{sname}.tmp.stats2.json"
+    tmp_stats3 = outdir / "tmpdir" / f"{sname}.tmp.stats3.json"
+
+    # Split threads between BWA and samtools
+    bwa_threads = max(1, int(threads * 0.75))
+    sort_threads = max(1, threads - bwa_threads)
+
+    # mapping command
+    cmd1 = [
+        BIN_BWA, "mem",
+        # "-Y",                     # soft-clip supplementary. Wouldn't hurt, but not necessary.
+        "-T", "20",               # minimum score to output (default=30). Keep lower scores for now, we filter on MAPQ later.
+        "-R", f"@RG\\tID:{sname}\\tSM:{sname}",  # store sample names in bam.
+        "-K", "50000000",         # stable chunk size. Improves repeatability.
+        "-v", "1",                # less verbose.
+        "-t", str(bwa_threads),
+        str(reference),
+        str(fastqs[0]),
+    ]
+
+    # drop secondary + supplemental + QCFail is OK here.
+    cmd2 = [
+        BIN_SAMTOOLS, "view",
+        "-b", "-u",
+        "-F", "0x100",    # secondary
+        "-F", "0x200",    # qcfail
+        "-F", "0x800",    # supplemental
+        # "-F", "0xB00", # 0x100, 0x200, 0x800
+        "--save-counts", str(tmp_stats1),
+        "-o", "-",
+    ]
+    cmd3 = [
+        BIN_SAMTOOLS, "view",
+        "-b", "-u",
+        "-q", str(min_map_q),        # apply min map q
+        "--save-counts", str(tmp_stats2),
+        "-o", "-",
+    ]
+
+    cmd4 = [
+        BIN_SAMTOOLS, "view",
+        "-b", "-u",
+        # TODO: Document what this is doing
+        "-e", '((flag&4)==0) && ((flag&8)==0)',
+        "--save-counts", str(tmp_stats3),
+        "-o", "-",
+    ]
+
+    # coordinate sort
+    cmd5 = [
+        BIN_SAMTOOLS, "sort",
+        "-m", "256M",                # per-thread memory
+        "-T", str(tmp_prefix),
+        "-@", str(sort_threads),
+        "--write-index",
+        "-O", "bam",                 # explicity ask for bam format to be safe
+        "-o", str(out_bam),
+        "-",
+    ]
+    cmds = [cmd1, cmd2, cmd3, cmd4, cmd5]
+    run_pipeline(cmds)
+    logger.info(f"finished mapping: {sname}")
+    return out_bam
+
 def concat_tech_reps_into_tmpdir(imap: Path, tmpdir: Path, fastq_dict: Dict[str, Tuple[Path, Path]]) -> Dict[str, Path]:
     """Return fastq_dict pointing to updated concat paths in tmpdir"""
     # parse the population file
@@ -449,12 +522,16 @@ def run_mapper(
     # store whether reads are paired.
     # TODO: this can raise an error when glob catches extras (e.g., not .fq, .gz, etc). Report that their glob might be bad?
     is_paired = False
-    pairs_exist = [(r1.exists() and r2.exists()) for (r1, r2) in fastq_dict.values()]
-    if any(pairs_exist):
-        if all(pairs_exist):
-            is_paired = True
-        else:
-            raise IPyradError("some but not all files have R1 and R2 pairs. Check inputs.")
+    try:
+        pairs_exist = [(r1.exists() and r2.exists()) for (r1, r2) in fastq_dict.values()]
+        if any(pairs_exist):
+            if all(pairs_exist):
+                is_paired = True
+            else:
+                raise IPyradError("some but not all files have R1 and R2 pairs. Check inputs.")
+    except AttributeError:
+        # Single-end: If r2 == None then r2.exists() raises Attribute Error
+        is_paired = False
 
     # index the reference
     index_ref_with_bwa(reference)
@@ -484,7 +561,11 @@ def run_mapper(
             else:
                 jobs[sname] = (map_filter_sort_pairs, kwargs)
         else:
-            raise NotImplementedError("TODO: SE data.")
+            if mark_dups_by_coords or mark_dups_by_umis:
+                raise NotImplementedError("TODO: SE data mark_duplicates")
+            else:
+                jobs[sname] = (map_filter_sort_single, kwargs)
+
     # run mapping jobs in parallel
     run_with_pool(jobs, log_level, workers)
 
