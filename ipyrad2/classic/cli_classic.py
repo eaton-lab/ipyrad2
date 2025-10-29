@@ -170,7 +170,7 @@ def command_line():
         s5_args.wgs_bams = None
         # Toggle whether to use the passed in or denovo constructed reference sequence
         if os.path.exists(params.main.reference_sequence):
-            s5_args.reference = params.main.reference_sequence
+            s5_args.reference = Path(params.main.reference_sequence)
         else:
             s5_args.reference = Path(params.main.project_dir) / (params.main.name + "_reference/denovo_reference.fa")
 

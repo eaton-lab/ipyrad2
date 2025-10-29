@@ -68,6 +68,21 @@ def get_coverage_bed_graphs(sname: str, bam_file: Path, reference: Path, tmpdir:
     out_path = bed_dir / f"{sname}.fragments.bedgraph"
     fai_path = reference.with_suffix(reference.suffix + ".fai")
 
+    # Test for pe vs se bam file by checking PAIRED bit of the first few reads
+    cmd1 = ["samtools",
+       "view",
+       "-f", "0x1",
+       "/tmp/ipyrad-test/ipyrad2/se-sim_mapped/1A.filtered.bam"]
+    cmd2 = ["head", "-n", "1000"]
+    cmd3 = ["wc", "-l"]
+
+    _, ct, _ = run_pipeline([cmd1, cmd2, cmd3])
+
+    is_paired = False
+    # This is very simple. Count the number of lines in the samtools view call.
+    if int(ct.strip()) > 0:
+        is_paired = True
+
     # CHECKED that this properly pipes on large files. It does.
     # Note: collate has heavy I/O writing tmp files here.
     cmd1 = [
@@ -79,17 +94,33 @@ def get_coverage_bed_graphs(sname: str, bam_file: Path, reference: Path, tmpdir:
         "-O",
         str(bam_file),
     ]
-    # stream the bed for each read pair
-    cmd2 = [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]
+    # stream the bed for each read/read pair. toggle `-bedpe` only for PE data
+    cmd2 = [BIN_BED, "bamtobed"]
+    if is_paired:
+        cmd2.append("-bedpe")
+    cmd2.extend(["-i", "-"])
+
     # filter pairs on mapq: applies same mapq min as in variants.py
-    cmd3 = ["awk", "-v", f'q={min_map_q}', r'BEGIN{OFS="\t"} ($8+0) >= q']
-    # check and pull out only chrom, start, end
-    cmd4 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
+    # mapq in bed for se is column 5; for pe is column 8
+    qcol = 5
+    if is_paired:
+        qcol = 8
+    cmd3 = ["awk", "-v", f'q={min_map_q}', r'BEGIN{OFS="\t"} ' + f'(${qcol}+0) >= q']
+
+    if is_paired:
+        # check and pull out only chrom, start, end
+        cmd4 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
+    else:
+        # For SE data we just need the first 3 columns of the input bed
+        cmd4 = ["awk", r'BEGIN{OFS="\t"} {print $1,$2,$3}']
+
     # sort beds
     cmd5 = [BIN_BED, "sort", "-i", "-"]
     # get coverage for each site from overlapping beds
     cmd6 = [BIN_BED, "genomecov", "-i", "-", "-g", str(fai_path), "-bg"]
     # pipeline
+    #for cmd in [cmd1, cmd2, cmd3, cmd4, cmd5, cmd6]:
+    #    print(" ".join(cmd))
     run_pipeline([cmd1, cmd2, cmd3, cmd4, cmd5, cmd6], out_path)
     shutil.rmtree(coll_dir)
     logger.debug(f"wrote bed graph for {sname}")
