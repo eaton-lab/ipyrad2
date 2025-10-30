@@ -65,249 +65,36 @@ class LocusExtracter:
     """
     def __init__(
         self,
-        data: str,
-        name: str,
-        outdir: Path | str,
-        nloci: int,
-        length: int,
-        windows: str | List[str],
-        min_sample_coverage: int | float,
-        max_sample_missing: float,
-        exclude: List[str] | None,
-        imap: Dict[str, List[str]] | None,
-        minmap: Dict[str, int | float] | None,
-        stdout: bool,
-        force: bool,
+         **kwargs: Dict[str, int | float | str | Path | None]
     ):
+
         # store params
-        self.data = data
-        self.name = name
-        self.outdir = Path(outdir).expanduser().absolute()
-        self.windows = [] if windows is None else [windows] if isinstance(windows, str) else list(windows)
-        self.exclude = set(exclude if exclude else [])
-        self.min_sample_coverage = min_sample_coverage
-        self.max_sample_missing = min(1.0, max(0, max_sample_missing))
-        self.stdout = stdout
-
-        # data parsed from h5
-        self.scaffold_table: pd.DataFrame = None
-        self.snames: List[str] = None
-        self.sidxs: List[str] = None
-        self.pnames: Dict[str, str] = None
-        self.phymap: pd.DataFrame = None
-        self.phymap_windows: Dict[int, List[Tuple[int, int]]] = None
-        self.imap: Dict[str, List[str]] = {}
-        self.minmap: Dict[str, int] = {}
-
-        # fills: snames, sidxs, scaffold_table
-        self._get_scaffold_table()
-        self._get_snames_and_sidxs_subset(imap)
-        self._get_imap_minmap(imap, minmap)
-
-        # run commands
-    def _run(self):
-        self._get_phymap_windows()
-        self._get_phymap()
-        self._get_seqarr()
-        return self._filter_seqarr()
-
-    def _get_scaffold_table(self) -> None:
-        """Store table with scaffold names and lengths in the order they are stored in H5."""
-        with h5py.File(self.data, 'r') as io5:
-            if io5.attrs["version"] < 2.0:
-                raise IPyradError("hdf5 database version must be >= 2.0")
-            scaff_names = io5.attrs["scaffold_names"]
-            scaff_lengths = io5.attrs["scaffold_lengths"]
-            self.scaffold_table = pd.DataFrame(
-                columns=["scaffold_name", "scaffold_length"],
-                data={"scaffold_name": scaff_names, "scaffold_length": scaff_lengths},
-            )
-
-    def _get_snames_and_sidxs_subset(self, imap) -> None:
-        with h5py.File(self.data, 'r') as io5:
-            # get sample names and get them as padded names
-            snames = io5.attrs["names"]
-
-            # auto-update exclude from imap difference
-            if imap:  # is not None:
-                imapset = set(itertools.chain(*imap.values()))
-                self.exclude.update(set(snames).difference(imapset))
-                logger.debug(
-                    "dropping samples that are either not in the imap dict, "
-                    f"or are in the exclude list: {self.exclude}")
-
-            # filter to only the included samples, store their new indices (sidxs)
-            self.sidxs = [i for (i, j) in enumerate(snames) if j not in self.exclude]
-            self.snames = [j for (i, j) in enumerate(snames) if i in self.sidxs]
-
-    def _get_imap_minmap(self, imap, minmap):
-        """Set _imap and _minmap for seqarr filtering."""
-        # if no imap was entered then group all samples into one group
-        # and use the global mincov as the min coverage of that group.
-        if not imap:
-            self.imap = {'all': self.snames}
-            self.minmap = {'all': int(self.min_sample_coverage)}
-            logger.debug(f"sample coverage minmap = {self.minmap}")
-
-        # if imap was provided, then (1) check the names; (2) apply a
-        # min value to each group from minmap; or (3) raise errors.
-        else:
-            if minmap is None:
-                raise IPyradError("must provide a minmap when using imap.")
-            if set(minmap) != set(imap):
-                raise IPyradError("imap and minmap keys must match.")
-            self.imap = imap.copy()
-            self.minmap = {}
-            for key in self.imap:
-                self.minmap[key] = minmap[key].copy()
-            logger.debug(f"sample coverage minmap = {self.minmap}")
-
-    def _get_phymap_windows(self) -> None:
-        """Check each window for a matching scaffold name, and position within its bounds."""
-        windows: Dict[str, List[Tuple(int, int)]] = {}
-
-        # rmincov must be float
-        if not self.windows:
-            # This is a regular expression that will match everything in the
-            # scaffold_table in the call below to `fullmatch`
-            self.windows = [r".*"]
+        self.data = kwargs["data"]
+        self.name = kwargs["name"]
+        self.outdir = Path(kwargs["outdir"]).expanduser().absolute()
+        # Wex doesn't care about nloci or length so pop them
+        self.nloci = kwargs.pop("nloci")
+        self.length = kwargs.pop("length")
+        # If no windows selected, then set to a regex that will match everything
+        # in the scaffold_table
+        if kwargs["windows"] == None:
+            kwargs["windows"] = [r".*"]
             logger.debug("lex: No windows specified. Sampling from full seq array.")
 
-        # set names in index for easy fetching
-        t = self.scaffold_table.set_index("scaffold_name")
+        # Pass the rest of the args into a wex and retrieve the phymap_windows
+        self.wex = WindowExtracter(**kwargs)
+        self.wex._get_phymap_windows()
+        self.phymap_windows = self.wex.phymap_windows
 
-        # iterate over user-entered windows
-        for window in self.windows:
 
-            # sub-scaffold window
-            if ":" in window:
-                scaff, region = window.split(":")
-                mask = t.index.str.fullmatch(pat=scaff, na=False)
-                scaff_hits = mask.sum()
-                if not scaff_hits:
-                    raise IPyradError(f"No scaffold names match '{window.split(':')[0]}'. Use -P to view scaffold names.")
-                if scaff_hits > 1:
-                    raise IPyradError("Cannot use regex with ':'. List windows separately: -w Chr1:1-1000 Chr2:1-1000")
-                logger.debug(mask)
-                if region.count("-") != 1:
-                    raise IPyradError(f"malformatted window '{window}'. Must be {{scaff}} or {{scaff}}:{{start}}-{{end}}")
-                start, end = [int(i) for i in region.split("-")]
-                if scaff not in windows:
-                    windows[scaff] = [(start, end)]
-                else:
-                    # check for overlap with other windows
-                    for (s, e) in windows[scaff]:#.items():
-                        if (start < e) & (end > start):
-                            raise IPyradError(f"windows cannot overlap. {window} & {windows}")
-                    windows[scaff].append((start, end))
+    def _run(self):
+        self._get_loci()
 
-            # full scaffold window
-            else:
-                mask = t.index.str.fullmatch(pat=window, na=False)
-                scaffs = t.index[mask].values
-                if not scaffs.size:
-                    raise IPyradError(f"'{window}' does not match to any scaffold names. Check with '-P'.")
-                for scaff in scaffs:
-                    if scaff not in windows:
-                        length = int(t.loc[scaff, "scaffold_length"])
-                        windows[scaff] = [(0, length)]
-                    else:
-                        raise IPyradError(f"windows cannot overlap. {window} & {windows}")
 
-        # log to INFO and DEBUG
-        logger.debug(f"windows: {windows}")
-        nwindows = sum(len(i) for i in windows.values())
-        ws = 's' if nwindows > 1 else ''
-        ss = 's' if len(windows) > 1 else ''
-        logger.info(f"selected {nwindows} window{ws} from {len(windows)} scaffold{ss}")
+    def _get_loci(self):
+        """Get random loci of specified length from the wex"""
+        logger.debug("Entering _get_loci()")
 
-        # store as dict mapping {scaff_index: window, ...}
-        scaff_names = t.index.tolist()
-        self.phymap_windows = {scaff_names.index(i): j for (i, j) in windows.items()}
-
-    def _get_phymap(self) -> None:
-        """Load the phymap for selecting windows from the seqs array."""
-        with h5py.File(self.data, 'r') as io5:
-            phymap = io5["phymap"]
-            colnames = phymap.attrs["columns"]
-            mask = np.isin(phymap[:, 0], list(self.phymap_windows))
-            phymap = pd.DataFrame(phymap[mask], columns=colnames)
-        self.phymap = phymap
-
-    def _get_seqarr(self) -> None:
-        """Fill .seqarr with data from .phymap_windows for samples in .sidx."""
-        phy_windows = []
-        for scaff_idx, windows in self.phymap_windows.items():
-            for (start, end) in windows:
-
-                # get subset rows of phymap containing the window
-                smap = self.phymap[self.phymap["scaff"] == scaff_idx]
-                mask1 = smap.pos1 >= start
-                mask2 = smap.pos0 <= end
-                mask = mask1 & mask2
-                block = smap.loc[mask, :]
-
-                # skip if block is empty
-                if not block.size:
-                    continue
-
-                # get how far past pos0 the window start is
-                wmin_offset = max(0, start - int(block.iloc[0, 3]))
-                # get phy start as phy0 + offset
-                wmin = int(block.iloc[0, 1]) + wmin_offset
-
-                # get how far back from pos1 the window end is
-                wmax_offset = max(0, int(block.iloc[-1, 4]) - end)
-                # get phy end as phy1 - offset
-                wmax = int(block.iloc[-1, 2]) - wmax_offset
-
-                # store phy start, end indices
-                phy_windows.append((wmin, wmax))
-
-        # if no windows then raise error
-        if not phy_windows:
-            raise IPyradError("Selected windows contain zero data in the assembly. Try larger/different windows.")
-        logger.debug(phy_windows)
-        # extract sequences
-        with h5py.File(self.data, 'r') as io5:
-            lengths = [i[1] - i[0] for i in phy_windows]
-            nsites = sum(lengths)
-            seqarr = np.zeros((len(self.sidxs), nsites), dtype=np.uint8)
-            x = 0
-            for wlen, (start, end) in zip(lengths, phy_windows):
-                seqarr[:, x:x + wlen] = io5["phy"][self.sidxs, start:end]
-                x += wlen
-        logger.debug(f"Extracted {nsites} sites from {len(phy_windows)} windows.")
-        self.seqarr = seqarr
-
-    def _filter_seqarr(self) -> Tuple[np.ndarray, List[str]]:
-        """..."""
-        # create a copy and convert - to N
-        seqs = self.seqarr.copy()
-        seqs[seqs == 45] = 78
-
-        # create and apply mask for sites (columns) that fail minmap filter
-        mask = np.zeros(seqs.shape[1], dtype=np.bool_)
-        for pop in self.imap:
-            pop_snames = self.imap[pop]
-            pop_mincov = self.minmap[pop]
-            pop_sidxs = [self.snames.index(i) for i in pop_snames]
-            pop_arr = seqs[pop_sidxs, :]
-            mask += np.sum(pop_arr != 78, axis=0) <= pop_mincov
-        seqs = seqs[:, np.invert(mask)]
-        if not seqs.size:
-            raise IPyradError("Selected windows contain zero data after filtering for coverage.")
-
-        # get list of ordered names remaining in the array
-        fnames = []
-        row_missing = np.sum(seqs == 78, axis=1) / seqs.shape[1]
-        mask = row_missing <= self.max_sample_missing
-        for sidx in np.where(mask)[0]:
-            fnames.append(self.snames[sidx])
-        # todo: log.debug the dropped samples
-        if not fnames:
-            raise IPyradError("No samples passed max_sample_missing filter.")
-        return fnames, seqs
 
     def _write_to_phy(self) -> None:
         """Writes the .seqarr matrix as a string to .outfile."""
@@ -407,13 +194,6 @@ class LocusExtracter:
         logger.info(f"wrote stats/log to: {stats_file}")
 
 
-def count_snps(arr):
-    """Count variants to report in the stats for an alignment."""
-    m = np.ma.masked_equal(arr, 78)
-    multi_cols = (np.ma.ptp(m, axis=0) > 0).filled(False)
-    return int(np.sum(multi_cols))
-
-
 def run_locus_extracter(**kwargs):
     """command line wrapper for locus-extracter.
 
@@ -459,29 +239,22 @@ def run_locus_extracter(**kwargs):
     force: bool
         ...
     """
-    print(kwargs)
     request_table = kwargs.pop("print_scaffold_table")
     if request_table:
+        # pop args wex doesn't care about
+        _ = kwargs.pop("nloci")
+        _ = kwargs.pop("length")
         tool = WindowExtracter(**kwargs)
         tool.scaffold_table.to_csv(sys.stdout, sep="\t")
         sys.exit(0)
 
-    nloci = kwargs.pop("nloci")
-    length = kwargs.pop("length")
-    tool = WindowExtracter(**kwargs)
-    #tool._write_to_phy()
+    lex = LocusExtracter(**kwargs) 
+    lex._run()
     sys.exit(0)
 
 
 if __name__ == "__main__":
-
-    h5 = Path("/tmp/OUT_klmnop/assembly.seqs.hdf5")
-    h5 = Path("/home/deren/Documents/ipyrad-tests/OUT/assembly.seqs.hdf5")
-    h5 = Path ("/tmp/ipyrad-test/wwat_OUT/wwat.hdf5")
-    assert h5.exists(), "h5 doesn't exist"
-
-
-
+    pass
     #with h5py.File(h5, 'r') as io5:
     #    print(io5["phymap"][:])
     #    print(io5["phy"].shape)
