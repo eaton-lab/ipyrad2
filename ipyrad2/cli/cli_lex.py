@@ -11,7 +11,7 @@ from .make_wide import make_wide
 EPILOG = r"""
 Examples
 --------
-$ ipyrad lex -d seqs.hdf5 -o OUT/ -n TEST -m 10
+$ ipyrad lex -d seqs.hdf5 -o OUT/ -n TEST -m 10 -N 100 -L 150
 """
 
 
@@ -37,6 +37,14 @@ def _setup_lex_subparser(subparsers: argparse._SubParsersAction, header: str = N
     tool.add_argument(
         "-o", "--out", metavar="Path", type=Path, default=".",
         help="Directory to write alignment and stats files. Created if it doesn't exist. [default=.]",
+    )
+    tool.add_argument(
+        "-N", "--nloci", metavar="int", type=int, default=100,
+        help="Number of randomly sampled loci to extract.",
+    )
+    tool.add_argument(
+        "-L", "--length", metavar="int", type=int, default=150,
+        help="Length of loci to extract (in bp).",
     )
     tool.add_argument(
         "-O", "--out-format", metavar="str", choices=["phy", "nex", "fa"], default="phy",
@@ -84,10 +92,10 @@ def _setup_lex_subparser(subparsers: argparse._SubParsersAction, header: str = N
         help="Overwrite existing output files with identical names.",
     )
     tool.add_argument(
-        "-l", "--log-level", metavar="str", type=str, default="INFO",
+        "--log-level", metavar="str", type=str, default="INFO",
         help="Log level (DEBUG, INFO, WARN, ERROR) [default=INFO]",
     )
     tool.add_argument(
-        "-L", "--log-file", metavar="Path", type=Path,
+        "--log-file", metavar="Path", type=Path,
         help="Log file. Logging to stdout is also appended to this file. [default=None]."
     )

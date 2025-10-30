@@ -81,6 +81,22 @@ def run_analysis_tool(args):
         logger.info("--- ipyrad lex: extract random alignments from hdf5 ---")
         logger.info("-------------------------------------------------------")
         logger.info(f"CMD: ipyrad {' '.join(sys.argv[1:])}")
-        logger.warning("lex: unimplemented")
+        run_locus_extracter(
+            data=args.data,
+            name=args.name,
+            outdir=args.out,
+            nloci=args.nloci,
+            length=args.length,
+            windows=args.windows,
+            min_sample_coverage=args.min_sample_coverage,
+            max_sample_missing=args.max_sample_missing,
+            imap=args.imap,
+            minmap=args.minmap,
+            exclude=args.exclude,
+            print_scaffold_table=args.print_scaffold_table,
+            stdout=args.stdout,
+            force=args.force,
+        )
+
         sys.exit(0)
 

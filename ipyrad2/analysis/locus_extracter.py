@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""Extract/subset sequences from HDF5 database and write to a supermatrix.
+"""Extract/subset sequences from HDF5 database and write loci to individual files.
 
 Note that genome coordinates are 1-based, closed (inclusive): both
 start and end are included. This is a general standard in concordance
@@ -46,6 +46,7 @@ import itertools
 import numpy as np
 import pandas as pd
 import h5py
+from .window_extracter import WindowExtracter
 from loguru import logger
 from ipyrad2.utils.exceptions import IPyradError
 
@@ -67,6 +68,8 @@ class LocusExtracter:
         data: str,
         name: str,
         outdir: Path | str,
+        nloci: int,
+        length: int,
         windows: str | List[str],
         min_sample_coverage: int | float,
         max_sample_missing: float,
@@ -165,7 +168,10 @@ class LocusExtracter:
 
         # rmincov must be float
         if not self.windows:
-            raise IPyradError("must select one or more windows.")
+            # This is a regular expression that will match everything in the
+            # scaffold_table in the call below to `fullmatch`
+            self.windows = [r".*"]
+            logger.debug("lex: No windows specified. Sampling from full seq array.")
 
         # set names in index for easy fetching
         t = self.scaffold_table.set_index("scaffold_name")
@@ -453,14 +459,17 @@ def run_locus_extracter(**kwargs):
     force: bool
         ...
     """
+    print(kwargs)
     request_table = kwargs.pop("print_scaffold_table")
     if request_table:
         tool = WindowExtracter(**kwargs)
         tool.scaffold_table.to_csv(sys.stdout, sep="\t")
         sys.exit(0)
 
+    nloci = kwargs.pop("nloci")
+    length = kwargs.pop("length")
     tool = WindowExtracter(**kwargs)
-    tool._write_to_phy()
+    #tool._write_to_phy()
     sys.exit(0)
 
 

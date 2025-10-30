@@ -104,8 +104,10 @@ class WindowExtracter:
 
         # run commands
     def _run(self):
+        # First two are fast
         self._get_phymap_windows()
         self._get_phymap()
+        # This call is slow as it is accessing the full hdf5 data
         self._get_seqarr()
         return self._filter_seqarr()
 
