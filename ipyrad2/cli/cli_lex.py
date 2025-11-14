@@ -46,6 +46,8 @@ def _setup_lex_subparser(subparsers: argparse._SubParsersAction, header: str = N
         "-L", "--length", metavar="int", type=int, default=150,
         help="Length of loci to extract (in bp).",
     )
+    # TODO: It will probably be useful to implement an ld_block_size idea
+    #       to allow spacing between sampled loci (primarily for wgs data).
     tool.add_argument(
         "-O", "--out-format", metavar="str", choices=["phy", "nex", "fa"], default="phy",
         help="Output alignment file format (phy, nex, inex, or fa). [default=phy]",

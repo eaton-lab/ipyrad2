@@ -39,17 +39,23 @@ nvariant_sites_in_windows_after_filtering: 20
 outfile: alignment.phy
 """
 
-from typing import List, Dict, Tuple
-import sys
-from pathlib import Path
+import h5py
 import itertools
 import numpy as np
 import pandas as pd
-import h5py
-from .window_extracter import WindowExtracter
+import random
+import sys
+import tempfile
 from loguru import logger
+from pathlib import Path
+from typing import List, Dict, Tuple
 from ipyrad2.utils.exceptions import IPyradError
+from .window_extracter import WindowExtracter
+from ..utils.parallel import run_pipeline
 
+
+BIN = Path(sys.prefix) / "bin"
+BIN_BED = str(BIN / "bedtools")
 
 NEXHEADER = """#nexus
 begin data;
@@ -86,112 +92,85 @@ class LocusExtracter:
         self.wex._get_phymap_windows()
         self.phymap_windows = self.wex.phymap_windows
 
+        self._validate_length()
+
+        # Create the outdir
+        self.outdir.mkdir(exist_ok=True)
+        self.loci = None
+
+
+    def _validate_length(self):
+        """Ensure the requested length doesn't exceed the length of the
+        longest locus, or else this is a non-sensical request."""
+        max_len = max([(lambda x: x[1] - x[0])(x[0]) for x in self.phymap_windows.values()])
+        if self.length > max_len:
+           raise IPyradError(f"Requested locus length {self.length} exceeds max locus size of the data {max_len}.")
+
 
     def _run(self):
         self._get_loci()
+        self._write_loci()
 
 
-    def _get_loci(self):
-        """Get random loci of specified length from the wex"""
-        logger.debug("Entering _get_loci()")
+    def _get_loci(self) -> None:
+        """Get random loci of specified length from the phymap.
+        """
+        logger.info("Entering _get_loci()")
+
+        # Format phymap_windows as a 'fai'-style file for bedtools random
+        with tempfile.NamedTemporaryFile('w', delete=False) as fp:
+            for chrom, windows in self.phymap_windows.items():
+                for widx, win in enumerate(windows):
+                    fp.write(f"{chrom}-{widx}\t{win[1] - win[0]}\n")
+            fp.close()
+
+            # Get max chrom length to constrain samtools random. If this is RAD
+            # data and you ask for a `-l` value that is longer than the longest
+            # rad locus then samtools will spin forever.
+            g = pd.read_csv(fp.name, header=None, names=["Chrom", "Length"], sep="\t")
+            maxlen = max(g["Length"])
+
+        length = self.length
+        if maxlen < length:
+            logger.info(f"Requested length ({self.length}) > max locus length of the data ({maxlen}). Constraining loci to {maxlen}bp")
+            length = maxlen
+
+        cmd = [
+            BIN_BED, "random",
+            "-n", str(self.nloci),
+            "-l", str(length),
+            "-g", fp.name
+        ]
+        # run the command in subprocess
+        logger.debug(f"CMD: {' '.join(cmd)}")
+        rc, out, err = run_pipeline([cmd])
+
+        # The list comprehension drops the last (blank) line, and selects only
+        # the first 3 columns of the return (the remaining columns aren't useful).
+        self.loci = pd.DataFrame([x.split("\t")[:3] for x in out.decode().split("\n")[:-1]],
+            columns=["chrom", "startpos", "endpos"])
 
 
-    def _write_to_phy(self) -> None:
-        """Writes the .seqarr matrix as a string to .outfile."""
-        # get the filtered alignment
-        fnames, fseqarr = self._run()
+    def _write_loci(self) -> None:
 
-        # get padded names
-        longname = max(len(i) for i in fnames)
-        pnames = [i.ljust(longname + 5) for i in fnames]
+        if self.loci is None:
+            msg = "No loci selected, run _get_loci() first"
+            logger.info(msg)
+            raise IPyradError(msg)
 
-        # build phy
-        phy = []
-        for idx, _ in enumerate(fnames):
-            seq = fseqarr[idx].tobytes().decode("utf-8")
-            phy.append(f"{pnames[idx]} {seq}")
-
-        # write to temp file
-        ntaxa = len(fnames)
-        nsites = fseqarr.shape[1]
-
-        # write to stdout
-        if self.stdout:
-            logger.debug("wrote alignment to stdout")
-            sys.stdout.write(f"{ntaxa} {nsites}\n{'\n'.join(phy)}\n")
-            outfile = "STDOUT"
-        else:
-            self.outdir.mkdir(exist_ok=True)
-            outfile = self.outdir / f"{self.name}.phy"
-            with open(outfile, 'w') as out:
-                out.write(f"{ntaxa} {nsites}\n")
-                out.write("\n".join(phy))
-            logger.info(f"wrote alignment ({ntaxa}, {nsites}) to: {outfile}")
-        # write stats
-        self._write_stats(fnames, fseqarr, outfile)
-
-    def _write_to_nex(self, seqarr, names):
-        """Writes concatenated alignment to nex format..."""
-        # get the filtered alignment
-        fnames, fseqarr = self._run()
-
-        # get padded names
-        longname = max(len(i) for i in fnames)
-        pnames = [i.ljust(longname + 5) for i in fnames]
-
-        # write to temp file
-        ntaxa = len(fnames)
-        nsites = fseqarr.shape[1]
-
-        # write the header
-        lines = []
-        lines.append(NEXHEADER.format(ntaxa, nsites))
-
-        # grab a big block of data
-        for block in range(0, fseqarr.shape[1], 100):
-            # store interleaved seqs 100 chars with longname+2 before
-            stop = min(block + 100, seqarr.shape[1])
-            for idx, name in enumerate(pnames):
-                seq = fseqarr[idx, block:stop].tobytes().decode()
-                lines.append(f"  {name}{seq}\n")
-            lines.append("\n")
-        lines.append("  ;\nend;")
-
-        # write to stdout
-        if self.stdout:
-            logger.debug("wrote alignment to stdout")
-            sys.stdout.write("".join(lines))
-            outfile = "STDOUT"
-        else:
-            self.outdir.mkdir(exist_ok=True)
-            outfile = self.outdir / f"{self.name}.phy"
-            with open(outfile, 'w') as out:
-                out.write("".join(lines))
-            logger.info(f"wrote alignment ({ntaxa}, {nsites}) to: {outfile}")
-        # write stats
-        self._write_stats(fnames, fseqarr, outfile)
-
-    def _write_stats(self, fnames, fseqarr, outfile):
-        """Write stats for the extracted windows."""
-        stats_file = self.outdir / f"{self.name}.stats.tsv"
-        stats_dict = {
-            "nsamples_before_filtering": len(self.snames),
-            "nsites_in_windows_before_filtering": self.seqarr.shape[1],
-            "nvariants_in_windows_before_filtering": count_snps(self.seqarr),
-            "nsamples_after_filtering": len(fnames),
-            "nsites_in_windows_after_filtering": fseqarr.shape[1],
-            "nvariants_in_windows_afater_filtering": count_snps(fseqarr),
-            "infile": self.data,
-            "outfile": outfile,
-            "windows": self.windows, #" ".join(self.windows),
-            "imap": self.imap,
-            "min_sample_coverage_filter": self.minmap,
-            "max_sample_missing_filter": self.max_sample_missing,
-        }
-        with open(stats_file, "w") as out:
-            for key, val in stats_dict.items():
-                out.write(f"{key}\t{val}\n")
-        logger.info(f"wrote stats/log to: {stats_file}")
+        for _, locus in self.loci.iterrows():
+            # Get chrom and window id for indexing into phymap
+            cidx, widx = locus["chrom"].split("-")
+            wstart, wend = self.phymap_windows[int(cidx)][int(widx)]
+            scaf = self.wex.scaffold_table.iloc[int(cidx)]["scaffold_name"]
+            wend = int(wstart) + int(locus["endpos"])
+            # Plus 1 because wex windows are 1-based inclusive
+            wstart = int(wstart) + int(locus["startpos"]) + 1
+            print(scaf, wstart, wend)
+            window = [f"{scaf}:{wstart}-{wend}"]
+            self.wex.windows = window
+            self.wex.name = window[0]
+            self.wex._write_to_phy()
 
 
 def run_locus_extracter(**kwargs):
