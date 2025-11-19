@@ -160,7 +160,6 @@ class LocusExtracter:
             wend = int(wstart) + int(locus["endpos"])
             # Plus 1 because wex windows are 1-based inclusive
             wstart = int(wstart) + int(locus["startpos"]) + 1
-            print(scaf, wstart, wend)
             window = [f"{scaf}:{wstart}-{wend}"]
             self.wex.windows = window
             self.wex.name = window[0]
