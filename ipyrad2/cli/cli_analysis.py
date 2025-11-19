@@ -86,6 +86,7 @@ def run_analysis_tool(args):
             data=args.data,
             name=args.name,
             outdir=args.out,
+            out_format=args.out_format,
             nloci=args.nloci,
             length=args.length,
             windows=args.windows,

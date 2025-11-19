@@ -35,8 +35,12 @@ def _setup_lex_subparser(subparsers: argparse._SubParsersAction, header: str = N
         help="Prefix name for output alignment and stats files. [default='alignment']",
     )
     tool.add_argument(
-        "-o", "--out", metavar="Path", type=Path, default=".",
-        help="Directory to write alignment and stats files. Created if it doesn't exist. [default=.]",
+        "-o", "--out", metavar="Path", type=Path, default="output-lex",
+        help="Directory to write alignment and stats files. Created if it doesn't exist. [default=output-lex]",
+    )
+    tool.add_argument(
+        "-O", "--out-format", metavar="str", choices=["phy", "nex", "fa"], default="phy",
+        help="Output alignment file format (phy, nex, or fa). [default=phy]",
     )
     tool.add_argument(
         "-N", "--nloci", metavar="int", type=int, default=100,
@@ -48,10 +52,6 @@ def _setup_lex_subparser(subparsers: argparse._SubParsersAction, header: str = N
     )
     # TODO: It will probably be useful to implement an ld_block_size idea
     #       to allow spacing between sampled loci (primarily for wgs data).
-    tool.add_argument(
-        "-O", "--out-format", metavar="str", choices=["phy", "nex", "fa"], default="phy",
-        help="Output alignment file format (phy, nex, inex, or fa). [default=phy]",
-    )
     tool.add_argument(
         "-w", "--windows", metavar="str", type=str, nargs="*",
         help="Select one or more 'scaff' or 'scaff:start-end' (1-indexed) regions to extract an alignment from."

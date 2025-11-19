@@ -78,6 +78,7 @@ class LocusExtracter:
         self.data = kwargs["data"]
         self.name = kwargs["name"]
         self.outdir = Path(kwargs["outdir"]).expanduser().absolute()
+        self.out_format = kwargs["out_format"]
         # Wex doesn't care about nloci or length so pop them
         self.nloci = kwargs.pop("nloci")
         self.length = kwargs.pop("length")
@@ -170,7 +171,12 @@ class LocusExtracter:
             window = [f"{scaf}:{wstart}-{wend}"]
             self.wex.windows = window
             self.wex.name = window[0]
-            self.wex._write_to_phy()
+            if self.out_format == "phy":
+                self.wex._write_to_phy()
+            elif self.out_format == "nex":
+                self.wex._write_to_nex()
+            else:
+                logger.error(f"Unrecognized output format: {self.out_format}")
 
 
 def run_locus_extracter(**kwargs):

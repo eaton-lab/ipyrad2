@@ -43,8 +43,8 @@ def _setup_wex_subparser(subparsers: argparse._SubParsersAction, header: str = N
         help="Prefix name for output alignment and stats files. [default='alignment']",
     )
     tool.add_argument(
-        "-o", "--out", metavar="Path", type=Path, default=".",
-        help="Directory to write alignment and stats files. Created if it doesn't exist. [default=.]",
+        "-o", "--out", metavar="Path", type=Path, default="output-wex",
+        help="Directory to write alignment and stats files. Created if it doesn't exist. [default=output-wex]",
     )
     tool.add_argument(
         "-O", "--out-format", metavar="str", choices=["phy", "nex", "fa"], default="phy",
