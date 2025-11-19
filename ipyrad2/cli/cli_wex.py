@@ -52,7 +52,8 @@ def _setup_wex_subparser(subparsers: argparse._SubParsersAction, header: str = N
     )
     tool.add_argument(
         "-w", "--windows", metavar="str", type=str, nargs="*",
-        help="Select one or more 'scaff' or 'scaff:start-end' (1-indexed) regions to extract an alignment from."
+        help="Select one or more 'scaff' or 'scaff:start-end' (1-indexed) regions "
+        "to extract an alignment from. Alternatively pass in a .bed file specifying windows."
     )
     tool.add_argument(
         "-m", "--min-sample-coverage", metavar="int", type=int, default=4,
