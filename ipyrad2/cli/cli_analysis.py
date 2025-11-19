@@ -64,6 +64,7 @@ def run_analysis_tool(args):
             data=args.data,
             name=args.name,
             outdir=args.out,
+            out_format=args.out_format,
             windows=args.windows,
             min_sample_coverage=args.min_sample_coverage,
             max_sample_missing=args.max_sample_missing,

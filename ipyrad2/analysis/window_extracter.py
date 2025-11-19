@@ -69,6 +69,7 @@ class WindowExtracter:
         data: str,
         name: str,
         outdir: Path | str,
+        out_format: str,
         windows: str | List[str],
         min_sample_coverage: int | float,
         max_sample_missing: float,
@@ -82,6 +83,7 @@ class WindowExtracter:
         self.data = data
         self.name = name
         self.outdir = Path(outdir).expanduser().absolute()
+        self.out_format = out_format
         self.windows = [] if windows is None else [windows] if isinstance(windows, str) else list(windows)
         self.exclude = set(exclude if exclude else [])
         self.min_sample_coverage = min_sample_coverage
@@ -447,6 +449,8 @@ def run_window_extracter(**kwargs):
         Prefix name used for outfiles. If None it is automatically set.
     outdir: Path | str
         Dir for output files. Created if it doesn't exist.
+    out_format: str
+        Format to write the alignments phy (default) or nex
     windows: str | List[str]:
         Subsample scaffold(s) by index number. If unsure, leave this
         empty when loading a file and then check the .scaffold_table
@@ -482,13 +486,20 @@ def run_window_extracter(**kwargs):
         ...
     """
     request_table = kwargs.pop("print_scaffold_table")
+
+    tool = WindowExtracter(**kwargs)
+
     if request_table:
-        tool = WindowExtracter(**kwargs)
         tool.scaffold_table.to_csv(sys.stdout, sep="\t")
         sys.exit(0)
 
-    tool = WindowExtracter(**kwargs)
-    tool._write_to_phy()
+    if tool.out_format == "phy":
+        tool._write_to_phy()
+    elif tool.out_format == "nex":
+        tool._write_to_nex()
+    else:
+        logger.error(f"Unrecognized output format: {tool.out_format}")
+
     sys.exit(0)
 
 
