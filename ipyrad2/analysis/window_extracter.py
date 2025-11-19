@@ -233,7 +233,7 @@ class WindowExtracter:
         self.phymap_windows = {scaff_names.index(i): j for (i, j) in windows.items()}
 
 
-    def _get_windows_from_bed(self, bedfile: Path) -> Dict[str, List[Tuple(int, int)]]:
+    def _get_windows_from_bed(self, bedfile: Path) -> Dict[str, Tuple[int, int]]:
         """Read windows from bedfile for wex"""
         windows = defaultdict(list)
         with open(bedfile) as infile:
