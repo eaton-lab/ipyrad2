@@ -39,6 +39,7 @@ nvariant_sites_in_windows_after_filtering: 20
 outfile: alignment.phy
 """
 
+from collections import defaultdict
 from typing import List, Dict, Tuple
 import sys
 from pathlib import Path
@@ -170,6 +171,15 @@ class WindowExtracter:
         if not self.windows:
             raise IPyradError("must select one or more windows.")
 
+        # Load windows from bed file if they are passed in this way
+        if len(self.windows) == 1:
+            bedfile = Path(self.windows[0])
+            if bedfile.exists():
+                logger.info(f"Loading windows from bed file: '{bedfile}'")
+                self.windows = self._get_windows_from_bed(bedfile)
+            else:
+                logger.debug(f"Loading windows from command line arguments")
+
         # set names in index for easy fetching
         t = self.scaffold_table.set_index("scaffold_name")
 
@@ -221,6 +231,21 @@ class WindowExtracter:
         # store as dict mapping {scaff_index: window, ...}
         scaff_names = t.index.tolist()
         self.phymap_windows = {scaff_names.index(i): j for (i, j) in windows.items()}
+
+
+    def _get_windows_from_bed(self, bedfile: Path) -> Dict[str, List[Tuple(int, int)]]:
+        """Read windows from bedfile for wex"""
+        windows = defaultdict(list)
+        with open(bedfile) as infile:
+            for line in infile:
+                # Ignore comments and blank lines
+                if line.startswith("#") or line.strip() == "":
+                    continue
+
+                chrom, start, end, *rest = line.rstrip("\t\n").split()
+                windows[chrom].append((start, end))
+        return windows
+
 
     def _get_phymap(self) -> None:
         """Load the phymap for selecting windows from the seqs array."""
