@@ -54,7 +54,7 @@ from ipyrad2.utils.exceptions import IPyradError
 
 NEXHEADER = """#nexus
 begin data;
-  dimensions ntax={ntax} nchar={nchar};
+  dimensions ntax={} nchar={};
   format datatype=dna missing=N gap=- interleave=yes;
   matrix
 """
@@ -367,7 +367,8 @@ class WindowExtracter:
         # write stats
         self._write_stats(fnames, fseqarr, outfile)
 
-    def _write_to_nex(self, seqarr, names):
+
+    def _write_to_nex(self) -> None:
         """Writes concatenated alignment to nex format..."""
         # get the filtered alignment
         fnames, fseqarr = self._run()
@@ -387,7 +388,7 @@ class WindowExtracter:
         # grab a big block of data
         for block in range(0, fseqarr.shape[1], 100):
             # store interleaved seqs 100 chars with longname+2 before
-            stop = min(block + 100, seqarr.shape[1])
+            stop = min(block + 100, fseqarr.shape[1])
             for idx, name in enumerate(pnames):
                 seq = fseqarr[idx, block:stop].tobytes().decode()
                 lines.append(f"  {name}{seq}\n")
@@ -401,7 +402,7 @@ class WindowExtracter:
             outfile = "STDOUT"
         else:
             self.outdir.mkdir(exist_ok=True)
-            outfile = self.outdir / f"{self.name}.phy"
+            outfile = self.outdir / f"{self.name}.nex"
             with open(outfile, 'w') as out:
                 out.write("".join(lines))
             logger.info(f"wrote alignment ({ntaxa}, {nsites}) to: {outfile}")
