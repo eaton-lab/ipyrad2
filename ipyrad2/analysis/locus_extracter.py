@@ -57,13 +57,6 @@ from ..utils.parallel import run_pipeline
 BIN = Path(sys.prefix) / "bin"
 BIN_BED = str(BIN / "bedtools")
 
-NEXHEADER = """#nexus
-begin data;
-  dimensions ntax={ntax} nchar={nchar};
-  format datatype=dna missing=N gap=- interleave=yes;
-  matrix
-"""
-
 
 class LocusExtracter:
     """Tool to extract sequences from one or more loci and write to a
