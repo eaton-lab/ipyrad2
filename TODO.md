@@ -13,10 +13,8 @@
 - assemble: write_snps: check and cleanup
 - assemble: consensus do not write empty seqs, use ordered iterators by chr:pos
 - map: collect stats from stats files into write_stats
-- map: handle SE
 - assemble: accept a loci.bed file and skip locus delimiting. Allow WGS only data in this case.
 - denovo: test on real data.
-- denovo: develop SE pipeline.
 - trim: collect and summarize trim stats files into one file.
 - variants: try bcf is faster than vcf for intermediates.
 - variants: check that snps are being removed from indel regions, and that we want that.
@@ -81,3 +79,5 @@ ipyrad2 analysis pca -d HDF5 ... --scaffolds [defaults to all] -n name-prefix -o
 - [x] name: do not accept empty names as success.
 - [x] name: if splitting on _ from back fails, try from front.
 - [x] alaysis: add analysis tools (wex/lex/treeslider) as 'analysis' subcommand
+- [x] denovo: develop SE pipeline.
+- [x] map: handle SE
