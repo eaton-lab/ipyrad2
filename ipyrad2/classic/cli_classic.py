@@ -9,11 +9,6 @@ import os
 import sys
 import traceback
 from ipyrad2.cli.make_wide import make_wide
-from ..demuxer import run_demuxer
-from ..trimmer import run_trimmer
-from ..denovo import run_denovo
-from ..mapper import run_mapper
-from ..assembler import run_assembler
 from ..utils.logger import set_log_level
 from ..utils.exceptions import IPyradError
 from ..utils.params import read_params, new_params
@@ -128,17 +123,29 @@ def command_line():
         s2_args = params.trim
         s2_args.subcommand = "trim"
         s2_args = Namespace(**{**vars(s2_args), **vars(args)})
-        s2_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_fastqs/*.gz")
+        # Check if sorted_fastq_path is set and contains valid fq files
+        # This implies the user wants to bring in their own fq files and skip step 1.
+        p = Path(params.main.sorted_fastq_path)
+        fq_files = list(p.parent.glob(p.name))
+        # If the glob succeeds then fq_files will be len > 1, and all *.gz files should exist
+        if len(fq_files) and all([x.exists() for x in fq_files]):
+            s2_args.fastqs = p
+        else:
+            # Fall back to assuming the user already ran step 1
+            s2_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_fastqs/*.gz")
+
         s2_args.out = Path(params.main.project_dir) / (params.main.name + "_edits")
         ip.cli.cli_main.run_subcommand(s2_args, _exit=False)
 
     # DENOVO: --------------------------------------------------------
     if "3" in args.steps:
-        if not os.path.exists(params.main.reference_sequence):
+        if Path(params.main.reference_sequence).exists():
             s3_args = params.denovo
             s3_args.subcommand = "denovo"
             s3_args = Namespace(**{**vars(s3_args), **vars(args)})
             s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
+            # TODO: Add something to test the number of .gz files and complain if there are too many.
+            #       Might be good to recommend using an imap file, and then sampling 2-3 individuals per pop
             s3_args.out = Path(params.main.project_dir) / (params.main.name + "_reference")
             ip.cli.cli_main.run_subcommand(s3_args, _exit=False)
         else:
