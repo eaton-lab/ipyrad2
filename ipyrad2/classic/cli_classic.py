@@ -139,7 +139,7 @@ def command_line():
 
     # DENOVO: --------------------------------------------------------
     if "3" in args.steps:
-        if Path(params.main.reference_sequence).exists():
+        if not Path(params.main.reference_sequence).exists():
             s3_args = params.denovo
             s3_args.subcommand = "denovo"
             s3_args = Namespace(**{**vars(s3_args), **vars(args)})
