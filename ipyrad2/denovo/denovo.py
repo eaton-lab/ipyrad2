@@ -201,9 +201,9 @@ def run_denovo(
     workers = max(1, cores // threads)
 
     # -------------------------------------------
-    if tmpdir.exists() or (outdir / "denovo_reference.fa").exists():
+    if tmpdir.exists() or denovo_reference.exists():
         if not force:
-            raise IPyradError("denovo results exist in outdir. Use --force to overwrite.")
+            raise IPyradError("denovo reference results exist in outdir. Use --force to overwrite.")
         else:
             shutil.rmtree(tmpdir)
     tmpdir.mkdir(exist_ok=True)
