@@ -52,6 +52,7 @@ def new_params(name: str = None, force: bool = False):
                         "project_dir":"./",
                         "raw_fastq_path":"/path/to/fastqs/*.gz",
                         "barcodes_path":"/path/to/bcodes.txt",
+                        "sorted_fastq_path":"/path/to/sorted_fastqs/*.gz",
                         "reference_sequence":"/path/to/ref.fa"}}
         doc.update(main)
         paramsfile.write(tomlkit.dumps(doc) + "\n")
