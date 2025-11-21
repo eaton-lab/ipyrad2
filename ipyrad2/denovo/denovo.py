@@ -41,6 +41,7 @@ def vsearch_pairs(
     similarity_threshold_within: float,
     by_length: bool,
     threads: int,
+    paired: bool = False,
 ):
     unmerged_R1 = outdir / f"{sname}.unmerged_R1.fq"
     unmerged_R2 = outdir / f"{sname}.unmerged_R2.fq"
@@ -50,38 +51,53 @@ def vsearch_pairs(
     consensus = outdir / f"{sname}.consensus.fa"
     clusters = outdir / f"{sname}.clusters.tsv"
 
-    cmd1 = [
-        BIN_VSEARCH,
-        "--fastq_mergepairs", str(r1),
-        "--reverse", str(r2),
-        "--fastq_minovlen", str(min_merge_overlap),
-        "--fastq_maxdiffs", str(max_merge_diffs),
-        "--fastq_minlen", str(min_length),
-        "--fastq_allowmergestagger",
-        "--fasta_width", "0",
-        "--fastqout_notmerged_fwd", str(unmerged_R1),
-        "--fastqout_notmerged_rev", str(unmerged_R2),
-        "--fasta_width", "0",
-        "--relabel", f"{sname};M",
-        "--fastaout", str(merged),
-    ]
-    logger.debug(" ".join(cmd1))
-    run_pipeline([cmd1])
+    if paired:
+        cmd1 = [
+            BIN_VSEARCH,
+            "--fastq_mergepairs", str(r1),
+            "--reverse", str(r2),
+            "--fastq_minovlen", str(min_merge_overlap),
+            "--fastq_maxdiffs", str(max_merge_diffs),
+            "--fastq_minlen", str(min_length),
+            "--fastq_allowmergestagger",
+            "--fasta_width", "0",
+            "--fastqout_notmerged_fwd", str(unmerged_R1),
+            "--fastqout_notmerged_rev", str(unmerged_R2),
+            "--fasta_width", "0",
+            "--relabel", f"{sname};M",
+            "--fastaout", str(merged),
+        ]
+        logger.debug(" ".join(cmd1))
+        run_pipeline([cmd1])
 
-    cmd1 = [
-        BIN_VSEARCH,
-        "--fastq_join", str(unmerged_R1),
-        "--reverse", str(unmerged_R2),
-        "--join_padgap", "N" * 24,
-        "--join_padgapq", "I" * 24,
-        "--fasta_width", "0",
-        "--relabel", f"{sname};J",
-        "--fastaout", str(joined),
-    ]
-    logger.debug(" ".join(cmd1))
-    run_pipeline([cmd1])
+        cmd1 = [
+            BIN_VSEARCH,
+            "--fastq_join", str(unmerged_R1),
+            "--reverse", str(unmerged_R2),
+            "--join_padgap", "N" * 24,
+            "--join_padgapq", "I" * 24,
+            "--fasta_width", "0",
+            "--relabel", f"{sname};J",
+            "--fastaout", str(joined),
+        ]
+        logger.debug(" ".join(cmd1))
+        run_pipeline([cmd1])
 
-    cmd1 = ["cat", str(joined), str(merged)]
+        cmd1 = ["cat", str(joined), str(merged)]
+    else:
+        # Relabel the R1 data for agreement with PE format in relabeling the reads
+        cmd1 = [
+            BIN_VSEARCH,
+            "--fastx_subsample", str(r1),
+            "--sample_pct", "100",
+            "--relabel", f"{sname};S",
+            "--fastaout", str(joined),
+        ]
+        logger.debug(" ".join(cmd1))
+        run_pipeline([cmd1])
+
+        cmd1 = ["cat", str(joined)]
+
     cmd2 = [
         BIN_VSEARCH,
         "--fastx_uniques", "-",
@@ -193,43 +209,42 @@ def run_denovo(
     tmpdir.mkdir(exist_ok=True)
 
     # -------------------------------------------
-    if is_paired:
-        logger.info("Joining/merging pairs, dereplicating and clustering")
-        jobs = {}
-        for sname, fastq_tuple in fastq_dict.items():
-            kwargs=dict(
-                sname=sname,
-                r1=fastq_tuple[0],
-                r2=fastq_tuple[1],
-                outdir=tmpdir,
-                min_dereplication_size=min_dereplication_size,
-                min_length=min_length,
-                min_merge_overlap=min_merge_overlap,
-                max_merge_diffs=max_merge_diffs,
-                strand_both=strand_both,
-                similarity_threshold_within=similarity_threshold_within,
-                by_length=True,
-                threads=threads,
-            )
-            jobs[sname] = (vsearch_pairs, kwargs)
-        run_with_pool(jobs, log_level, workers)
+    msg = "Joining/merging pairs, d" if is_paired else "D"
+    logger.info(f"{msg}ereplicating and clustering")
+    jobs = {}
+    for sname, fastq_tuple in fastq_dict.items():
+        kwargs=dict(
+            sname=sname,
+            r1=fastq_tuple[0],
+            r2=fastq_tuple[1],
+            outdir=tmpdir,
+            min_dereplication_size=min_dereplication_size,
+            min_length=min_length,
+            min_merge_overlap=min_merge_overlap,
+            max_merge_diffs=max_merge_diffs,
+            strand_both=strand_both,
+            similarity_threshold_within=similarity_threshold_within,
+            by_length=True,
+            threads=threads,
+            paired=is_paired,
+        )
+        jobs[sname] = (vsearch_pairs, kwargs)
+    run_with_pool(jobs, log_level, workers)
 
-        # write sample summary TSVs
-        for sname in fastq_dict:
-            build_sample_summary(sname, tmpdir)
-        concat_summaries(tmpdir)
+    # write sample summary TSVs
+    for sname in fastq_dict:
+        build_sample_summary(sname, tmpdir)
+    concat_summaries(tmpdir)
 
-        logger.info("Clustering consensus sequences across samples")
-        vsearch_cluster_across(tmpdir, similarity_threshold_across, threads)
+    logger.info("Clustering consensus sequences across samples")
+    vsearch_cluster_across(tmpdir, similarity_threshold_across, threads)
 
-        logger.info("Splitting clusters and writing mapping table")
-        mapping_tsv, summary_tsv = make_global_tables(tmpdir)
+    logger.info("Splitting clusters and writing mapping table")
+    mapping_tsv, summary_tsv = make_global_tables(tmpdir)
 
-        logger.info("Aligning and writing denovo consensus reference")
-        write_ordered_consensus_stream_to_file(outdir, log_level, max_workers=cores)
+    logger.info("Aligning and writing denovo consensus reference")
+    write_ordered_consensus_stream_to_file(outdir, log_level, max_workers=cores)
 
-    else:
-        logger.warning("SE data denovo unsupported")
     # -------------------------------------------
 
 
