@@ -72,7 +72,8 @@ def get_coverage_bed_graphs(sname: str, bam_file: Path, reference: Path, tmpdir:
     cmd1 = ["samtools",
        "view",
        "-f", "0x1",
-       "/tmp/ipyrad-test/ipyrad2/se-sim_mapped/1A.filtered.bam"]
+       bamfile,
+    ]
     cmd2 = ["head", "-n", "1000"]
     cmd3 = ["wc", "-l"]
 
