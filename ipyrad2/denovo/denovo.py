@@ -243,7 +243,7 @@ def run_denovo(
     mapping_tsv, summary_tsv = make_global_tables(tmpdir)
 
     logger.info("Aligning and writing denovo consensus reference")
-    write_ordered_consensus_stream_to_file(outdir, log_level, max_workers=cores)
+    write_ordered_consensus_stream_to_file(outdir, log_level)
 
     # -------------------------------------------
 
