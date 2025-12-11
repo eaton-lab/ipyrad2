@@ -72,7 +72,7 @@ def get_coverage_bed_graphs(sname: str, bam_file: Path, reference: Path, tmpdir:
     cmd1 = ["samtools",
        "view",
        "-f", "0x1",
-       bamfile,
+       bam_file,
     ]
     cmd2 = ["head", "-n", "1000"]
     cmd3 = ["wc", "-l"]
@@ -120,8 +120,8 @@ def get_coverage_bed_graphs(sname: str, bam_file: Path, reference: Path, tmpdir:
     # get coverage for each site from overlapping beds
     cmd6 = [BIN_BED, "genomecov", "-i", "-", "-g", str(fai_path), "-bg"]
     # pipeline
-    #for cmd in [cmd1, cmd2, cmd3, cmd4, cmd5, cmd6]:
-    #    print(" ".join(cmd))
+    for cmd in [cmd1, cmd2, cmd3, cmd4, cmd5, cmd6]:
+        logger.debug(" ".join(cmd))
     run_pipeline([cmd1, cmd2, cmd3, cmd4, cmd5, cmd6], out_path)
     shutil.rmtree(coll_dir)
     logger.debug(f"wrote bed graph for {sname}")
@@ -201,6 +201,7 @@ def get_fragment_merged_coverage_beds(sname: str, tmpdir: Path):
     out_path = bed_dir / f"{sname}.fragments.merged.bed"
 
     # keep all RAD beds above depth=1 and merge
+    # TODO: The docstring says this honors min_depth_majrule, but here it doesn't
     cmd1 = ["awk", "-v", "MIN=1", r'$4>=MIN', bedgraph]
     cmd2 = [BIN_BED, "merge", "-i", "-"]
     # -d merge beds within this many sites of each other.
@@ -230,7 +231,7 @@ def get_across_sample_loci_bed(
 
     # write genome sorted copy of each bed file
     sorted_paths = []
-    with tempfile.TemporaryDirectory(prefix="bedmerge_") as tmpd:
+    with tempfile.TemporaryDirectory(prefix="bedmerge_", delete=False) as tmpd:
         for i, src in enumerate(bed_files):
             dst = Path(tmpd) / f"{i:04d}_{src.name}.sorted.bed"
             sort_cmd = [
@@ -250,8 +251,15 @@ def get_across_sample_loci_bed(
         # cmd2: threshold by K
         cmd2 = ["awk", f'BEGIN{{OFS="\\t"}} $4>={int(min_sample_coverage)} {{print $1,$2,$3,$4,$5}}']
 
-        # cmd3: merge sub-intervals, keeping min support and distinct sample list
+        # cmd3: Sort again to ensure proper order for the merge
         cmd3 = [
+            BIN_BED, "sort",
+            "-g", str(ref_info),
+            "-i", "-",
+        ]
+
+        # cmd4: merge sub-intervals, keeping min support and distinct sample list
+        cmd4 = [
             BIN_BED, "merge",
             "-i", "-",
             "-d", str(int(min_merge_distance)),
@@ -259,11 +267,13 @@ def get_across_sample_loci_bed(
             "-o", "min",
         ]
 
-        # cmd4: filter intervals shorter than min_len (default=20)
-        cmd4 = ["awk", "-v", f"L={min_locus_length}", 'BEGIN{OFS=FS="\t"} ($3-$2) >= L']
+        # cmd5: filter intervals shorter than min_len (default=20)
+        cmd5 = ["awk", "-v", f"L={min_locus_length}", 'BEGIN{OFS=FS="\t"} ($3-$2) >= L']
 
         # run pipeline
-        run_pipeline([cmd1, cmd2, cmd3, cmd4], bed_path)
+        for cmd in [cmd1, cmd2, cmd3, cmd4, cmd5]:
+            logger.debug(" ".join(cmd))
+        run_pipeline([cmd1, cmd2, cmd3, cmd4, cmd5], bed_path)
     return bed_path
 
 
