@@ -111,12 +111,20 @@ def command_line():
         # Black magic to merge s1 specific args with the few useful ones
         # we read from the cli, e.g. cores, force, and logging info
         s1_args = Namespace(**{**vars(s1_args), **vars(args)})
-        # Update demux params from the params file
-        s1_args.fastqs = params.main.raw_fastq_path
-        s1_args.barcodes = params.main.barcodes_path
+        # Check if sorted_fastq_path is set and contains valid fq files
+        # This implies the user wants to bring in their own fq files and skip step 1.
+        p = Path(params.main.sorted_fastq_path)
+        fq_files = list(p.parent.glob(p.name))
+        # If the glob succeeds then fq_files will be len > 1, and all *.gz files should exist
+        if len(fq_files) and all([x.exists() for x in fq_files]):
+            logger.info("Skipping step 1: sorted_fastq_files is set and fq files exist.")
+        else:
+            # Update demux params from the params file
+            s1_args.fastqs = params.main.raw_fastq_path
+            s1_args.barcodes = params.main.barcodes_path
 
-        s1_args.out = Path(params.main.project_dir) / (params.main.name + "_fastqs")
-        ip.cli.cli_main.run_subcommand(s1_args, _exit=False)
+            s1_args.out = Path(params.main.project_dir) / (params.main.name + "_fastqs")
+            ip.cli.cli_main.run_subcommand(s1_args, _exit=False)
 
     # TRIM: -------------------------------------------------------
     if "2" in args.steps:
@@ -139,7 +147,12 @@ def command_line():
 
     # DENOVO: --------------------------------------------------------
     if "3" in args.steps:
-        if not Path(params.main.reference_sequence).exists():
+        ref_seq = Path(params.main.reference_sequence)
+        # Ensure ref_seq doesn't exist. If reference_sequence parameter is blank in params file it
+        # will be created as '.', so guard against this as well.
+        if ref_seq.exists() and not (str(ref_seq) == '.'):
+            logger.info("Reference sequence exists, skipping denovo reference assembly.")
+        else:
             s3_args = params.denovo
             s3_args.subcommand = "denovo"
             s3_args = Namespace(**{**vars(s3_args), **vars(args)})
@@ -148,8 +161,6 @@ def command_line():
             #       Might be good to recommend using an imap file, and then sampling 2-3 individuals per pop
             s3_args.out = Path(params.main.project_dir) / (params.main.name + "_reference")
             ip.cli.cli_main.run_subcommand(s3_args, _exit=False)
-        else:
-            logger.info("Reference sequence exists, skipping denovo reference assembly.")
 
     # MAP: --------------------------------------------------------
     if "4" in args.steps:
