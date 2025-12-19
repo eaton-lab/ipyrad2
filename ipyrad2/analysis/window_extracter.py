@@ -156,13 +156,14 @@ class WindowExtracter:
         # min value to each group from minmap; or (3) raise errors.
         else:
             if minmap is None:
-                raise IPyradError("must provide a minmap when using imap.")
+                logger.info("No minmap provided. Assuming minimum one sample per population.")
+                minmap = {pop:1 for pop in imap.keys()}
             if set(minmap) != set(imap):
                 raise IPyradError("imap and minmap keys must match.")
             self.imap = imap.copy()
             self.minmap = {}
             for key in self.imap:
-                self.minmap[key] = minmap[key].copy()
+                self.minmap[key] = minmap[key]
             logger.debug(f"sample coverage minmap = {self.minmap}")
 
     def _get_phymap_windows(self) -> None:
