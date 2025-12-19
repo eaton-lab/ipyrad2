@@ -81,10 +81,12 @@ class LocusExtracter:
             kwargs["windows"] = [r".*"]
             logger.debug("lex: No windows specified. Sampling from full seq array.")
 
-        # Pass the rest of the args into a wex and retrieve the phymap_windows
+        # Pass the rest of the args into a wex and retrieve the phymap
         self.wex = WindowExtracter(**kwargs)
         self.wex._get_phymap_windows()
+        self.wex._get_phymap()
         self.phymap_windows = self.wex.phymap_windows
+        self.phymap = self.wex.phymap
 
         self._validate_length()
 
@@ -96,9 +98,11 @@ class LocusExtracter:
     def _validate_length(self):
         """Ensure the requested length doesn't exceed the length of the
         longest locus, or else this is a non-sensical request."""
-        max_len = max([(lambda x: x[1] - x[0])(x[0]) for x in self.phymap_windows.values()])
+        max_len = max(self.phymap.apply(lambda x: x["pos1"] - x["pos0"], axis=1))
         if self.length > max_len:
-           raise IPyradError(f"Requested locus length {self.length} exceeds max locus size of the data {max_len}.")
+            logger.info(f"Requested locus length {self.length} exceeds max locus size of the data {max_len}.")
+            logger.info(f"  Forcing `length={max_len}`.")
+            self.length = max_len
 
 
     def _run(self):
@@ -111,11 +115,11 @@ class LocusExtracter:
         """
         logger.info("Entering _get_loci()")
 
-        # Format phymap_windows as a 'fai'-style file for bedtools random
+        # Format phymap as a 'fai'-style file for bedtools random
         with tempfile.NamedTemporaryFile('w', delete=False) as fp:
-            for chrom, windows in self.phymap_windows.items():
-                for widx, win in enumerate(windows):
-                    fp.write(f"{chrom}-{widx}\t{win[1] - win[0]}\n")
+            for chrom, windows in self.phymap.groupby("scaff"):
+                for widx, (_, win) in enumerate(windows.iterrows()):
+                    fp.write(f"{chrom}-{widx}\t{win['pos1'] - win['pos0']}\n")
             fp.close()
 
             # Get max chrom length to constrain samtools random. If this is RAD
@@ -129,15 +133,15 @@ class LocusExtracter:
             logger.info(f"Requested length ({self.length}) > max locus length of the data ({maxlen}). Constraining loci to {maxlen}bp")
             length = maxlen
 
-        cmd = [
+        cmd1 = [
             BIN_BED, "random",
             "-n", str(self.nloci),
             "-l", str(length),
             "-g", fp.name
         ]
         # run the command in subprocess
-        logger.debug(f"CMD: {' '.join(cmd)}")
-        rc, out, err = run_pipeline([cmd])
+        logger.debug(f"CMD: {' '.join(cmd1)}")
+        rc, out, err = run_pipeline([cmd1])
 
         # The list comprehension drops the last (blank) line, and selects only
         # the first 3 columns of the return (the remaining columns aren't useful).
