@@ -81,13 +81,16 @@ class LocusExtracter:
             kwargs["windows"] = [r".*"]
             logger.debug("lex: No windows specified. Sampling from full seq array.")
 
+        if kwargs["exclude"] == None:
+            kwargs["exclude"] = ["assembly_reference_sequence"]
+
         # Pass the rest of the args into a wex and retrieve the phymap
+        logger.info(kwargs)
         self.wex = WindowExtracter(**kwargs)
         self.wex._get_phymap_windows()
         self.wex._get_phymap()
         self.phymap_windows = self.wex.phymap_windows
         self.phymap = self.wex.phymap
-
         self._validate_length()
 
         # Create the outdir
