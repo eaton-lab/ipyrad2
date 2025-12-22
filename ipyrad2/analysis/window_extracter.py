@@ -233,7 +233,11 @@ class WindowExtracter:
 
         # store as dict mapping {scaff_index: window, ...}
         scaff_names = t.index.tolist()
-        self.phymap_windows = {scaff_names.index(i): j for (i, j) in windows.items()}
+        scaff_to_idx = {name: idx for idx, name in enumerate(scaff_names)}
+        self.phymap_windows = {
+            scaff_to_idx[i]: j
+            for i, j in windows.items()
+        }
 
 
     def _get_windows_from_bed(self, bedfile: Path) -> Dict[str, Tuple[int, int]]:
