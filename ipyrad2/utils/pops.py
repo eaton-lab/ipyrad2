@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 
 import pandas as pd
-from typing import Dict, List
+from typing import Dict, List, Tuple
 from pathlib import Path
 from .exceptions import IPyradError
 
 
-def parse_pops_file(popfile: Path) -> Dict[str, (int, List[str])]:
+def parse_pops_file(popfile: Path) -> Dict[str, Tuple[int, List[str]]]:
     """Parse an ipyrad1-style pop_assign_file and return a dictionary
     mapping pop names to tuples of minsamples and a list of sample
     names. The value of minsamples is used by denovo for selecting
