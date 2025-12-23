@@ -236,7 +236,7 @@ def map_filter_sort_pairs(sname: str, fastqs: Tuple[Path, Path], reference: Path
     ]
     cmds = [cmd1, cmd2, cmd3, cmd4, cmd5]
     run_pipeline(cmds)
-    logger.info(f"finished mapping: {sname}")
+    logger.debug(f"finished mapping: {sname}")
     return out_bam
 
 
@@ -310,7 +310,7 @@ def map_filter_sort_single(sname: str, fastqs: Tuple[Path, Path], reference: Pat
     ]
     cmds = [cmd1, cmd2, cmd3, cmd4, cmd5]
     run_pipeline(cmds)
-    logger.info(f"finished mapping: {sname}")
+    logger.debug(f"finished mapping: {sname}")
     return out_bam
 
 def concat_tech_reps_into_tmpdir(imap: Path, tmpdir: Path, fastq_dict: Dict[str, Tuple[Path, Path]]) -> Dict[str, Path]:
@@ -567,13 +567,13 @@ def run_mapper(
                 jobs[sname] = (map_filter_sort_single, kwargs)
 
     # run mapping jobs in parallel
-    run_with_pool(jobs, log_level, workers)
+    run_with_pool(jobs, log_level, workers, msg="Mapping")
 
     # get bam file stats and write to a file
     jobs = {}
     for sname in fastq_dict:
         jobs[sname] = (count_mapped_reads, dict(sname=sname, outdir=outdir))
-    stats = run_with_pool(jobs, log_level, workers)
+    stats = run_with_pool(jobs, log_level, workers, msg="Gathering mapping stats")
 
     # get a new stats outfile path in outdir
     idx = 0
