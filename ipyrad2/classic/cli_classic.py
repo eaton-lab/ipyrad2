@@ -5,17 +5,20 @@
 
 import argparse
 import glob
+import ipyrad2 as ip
 import os
 import sys
 import traceback
+
+from argparse import Namespace
+from loguru import logger
+from pathlib import Path
+
 from ipyrad2.cli.make_wide import make_wide
 from ..utils.logger import set_log_level
 from ..utils.exceptions import IPyradError
 from ..utils.params import read_params, new_params
-from argparse import Namespace
-from loguru import logger
-from pathlib import Path
-import ipyrad2 as ip
+from ..utils.pops import parse_pops_file
 
 VERSION = str(ip.__version__)
 
@@ -133,8 +136,13 @@ def command_line():
         s2_args = Namespace(**{**vars(s2_args), **vars(args)})
         # Check if sorted_fastq_path is set and contains valid fq files
         # This implies the user wants to bring in their own fq files and skip step 1.
-        p = Path(params.main.sorted_fastq_path)
-        fq_files = list(p.parent.glob(p.name))
+        try:
+            p = Path(params.main.sorted_fastq_path)
+            fq_files = list(p.parent.glob(p.name))
+        except ValueError:
+            # Blank sorted_fastq_path will raise this when trying to glob PosixPath('.')
+            fq_files = []
+
         # If the glob succeeds then fq_files will be len > 1, and all *.gz files should exist
         if len(fq_files) and all([x.exists() for x in fq_files]):
             s2_args.fastqs = p
@@ -156,10 +164,20 @@ def command_line():
             s3_args = params.denovo
             s3_args.subcommand = "denovo"
             s3_args = Namespace(**{**vars(s3_args), **vars(args)})
-            s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
+            s3_args.out = Path(params.main.project_dir) / (params.main.name + "_reference")
+            # Try to parse pops file to subsample fastqs for building pseudo-reference
+            pops_file = Path(params.main.pop_assign_file)
+            if pops_file.exists() and not (str(pops_file) == '.'):
+                logger.info("pop_assign_file does not exist, skipping subsample selection.")
+                # Defaults to using all sample edits files
+                # TODO: Could be better to randomly select a handful, but this might be
+                #       better to implement inside the denovo.py code, so it works for CLI as well
+                s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
+            else:
+                # TODO: Maybe this isn't necessary here 
+                s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
             # TODO: Add something to test the number of .gz files and complain if there are too many.
             #       Might be good to recommend using an imap file, and then sampling 2-3 individuals per pop
-            s3_args.out = Path(params.main.project_dir) / (params.main.name + "_reference")
             ip.cli.cli_main.run_subcommand(s3_args, _exit=False)
 
     # MAP: --------------------------------------------------------
