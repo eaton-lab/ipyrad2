@@ -108,9 +108,9 @@ class LocusExtracter:
             self.length = max_len
 
 
-    def _run(self):
+    def _run(self, postfix: str = None):
         self._get_loci()
-        self._write_loci()
+        self._write_loci(postfix)
 
 
     def _get_loci(self) -> None:
@@ -152,13 +152,14 @@ class LocusExtracter:
             columns=["chrom", "startpos", "endpos"])
 
 
-    def _write_loci(self) -> None:
+    def _write_loci(self, postfix: str = None) -> None:
 
         if self.loci is None:
             msg = "No loci selected, run _get_loci() first"
             logger.info(msg)
             raise IPyradError(msg)
 
+        locus_data = []
         for _, locus in self.loci.iterrows():
             # Get chrom and window id for indexing into phymap
             cidx, widx = locus["chrom"].split("-")
@@ -174,6 +175,13 @@ class LocusExtracter:
                 self.wex._write_to_phy()
             elif self.out_format == "nex":
                 self.wex._write_to_nex()
+            elif self.out_format == "bpp":
+                fpost = f"-{postfix}" if postfix else ""
+                locus_data.append(self.wex._write_to_phy(write_stats=False,
+                                                         bpp_format=True,
+                                                         return_locus=True))
+                with open(self.outdir / f"{self.name}{fpost}.phy", 'w') as outfile:
+                    outfile.write("\n".join(locus_data))
             else:
                 logger.error(f"Unrecognized output format: {self.out_format}")
 

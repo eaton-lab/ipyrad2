@@ -39,8 +39,8 @@ def _setup_lex_subparser(subparsers: argparse._SubParsersAction, header: str = N
         help="Directory to write alignment and stats files. Created if it doesn't exist. [default=output-lex]",
     )
     tool.add_argument(
-        "-O", "--out-format", metavar="str", choices=["phy", "nex", "fa"], default="phy",
-        help="Output alignment file format (phy, nex, or fa). [default=phy]",
+        "-O", "--out-format", metavar="str", choices=["phy", "nex", "bpp"], default="phy",
+        help="Output alignment file format (phy, nex, or bpp). [default=phy]",
     )
     tool.add_argument(
         "-N", "--nloci", metavar="int", type=int, default=100,

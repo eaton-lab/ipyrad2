@@ -338,7 +338,10 @@ class WindowExtracter:
             raise IPyradError("No samples passed max_sample_missing filter.")
         return fnames, seqs
 
-    def _write_to_phy(self) -> None:
+    def _write_to_phy(self, 
+                      write_stats: bool = True,
+                      bpp_format: bool = False,
+                      return_locus: bool = False) -> None:
         """Writes the .seqarr matrix as a string to .outfile."""
         # get the filtered alignment
         fnames, fseqarr = self._run()
@@ -349,28 +352,33 @@ class WindowExtracter:
 
         # build phy
         phy = []
+        bpp_prefix = "^" if bpp_format else ""
         for idx, _ in enumerate(fnames):
             seq = fseqarr[idx].tobytes().decode("utf-8")
-            phy.append(f"{pnames[idx]} {seq}")
+            phy.append(f"{bpp_prefix}{pnames[idx]} {seq}")
+
+        if write_stats:
+            self._write_stats(fnames, fseqarr, outfile)
 
         # write to temp file
         ntaxa = len(fnames)
         nsites = fseqarr.shape[1]
 
+        bpp_sep = "\n" if bpp_format else ""
         # write to stdout
         if self.stdout:
             logger.debug("wrote alignment to stdout")
-            sys.stdout.write(f"{ntaxa} {nsites}\n{'\n'.join(phy)}\n")
+            sys.stdout.write(f"{ntaxa} {nsites}\n{bpp_sep}{'\n'.join(phy)}\n")
             outfile = "STDOUT"
+        elif return_locus:
+            return f"{ntaxa} {nsites}\n{bpp_sep}{'\n'.join(phy)}\n"
         else:
             self.outdir.mkdir(exist_ok=True)
             outfile = self.outdir / f"{self.name}.phy"
             with open(outfile, 'w') as out:
-                out.write(f"{ntaxa} {nsites}\n")
+                out.write(f"{ntaxa} {nsites}\n{bpp_sep}")
                 out.write("\n".join(phy))
             logger.info(f"wrote alignment ({ntaxa}, {nsites}) to: {outfile}")
-        # write stats
-        self._write_stats(fnames, fseqarr, outfile)
 
 
     def _write_to_nex(self) -> None:
