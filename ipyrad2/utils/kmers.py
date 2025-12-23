@@ -54,7 +54,7 @@ def get_overhang_from_kmers(fastqs: List[Path], max_len: int, max_reads: int, wo
             jobs[(kmer_size, fastq.name)] = (get_kmer_counts, kwargs)
 
     # fetch counters in parallel
-    kcounts = run_with_pool(jobs, log_level, workers)
+    kcounts = run_with_pool(jobs, log_level, workers, msg="Counting kmers")
 
     # combine results and store top 10 at each size
     top_counts = {}

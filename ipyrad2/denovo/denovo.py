@@ -210,7 +210,8 @@ def run_denovo(
 
     # -------------------------------------------
     msg = "Joining/merging pairs, d" if is_paired else "D"
-    logger.info(f"{msg}ereplicating and clustering")
+    msg = f"{msg}ereplicating and clustering"
+    logger.info(msg)
     jobs = {}
     for sname, fastq_tuple in fastq_dict.items():
         kwargs=dict(
@@ -229,7 +230,7 @@ def run_denovo(
             paired=is_paired,
         )
         jobs[sname] = (vsearch_pairs, kwargs)
-    run_with_pool(jobs, log_level, workers)
+    run_with_pool(jobs, log_level, workers, msg=msg)
 
     # write sample summary TSVs
     for sname in fastq_dict:

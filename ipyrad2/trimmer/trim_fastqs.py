@@ -129,7 +129,7 @@ def trim_sample_with_fastp(
     # run the command in subprocess
     logger.debug(f"CMD: {' '.join(cmd)}")
     run_pipeline([cmd])
-    logger.info(f"finished trimming {sname}")
+    logger.debug(f"finished trimming {sname}")
     return None
 
 
@@ -287,7 +287,7 @@ def run_trimmer(
             threads=threads,  # recommended >=3 since 2 are used for i/o
         )
         jobs[sname] = (trim_sample_with_fastp, kwargs)
-    results = run_with_pool(jobs, log_level, workers)
+    results = run_with_pool(jobs, log_level, workers, msg="Trimming")
     write_stats_summary(sorted(results), outdir)
 
 

@@ -18,6 +18,7 @@ from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from pathlib import Path
 from loguru import logger
 from .logger import setup_loguru_worker
+from .progress import ProgressBar
 
 
 # ---------- Worker-side (signal-safe; kills subprocess groups) ----------
@@ -310,6 +311,7 @@ def run_with_pool(
     log_level: str,
     max_workers: int | None = None,
     max_inflight: int | None = None,
+    msg: str = "Processing",
 ) -> Dict[Any, Any]:
     """Run jobs in parallel with bounded submission; return {key: result}."""
     results: Dict[Any, Any] = {}
@@ -330,6 +332,10 @@ def run_with_pool(
     inflight: set = set()
     ex: ProcessPoolExecutor | None = None
 
+    printstr = f"{msg} - total jobs: {len(jobs)}"
+    prog = ProgressBar(len(jobs), None, printstr)
+    prog.update()
+
     try:
         with ProcessPoolExecutor(
             max_workers=max_workers,
@@ -337,6 +343,7 @@ def run_with_pool(
             initializer=_init_worker_with_pid,
             initargs=(pid_queue, child_pg_queue, log_level),
         ) as ex:
+
             # Pre-fill bounded window
             while len(inflight) < max_inflight:
                 try:
@@ -355,6 +362,9 @@ def run_with_pool(
                     inflight.remove(fut)
                     key = futures_to_key.pop(fut)
                     results[key] = fut.result()
+
+                    prog.finished += 1
+                    prog.update()
 
                     try:
                         key2, (func2, kwargs2) = next(jobs_iter)
@@ -379,6 +389,7 @@ def run_with_pool(
         # Close queues so their FDs/threads are torn down; avoids leaked semaphores.
         try:
             pid_queue.close()
+            print("")
         except Exception:
             pass
         try:
