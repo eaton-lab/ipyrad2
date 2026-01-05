@@ -8,6 +8,7 @@ import glob
 import time
 import copy
 import tempfile
+import re
 import requests
 import itertools
 import subprocess as sps
@@ -159,6 +160,8 @@ class Bpp(object):
         max_sample_missing=1.0,
         reps_resample_loci=False,
         # load_existing_results=False,
+        cores=4,
+        log_level="DEBUG",
         *args, 
         **kwargs):
 
@@ -183,6 +186,8 @@ class Bpp(object):
         self.max_sample_missing = max_sample_missing
         self.reps_resample_loci = reps_resample_loci
         # self.load_existing_results = load_existing_results
+        self.cores = cores
+        self.log_level = log_level
 
         # update kwargs 
         self.asyncs = []
@@ -202,7 +207,7 @@ class Bpp(object):
             "phiprior": (1, 1),
             "usedata": 1,
             "cleandata": 0,
-            "finetune": (0.01, 0.02, 0.03, 0.04, 0.05, 0.01, 0.01),
+            "finetune": 1,
             "copied": False,
         }
 
@@ -348,7 +353,11 @@ class Bpp(object):
         # get mcmcs
         path = os.path.realpath(os.path.join(self.workdir, self.name))
         mcmcs = sorted(glob.glob("{}_r*.mcmc.txt".format(path)))
-        outs = sorted(glob.glob("{}_r*.out.txt".format(path)))
+        # bpp outfile needs to be weeded out from the other *.txt files it creates
+        outs = sorted(glob.glob("{}_r*.txt".format(path)))
+        pattern = re.compile(rf"{name}_r(\d+)\.txt$")
+        outs = [f for f in outs if pattern.search(f)]
+        # get trees
         trees = sorted(glob.glob("{}_r*.tre".format(path)))
 
         for mcmcfile in mcmcs:
@@ -377,7 +386,7 @@ class Bpp(object):
             return "00"
 
 
-    def _run(self, force, nreps, dry_run, block=True):
+    def _run(self, force, nreps, dry_run):
         "Distribute bpp jobs in parallel."
 
         # clear out pre-existing files for this object
@@ -403,10 +412,10 @@ class Bpp(object):
             stdout=False,
             force=force,
         )
-
+        self.lex._DELIM = "^" + DELIM
 
         # print BPP header
-        print("[ipa bpp] bpp")
+        print("[ipa bpp] bpp v4.8.7")
 
         # initiate random seed 
         np.random.seed(self.kwargs["seed"])
@@ -416,13 +425,13 @@ class Bpp(object):
         prog.update()
 
         # replicate jobs
+        jobs = {}
         for job in range(nreps):
             
             self.lex._run(postfix=str(job))
             prog.finished += 1
             prog.update()
 
-        for job in range(nreps):
             # make repname and make ctl filename
             self._name = "{}_r{}".format(self.name, job)
             ctlhandle = os.path.realpath(
@@ -443,73 +452,20 @@ class Bpp(object):
                 ctlfile = self._write_ctlfile()
 
                 # submit to engines
-                if not dry_run:
-                    args = (self.kwargs["binary"], ctlfile, self._algorithm)
-                    rasync = lbview.apply(_call_bpp, *args)
-                    self.asyncs.append(rasync)
+            kwargs = dict(binary=self.kwargs["binary"],
+                          ctlfile=ctlfile,
+                          alg=self._algorithm)
+            jobs[job] = (_call_bpp, kwargs)
 
-        # report on the files written
-        if not self.asyncs:  # and (not quiet):
-            print("[ipa.bpp] wrote {} bpp ctl files (name={}, nloci={})"
+        if not dry_run:
+            print("\n[ipa.bpp] distributing {} bpp jobs (name={}, nloci={})"
                   .format(nreps, self.name, self.nloci))
+            run_with_pool(jobs, self.log_level, self.cores, msg="Running bpp")
 
-        # report on the number of submitted jobs
         else:
-            print("[ipa.bpp] distributed {} bpp jobs (name={}, nloci={})"
+            # report on the files written
+            print("\n[ipa.bpp] wrote {} bpp ctl files (name={}, nloci={})"
                   .format(nreps, self.name, self.nloci))
-
-        # block and show progress until jobs are done.
-        if block:
-            # setup progress bar
-            rep = 0
-            nits = int(self.kwargs["nsample"])
-            prog = ProgressBar(nits, None, "progress on rep {}".format(rep))
-            prog.finished = 0
-            prog.update()
-
-            # block until jobs are done with a progress bar.
-            spacer = 0
-            while 1:
-
-                # get file to check for results
-                checkresult = self.files.mcmcfiles[rep]
-
-                # check for job progress periodically
-                if spacer == 5:
-                    if os.path.exists(checkresult):
-                        with open(checkresult, 'rb') as infile:
-                            nlines = 0
-                            for line in infile:
-                                nlines += 1
-                        prog.finished = nlines
-                    spacer = 0
-
-                # break between checking progress
-                prog.update()
-                time.sleep(5)
-                spacer += 1
-
-                # finished jobs
-                finished = [i.ready() for i in self.asyncs]
-
-                # check if a different rep should be tracked.
-                if not all(finished):
-                    if finished[rep]:
-                        rep = [i for (i, j) in enumerate(finished) if not j][0]
-                    prog.message = "progress on rep {}".format(rep)
-
-                # all jobs finished
-                else:
-                    prog.message = "progress on all reps"
-                    prog.finished = nits
-                    prog.update()
-                    print("")
-                    break
-
-            # check for job failures and raise an error:
-            for job in self.asyncs:
-                if not job.successful():
-                    print(job.result())
 
 
     def _write_mapfile(self):
@@ -544,9 +500,9 @@ class Bpp(object):
         """ write outfile with any args in argdict """
 
         # get full path to out files for this repname
-        path = os.path.realpath(os.path.join(self.workdir, self._name))
-        mcmcfile = "{}.mcmc.txt".format(path)
-        outfile = "{}.out.txt".format(path)
+        jobname = os.path.realpath(os.path.join(self.workdir, self._name))
+        mcmcfile = "{}.mcmc.txt".format(jobname)
+        outfile = "{}.txt".format(jobname)
 
         # store files for this rep
         if mcmcfile not in self.files.mcmcfiles:
@@ -556,17 +512,16 @@ class Bpp(object):
 
         # get tree with delimiters on names
         tmptre = self.tree.copy()
-        tmptre = tmptre.set_node_values(
+        tmptre = tmptre.set_node_data(
             "name", 
-            {i: DELIM + str(j.name) for (i, j) in tmptre.idx_dict.items()},
+            {i: DELIM + str(tmptre[i].name) for i in range(tmptre.ntips)},
         )
 
         # expand options to fill ctl file
         ctlstring = CTLFILE.format(**{
-            "seqfile": self.seqfile,
+            "seqfile": self.lex.outfile,
             "mapfile": self.mapfile,
-            "mcmcfile": mcmcfile,
-            "outfile": outfile,
+            "jobname": jobname,
 
             "nloci": self.nloci,
             "usedata": self.kwargs["usedata"],
@@ -581,7 +536,7 @@ class Bpp(object):
             "nsp": len(self.imap),
             "spnames": " ".join([DELIM + i for i in sorted(self.imap)]),
             "spcounts": " ".join([str(len(self.imap[i])) for i in sorted(self.imap)]),
-            "spnewick": tmptre.write(tree_format=9),
+            "spnewick": tmptre.write(dist_formatter=None),
             "speciesmodelprior": self.kwargs["speciesmodelprior"],
 
             "thetaprior": " ".join([str(i) for i in self.kwargs["thetaprior"]]),
@@ -590,7 +545,7 @@ class Bpp(object):
             "estimate_theta": ("E" if self._algorithm == "00" else ""),
 
             "seed": self._seed,
-            "finetune": " ".join([str(i) for i in self.kwargs["finetune"]]),
+            "finetune": self.kwargs["finetune"],
             "burnin": self.kwargs["burnin"],
             "sampfreq": self.kwargs["sampfreq"],
             "nsample": self.kwargs["nsample"],
@@ -663,23 +618,6 @@ class Bpp(object):
         bpp with the print=-1 option which means "read in" so that it 
         will compute a new posterior table...
         """
-        # load out tables of summarized posteriors
-        try:
-            tables = []
-            for ofile in self.files.outfiles:
-                with open(ofile, 'r') as infile:
-                    lines = infile.readlines()[-12:]
-                    data = [i.strip().split() for i in lines]
-                    index = [i[0] for i in data[1:]]
-                    df = pd.DataFrame(
-                        data=[i[1:] for i in data[1:]],
-                        columns=data[0],
-                        index=index,
-                    )
-                    tables.append(df.astype(float))
-        except IndexError:
-            raise IPyradError(
-                "BPP job cannot be summarized because it did not finish.")
 
         # load mcmc tables of posteriors
         dfs = [
@@ -689,6 +627,15 @@ class Bpp(object):
 
         # return a list of parsed CSV results
         if individual_results:
+            # load out tables of summarized posteriors
+            try:
+                tables = []
+                for ofile in self.files.outfiles:
+                    tables.append(self._parse_A00_out(ofile))
+            except IndexError:
+                raise IPyradError(
+                    "BPP job cannot be summarized because it did not finish.")
+
             return tables, dfs
 
         # concatenate each CSV and then get stats w/ describe
@@ -742,6 +689,56 @@ class Bpp(object):
                 )
             return table, concat
 
+
+    def _parse_A00_out(self, ofile):
+        nodes = []
+        rows = []
+        in_nodes = False
+        in_table = False
+        with open(ofile, 'r') as infile:
+            for line in infile:
+                line = line.strip().split()
+
+                # detect node label block
+                if "(+1)" in line:
+                    in_nodes = True
+                elif in_nodes and line == []:
+                    in_nodes = False
+                elif in_nodes:
+                    # Just save the column with the node name
+                    nodes.append(line[3])
+
+                # detect parameter estimate block
+                if "param" in line and "rho1" in line:
+                    rows.append(line)
+                    in_table = True
+                elif "lnL" in line:
+                    rows.append(line)
+                    in_table = False
+                elif in_table:
+                    rows.append(line)
+            # remove blank line and '---' separator
+            rows.pop(1)
+            rows.pop(-2)
+
+        # Increment index because bpp uses 1-based population indexing
+        nodes = pd.DataFrame(nodes)
+        nodes.index = [x+1 for x in nodes.index]
+
+        # Load params data and fix the column labels
+        params = pd.DataFrame(rows[1:], columns=rows[0]).T
+        params.columns = params.iloc[0]
+        params = params.iloc[1:]
+
+        def _get_new_header(val):
+            if val == "lnL":
+                return val
+            else:
+                p, idx = val.split(":")
+                return f"{p}_{idx}{nodes.loc[int(idx)][0]}"
+        columns = [_get_new_header(x) for x in params.columns]
+        params.columns = columns
+        return params.astype(float)
 
 
     def _summarize_01(self, individual_results):
@@ -1959,8 +1956,7 @@ CTLFILE = """
 * I/O 
 seqfile = {seqfile}
 Imapfile = {mapfile}
-mcmcfile = {mcmcfile}
-outfile = {outfile}
+jobname = {jobname}
 
 * DATA
 nloci = {nloci}
@@ -1982,7 +1978,7 @@ phiprior = {phiprior}
 
 * MCMC PARAMS
 seed = {seed}
-finetune = 1: {finetune}
+finetune = {finetune}
 print = 1 0 0 0
 burnin = {burnin}
 sampfreq = {sampfreq}
