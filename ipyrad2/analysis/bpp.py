@@ -647,8 +647,10 @@ class Bpp(object):
                 raise IPyradError("No result files found.")
 
             # new file handles
-            cf = self.files.mcmcfiles[0].rsplit("_", 1)[0] + "_concat.mcmc.txt"
-            of = self.files.mcmcfiles[0].rsplit("_", 1)[0] + "_concat.out.txt"            
+            handle = self.files.mcmcfiles[0].rsplit("_", 1)[0] + "_concat"
+            cf = handle + ".mcmc.txt"
+            of = handle + ".txt"
+            af = handle + ".conditional_a1b1.txt"
 
             # existing and new ctl files
             ctlfile = os.path.join(self.workdir, self.name + "_r0.ctl.txt")
@@ -656,19 +658,32 @@ class Bpp(object):
 
             # write a concatenated mcmc file
             concat = pd.concat(dfs, ignore_index=True)
+            # bpp expects the index col to be labeled 'Gen' and `ignore_index`
+            # wipes that out here, so reset it
+            concat.index.name = "Gen"
             concat.to_csv(cf, sep="\t", float_format="%.6f")
+
+            # write a concatenated a1b1 file
+            cdfs = [
+                pd.read_csv(i.replace("mcmc", "conditional_a1b1"), sep='\t', index_col=0)
+                for i in self.files.mcmcfiles
+            ]
+            # write a concatenated mcmc file
+            concat = pd.concat(cdfs, ignore_index=True)
+            # bpp expects the index col to be labeled 'Gen' and `ignore_index`
+            # wipes that out here, so reset it
+            concat.index.name = "Gen"
+            concat.to_csv(af, sep="\t", float_format="%.6f")
 
             # write a tmp ctl file with print=-1 and mcmcfile=cf
             with open(ctlfile, 'r') as infile:
                 with open(newctl, 'w') as outfile:
                     cdat = infile.readlines()
                     for line in cdat:
-                        if 'mcmcfile' in line:
-                            line = "mcmcfile = {}\n".format(cf)
-                        if 'outfile' in line:
-                            line = "outfile = {}\n".format(of)
+                        if 'jobname' in line:
+                            line = "jobname = {}\n".format(handle)
                         if 'print' in line:
-                            line = "print = -1\n"
+                            line = "print = -1 0 0 0 0\n"
                         outfile.write(line)
 
             # run bpp on the new ctlfile
@@ -678,15 +693,7 @@ class Bpp(object):
             os.remove(newctl)
 
             # load the new table
-            with open(ofile, 'r') as infile:
-                lines = infile.readlines()[-12:]
-                data = [i.strip().split() for i in lines]
-                index = [i[0] for i in data[1:]]
-                table = pd.DataFrame(
-                    data=[i[1:] for i in data[1:]],
-                    columns=data[0],
-                    index=index,
-                )
+            table = self._parse_A00_out(of)
             return table, concat
 
 
