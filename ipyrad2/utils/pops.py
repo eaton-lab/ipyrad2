@@ -23,7 +23,7 @@ def parse_pops_file(popfile: Path) -> Tuple[Dict[str, int], Dict[str, List[str]]
             indN popN
             # pop1:3 pop2:3 pop3:3
 
-    Returns 2 dictionaries keying populations to minsamples (minmap) and 
+    Returns 2 dictionaries keying populations to minsamples (minmap) and
     populations to lists of sample names (imap).
     """
     # Offload some of the parsing to the `parse_imap()` function which is used
