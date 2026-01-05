@@ -6,7 +6,7 @@ from pathlib import Path
 from .exceptions import IPyradError
 
 
-def parse_pops_file(popfile: Path) -> Dict[str, Tuple[int, List[str]]]:
+def parse_pops_file(popfile: Path) -> Tuple[Dict[str, int], Dict[str, List[str]]]:
     """Parse an ipyrad1-style pop_assign_file and return a dictionary
     mapping pop names to tuples of minsamples and a list of sample
     names. The value of minsamples is used by denovo for selecting
@@ -22,6 +22,9 @@ def parse_pops_file(popfile: Path) -> Dict[str, Tuple[int, List[str]]]:
             ...
             indN popN
             # pop1:3 pop2:3 pop3:3
+
+    Returns 2 dictionaries keying populations to minsamples (minmap) and 
+    populations to lists of sample names (imap).
     """
     # Offload some of the parsing to the `parse_imap()` function which is used
     # by the new CLI mode and expects a file with _only_ the sample/pop mapping
@@ -41,7 +44,10 @@ def parse_pops_file(popfile: Path) -> Dict[str, Tuple[int, List[str]]]:
     else:
         raise IPyradError(MIN_SAMPLES_PER_POP_MALFORMED)
 
-    return  {i: (popmins[i], popdict[i]) for i in popdict}
+    imap = {i:popdict[i] for i in popdict}
+    minmap = {i:popmins[i] for i in popdict}
+
+    return imap, minmap
 
 
 def parse_imap(popfile: Path) -> Dict[str, List[str]]:
