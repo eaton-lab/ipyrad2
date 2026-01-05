@@ -97,6 +97,8 @@ class LocusExtracter:
         self.outdir.mkdir(exist_ok=True)
         self.loci = None
 
+        # Sample name delimiter (optional)
+        self._DELIM = ""
 
     def _validate_length(self):
         """Ensure the requested length doesn't exceed the length of the
@@ -178,9 +180,11 @@ class LocusExtracter:
             elif self.out_format == "bpp":
                 fpost = f"-{postfix}" if postfix else ""
                 locus_data.append(self.wex._write_to_phy(write_stats=False,
+                                                         prefix=self._DELIM,
                                                          bpp_format=True,
                                                          return_locus=True))
-                with open(self.outdir / f"{self.name}{fpost}.phy", 'w') as outfile:
+                self.outfile = self.outdir / f"{self.name}{fpost}.phy"
+                with open(self.outfile, 'w') as outfile:
                     outfile.write("\n".join(locus_data))
             else:
                 logger.error(f"Unrecognized output format: {self.out_format}")

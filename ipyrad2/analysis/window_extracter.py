@@ -340,6 +340,7 @@ class WindowExtracter:
 
     def _write_to_phy(self, 
                       write_stats: bool = True,
+                      prefix: str = None,
                       bpp_format: bool = False,
                       return_locus: bool = False) -> None:
         """Writes the .seqarr matrix as a string to .outfile."""
@@ -352,10 +353,10 @@ class WindowExtracter:
 
         # build phy
         phy = []
-        bpp_prefix = "^" if bpp_format else ""
+        prefix = prefix if prefix else ""
         for idx, _ in enumerate(fnames):
             seq = fseqarr[idx].tobytes().decode("utf-8")
-            phy.append(f"{bpp_prefix}{pnames[idx]} {seq}")
+            phy.append(f"{prefix}{pnames[idx]} {seq}")
 
         if write_stats:
             self._write_stats(fnames, fseqarr, outfile)
