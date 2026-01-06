@@ -12,7 +12,7 @@ import pandas as pd
 from .beds import (
     get_name_from_bam,
     get_reference_sort_order,
-    get_fragment_merged_coverage_beds,
+    # get_fragment_merged_coverage_beds,
     get_coverage_bed_graphs,
     get_across_sample_loci_bed,
     get_sample_coverage_stats_in_loci_bed,
@@ -30,7 +30,8 @@ from .loci import (
     write_sam_faidx,
     get_reference_in_loci_beds,
     get_consensus,
-    get_sample_masked_beds,
+    # get_sample_masked_beds,
+    make_lowdepth_mask,
     build_locus_fasta_database,
     write_loci_and_stats_files,
 )
@@ -38,6 +39,28 @@ from .write_seqs import write_seqs_hdf5
 from .write_snps import write_snps_hdf5
 from ..utils.parallel import run_with_pool
 from ..utils.exceptions import IPyradError
+
+
+def existing_results_force_or_raise(outdir, tmpdir, name, force):
+    if (outdir / f"{name}.loci.txt").exists() or tmpdir.exists():
+        if not force:
+            raise IPyradError(f"outfiles with prefix {name} already exist in {outdir}. Use --force to overwrite.")
+        else:
+            # collect relevant files and rm
+            logger.debug(f"removing previous ipyrad assemble files from {outdir}")
+            if tmpdir.exists():
+                shutil.rmtree(tmpdir)
+            rfiles = [
+                outdir / f"{name}.loci.txt",
+                outdir / f"{name}.seqs.hdf5",
+                outdir / f"{name}.snps.hdf5",
+                outdir / f"{name}.stats_loci.tsv",
+                outdir / f"{name}.stats_samples.tsv",
+                outdir / f"{name}.stats_coverage.tsv",
+            ]
+            for r in rfiles:
+                if r.exists():
+                    r.unlink()
 
 
 def run_assembler(
@@ -76,25 +99,7 @@ def run_assembler(
     workers = max(1, cores // threads)
 
     # check outdir for existing and raise or remove
-    if (outdir / f"{name}.loci.txt").exists():
-        if not force:
-            raise IPyradError(f"outfiles with prefix {name} already exist in {outdir}. Use --force to overwrite.")
-        else:
-            # collect relevant files and rm
-            logger.debug(f"removing previous ipyrad assemble files from {outdir}")
-            if tmpdir.exists():
-                shutil.rmtree(tmpdir)
-            rfiles = [
-                outdir / f"{name}.loci.txt",
-                outdir / f"{name}.seqs.hdf5",
-                outdir / f"{name}.snps.hdf5",
-                outdir / f"{name}.stats_loci.tsv",
-                outdir / f"{name}.stats_samples.tsv",
-                outdir / f"{name}.stats_coverage.tsv",
-            ]
-            for r in rfiles:
-                if r.exists():
-                    r.unlink()
+    existing_results_force_or_raise(outdir, tmpdir, name, force)
 
     # ensure directory structure
     outdir.mkdir(exist_ok=True, parents=True)
@@ -140,25 +145,30 @@ def run_assembler(
     get_reference_sort_order(reference, tmpdir)
 
     # ------------------------------------------------------------------
-    # ---- LOCUS DELIMITING --------------------------------------------
+    # ---- [1] LOCUS DELIMITING (see beds.py) --------------------------
     # ------------------------------------------------------------------
+    # This measures read coverage for each sample and finds bed regions
+    # where at least N samples have overlapping coverage > min_depth to
+    # delimit locus beds. The result is written to tmpdir/beds/loci.bed,
+    # and each sample's bed is in tmpdir/beds/{sname}.fragments.bedgraph
     if loci_bed is not None:
         # copy input loci file to tmpdir/beds/loci.bed
+        logger.info(f"using input loci bed file: {loci_bed}")
         loci_bed = shutil.copy2(loci_bed, tmpdir / "beds" / "loci.bed")
         loci_bed = tmpdir / "beds" / "loci.bed"
     else:
         logger.info("delimiting sample coverage beds")
         jobs = {}
         for sname, bam_file in bam_dict.items():
-            kwargs = dict(sname=sname, bam_file=bam_file, reference=reference, min_map_q=10, threads=threads, tmpdir=tmpdir)
+            kwargs = dict(
+                sname=sname, bam_file=bam_file, reference=reference, tmpdir=tmpdir,
+                min_map_q=min_map_q,
+                min_sample_depth=min_sample_depth,
+                min_merge_distance=min_locus_merge_distance,
+                threads=threads,
+            )
             jobs[sname] = (get_coverage_bed_graphs, kwargs)
         run_with_pool(jobs, log_level, workers)            # multithreaded
-
-        jobs = {}
-        for sname, bam_file in bam_dict.items():
-            kwargs = dict(sname=sname, tmpdir=tmpdir)
-            jobs[sname] = (get_fragment_merged_coverage_beds, kwargs)
-        run_with_pool(jobs, log_level, cores)              # single-threaded
 
         logger.info("delimiting shared coverage beds (loci)")
         args = (list(bam_dict), min_locus_sample_coverage, min_locus_merge_distance, min_locus_length, tmpdir)
@@ -176,25 +186,44 @@ def run_assembler(
     # so we can apply depth-outlier filters, and report filter stats later.
     # This takes a while to run on large WGS samples, and doesn't seem to
     # often lead to many filtered loci. Maybe make it optional?
-    logger.info("measuring per locus stats")
-    jobs = {}
-    for sname, bam_file in all_dict.items():
-        kwargs = dict(bam_file=bam_file, loci_bed=tmpdir / "beds" / "loci.bed", min_map_q=min_map_q, ref_info=tmpdir / "REF_info.txt")
-        jobs[sname] = (get_sample_coverage_stats_in_loci_bed, kwargs)
-    results = run_with_pool(jobs, log_level, workers)
+    #
+    # update: currently skipping this here.
+    #
+    # logger.info("measuring per locus stats")
+    # jobs = {}
+    # for sname, bam_file in all_dict.items():
+    #     kwargs = dict(bam_file=bam_file, loci_bed=tmpdir / "beds" / "loci.bed", min_map_q=min_map_q, ref_info=tmpdir / "REF_info.txt")
+    #     jobs[sname] = (get_sample_coverage_stats_in_loci_bed, kwargs)
+    # results = run_with_pool(jobs, log_level, workers)
 
-    # store locus stats before filtering.
-    stats_before = pd.DataFrame(data={i: results[i][0] for i in snames}).T
+    # # store locus stats before filtering.
+    # stats_before = pd.DataFrame(data={i: results[i][0] for i in snames}).T
 
-    # store read depth outlier mask
-    covs = [i[1] for i in results.values()]
-    read_depth_zscores = np.vstack(covs).mean(axis=0)
-    read_depth_mask = read_depth_zscores > 5.0
-    # logger.warning(read_depth_mask)
+    # # store read depth outlier mask
+    # covs = [i[1] for i in results.values()]
+    # read_depth_zscores = np.vstack(covs).mean(axis=0)
+    # read_depth_mask = read_depth_zscores > 5.0
+    # # logger.warning(read_depth_mask)
+
+    # --------------------------------------------------------------------
+    # ---- LOCUS FILTERING by phase/paralogs (see phase...py) ------------
+    # --------------------------------------------------------------------
+    # This writes a tmpdir/beds/loci.filtered.bed file that excludes the
+    # dropped loci, and also a tmpdir/beds/{sname}.filtered.bed that
+    # excludes loci for each sample.
+    #
+    # The loci filtered out of the dataset will not have variants called,
+    # but the loci filtered from individual samples will be called, and
+    # then removed later by adding to sample mask beds and using setGT
+    # in vcf.
+    # This is where phase(...) will be called.
 
     # ------------------------------------------------------------------
-    # ---- VARIANT CALLING ---------------------------------------------
+    # ---- VARIANT CALLING (see variants.py) ---------------------------
     # ------------------------------------------------------------------
+    # This calls bcftools mpileup and bcftools call to call variants.
+    # The genome is split into regions that can be processed in parallel.
+    # Results are written to...
     logger.info("calling variants in locus beds")
     # Each variant calling worker can effectively use ~2 threads
     vworkers = int(cores // 2)
@@ -210,6 +239,7 @@ def run_assembler(
             min_map_q=min_map_q,
             locus_chunk=chunk,
             threads=min(2, threads),
+            # filters_dict=filters_dict,
         )
         jobs[chunk] = (get_group_called_variants_in_vcf_chunks, kwargs)
     # each job does not use much RAM, so run many at 1-3 threads per job
@@ -228,15 +258,23 @@ def run_assembler(
     # ------------------------------------------------------------------
     # ---- CONSENSUS CALLING -------------------------------------------
     # ------------------------------------------------------------------
+    # create sample masks that mask sites from VCF and consensus sequence
+    # if they don't pass a depth filter, or paralog filter. We write the
+    # consensus sequences to a database that will be used to write .loci
+    # and fill the HDF5 database. The masks will also be used to update
+    # the final VCF file.
     logger.info("extracting reference sequence in locus beds")
     write_sam_faidx(tmpdir)
     get_reference_in_loci_beds(tmpdir, reference)
 
+    logger.info("filtering/extracting consensus sequences")
+    #
+
     logger.info("building coverage masks")
     jobs = {}
     for sname, bam_file in all_dict.items():
-        kwargs = dict(sname=sname, bam_file=bam_file, min_sample_depth=min_sample_depth, tmpdir=tmpdir)
-        jobs[sname] = (get_sample_masked_beds, kwargs)
+        kwargs = dict(sname=sname, min_sample_depth=min_sample_depth, tmpdir=tmpdir)
+        jobs[sname] = (make_lowdepth_mask, kwargs)
     run_with_pool(jobs, log_level, cores)
 
     logger.info("extracting consensus sequences")
@@ -244,7 +282,7 @@ def run_assembler(
     for sname, bam_file in all_dict.items():
         kwargs = dict(sname=sname, reference=reference, tmpdir=tmpdir, keep_insertions=False)
         jobs[sname] = (get_consensus, kwargs)
-    run_with_pool(jobs, log_level, workers)
+    run_with_pool(jobs, log_level, vworkers)
 
     # ------------------------------------------------------------------
     # ---- LOCUS BUILDING ----------------------------------------------
@@ -268,7 +306,7 @@ def run_assembler(
             min_locus_length=min_locus_length,
             max_locus_hetero_frequency=max_locus_hetero_frequency,
             max_locus_variant_frequency=max_locus_variant_frequency,
-            read_depth_mask=read_depth_mask,
+            # read_depth_mask=read_depth_mask,
         )),
         "seqs": (write_seqs_hdf5, dict(
             name=name,
@@ -281,7 +319,7 @@ def run_assembler(
             min_locus_length=min_locus_length,
             max_locus_hetero_frequency=max_locus_hetero_frequency,
             max_locus_variant_frequency=max_locus_variant_frequency,
-            read_depth_mask=read_depth_mask,
+            # read_depth_mask=read_depth_mask,
         ))
     }
     run_with_pool(jobs, log_level, workers)
@@ -293,6 +331,9 @@ def run_assembler(
     # add snps dataset to the database file
     logger.info("writing snps database (.hdf5)")
     write_snps_hdf5(name, outdir, list(all_dict), reference)
+
+    # this exit is temporary while updating new stats to write out
+    raise SystemExit(0)
 
     # ------------------------------------------------------------------
     # ---- STATS CALC/WRITING ------------------------------------------
@@ -309,8 +350,9 @@ def run_assembler(
     df["mean_depth_per_locus_with_nonzero_mapping_before_filtering"] = stats_before["mean_depth_per_locus_with_nonzero_mapping"]
     df["median_depth_per_locus_with_nonzero_mapping_before_filtering"] = stats_before["median_depth_per_locus_with_nonzero_mapping"]
     df["std_depth_per_locus_with_nonzero_mapping_before_filtering"] = stats_before["std_depth_per_locus_with_nonzero_mapping"]
+    sample_stats_path = outdir / f"{name}.stats_depths.txt"
     df.to_string(
-        outdir / f"{name}.stats_depths.txt",
+        sample_stats_path,
         formatters={
             "nloci": lambda x: f"{int(x)}",
             "nloci_before_filtering": lambda x: f"{int(x)}",
@@ -325,11 +367,13 @@ def run_assembler(
             "std_depth_per_locus_with_nonzero_mapping_before_filtering": lambda x: f"{x:.3f}",
         },
     )
+    logger.info(f"sample stats written to {sample_stats_path}")
 
     # calculate and report number of variants in final loci
     # covs = [i[1] for i in results.values()]
     stats = get_locus_and_snp_stats_in_loci_bed(tmpdir, threads)
     logger.debug(f"{stats}")
+    # logger.info(f"locus filtering stats written to {...}")
 
 
 if __name__ == "__main__":
