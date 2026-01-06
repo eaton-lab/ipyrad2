@@ -55,7 +55,10 @@ def trim_sample_with_fastp(
     max_reads: int,
     min_trimmed_length: int,
     min_quality: int,
-    max_low_quality_bases: int,
+    max_unqualified_percent: int,
+    min_mean_window_quality: int,
+    cut_window_size: int,
+    max_ns: int,
     phred_qscore_offset: int,
     disable_adapter_trimming: bool,
     disable_quality_filtering: bool,
@@ -101,17 +104,20 @@ def trim_sample_with_fastp(
 
     # common arguments
     cmd.extend([
-        "-q", str(min_quality + phred_qscore_offset - 33), # threshold to determine low qual bases
-        "-u", "10",                                        # percentage of low qual bases allowed
-        "-M", "30",                                        # mean quality score used by --cut args
+        "-q", str(min_quality),    # threshold to determine low qual bases
+        "-u", str(max_unqualified_percent),   # percentage of low qual bases allowed
+        "-M", str(min_mean_window_quality),   # mean quality score used by --cut args
+        "-W", str(cut_window_size),
         "--cut_front", "--cut_front_window_size", "5",
         "--cut_tail", "--cut_tail_window_size", "5",
-        "-l", str(min_trimmed_length),
-        "--trim_poly_g", "--trim_poly_x", "--poly_x_min_len", "10",
-        "-y",
-        "--n_base_limit", str(max_low_quality_bases),
-        "-j", str(stats_json),
-        "-h", str(stats_html),
+        "--length_required", str(min_trimmed_length),
+        "--trim_poly_g",
+        "--trim_poly_x",
+        "--poly_x_min_len", "10",
+        "--low_complexity_filter",
+        "--n_base_limit", str(max_ns),
+        "--json", str(stats_json),
+        "--html", str(stats_html),
         "--adapter_fasta", str(ADAPTERS),
     ])
 
@@ -202,10 +208,13 @@ def run_trimmer(
     restriction_overhangs: Tuple[str, str],
     max_reads: int,
     min_trimmed_length: int,
+    max_unqualified_percent: int,
     min_quality: int,
-    max_low_quality_bases: int,
+    min_mean_window_quality: int,
+    cut_window_size: int,
     phred_qscore_offset: int,
     max_reads_kmer: int,
+    max_ns: int,
     disable_infer_re_overhangs: bool,
     disable_adapter_trimming: bool,
     disable_quality_filtering: bool,
@@ -260,9 +269,13 @@ def run_trimmer(
             outdir=outdir,
             restriction_overhangs=(re1, re2),
             max_reads=max_reads,
+            max_ns=max_ns,
             min_trimmed_length=min_trimmed_length,
             min_quality=min_quality,
-            max_low_quality_bases=max_low_quality_bases,
+            max_unqualified_percent=max_unqualified_percent,
+            min_mean_window_quality=min_mean_window_quality,
+            cut_window_size=cut_window_size,
+            # max_low_quality_bases=max_low_quality_bases,
             phred_qscore_offset=phred_qscore_offset,
             disable_adapter_trimming=disable_adapter_trimming,
             disable_quality_filtering=disable_quality_filtering,
