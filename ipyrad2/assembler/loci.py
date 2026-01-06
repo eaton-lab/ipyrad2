@@ -89,31 +89,66 @@ def get_consensus(sname: str, reference: Path, tmpdir: Path, keep_insertions: bo
     return out_fasta
 
 
-def get_sample_masked_beds(sname: str, bam_file: Path, min_sample_depth: int, tmpdir: Path) -> Path:
-    """Write bed files to mask <min_depth or filtered sites per sample.
+# DEPRECATED
+# def get_sample_masked_beds(sname: str, bam_file: Path, min_sample_depth: int, tmpdir: Path) -> Path:
+#     """Write bed files to mask <min_depth or filtered sites per sample.
 
-    Where is the mask used?
-    -----------------------
-    This is used to write consensus loci for the sample. The BED has
-    the sites where this sample matches the reference. Sites not
-    in this file are masked, and will appear as N for this sample.
-    If the sample is variant relative to the reference then the variant
-    will be applied during consens writing.
+#     Where is the mask used?
+#     -----------------------
+#     This is used to write consensus loci for the sample. The BED has
+#     the sites where this sample matches the reference. Sites not
+#     in this file are masked, and will appear as N for this sample.
+#     If the sample is variant relative to the reference then the variant
+#     will be applied during consens writing.
+#     """
+#     bed_dir = tmpdir / "beds"
+#     loci_bed = bed_dir / "loci.bed"
+#     out_path = bed_dir / f"{sname}.mask.bed"
+
+#     # write bedgraph w/ zeros (-bga) and do NOT pair fragments (-pc)
+#     # otherwise it paints coverage into the inserts.
+#     cmd1 = [BIN_BED, "genomecov", "-ibam", str(bam_file), "-bga"] #, "-pc"]
+#     cmd2 = ["awk", "-v", f"MIN={min_sample_depth}", 'BEGIN{OFS="\t"} $4<MIN {print $1,$2,$3}']
+#     cmd3 = [BIN_BED, "intersect", "-a", "-", "-b", str(loci_bed)]
+#     cmd4 = [BIN_BED, "sort", "-i", "-"]
+#     cmd5 = [BIN_BED, "merge", "-i", "-"]
+
+#     run_pipeline([cmd1, cmd2, cmd3, cmd4, cmd5], out_path)
+#     return out_path
+
+
+def make_lowdepth_mask(sname: str, min_sample_depth: int, tmpdir: Path):
+    """Build a per-bp mask of positions inside `loci_bed` where bedGraph depth < min_depth.
+
+    Output mask contains only the A (loci) columns and is split into minimal sub-intervals
+    where coverage is below threshold (including 0-coverage gaps).
     """
     bed_dir = tmpdir / "beds"
     loci_bed = bed_dir / "loci.bed"
-    out_path = bed_dir / f"{sname}.mask.bed"
+    ref_info = tmpdir / "REF_info.txt"
+    sample_bedgraph = bed_dir / f"{sname}.fragments.bedgraph"
+    good_bed = bed_dir / f"{sname}.goodcov.bed"
+    out_bed = bed_dir / f"{sname}.mask.bed"
 
-    # write bedgraph w/ zeros (-bga) and do NOT pair fragments (-pc)
-    # otherwise it paints coverage into the inserts.
-    cmd1 = [BIN_BED, "genomecov", "-ibam", str(bam_file), "-bga"] #, "-pc"]
-    cmd2 = ["awk", "-v", f"MIN={min_sample_depth}", 'BEGIN{OFS="\t"} $4<MIN {print $1,$2,$3}']
-    cmd3 = [BIN_BED, "intersect", "-a", "-", "-b", str(loci_bed)]
-    cmd4 = [BIN_BED, "sort", "-i", "-"]
-    cmd5 = [BIN_BED, "merge", "-i", "-"]
+    # 1) Threshold bedGraph: keep depth >= min_depth, drop depth column for set ops
+    cmd1 = [
+        "awk",
+        f'BEGIN{{OFS="\\t"}} $4>={min_sample_depth} {{print $1,$2,$3}}',
+        str(sample_bedgraph),
+    ]
+    cmd2 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
+    cmd3 = [BIN_BED, "merge", "-i", "-"]
+    run_pipeline([cmd1, cmd2, cmd3], good_bed)
 
-    run_pipeline([cmd1, cmd2, cmd3, cmd4, cmd5], out_path)
-    return out_path
+    # subtract good loci positions from all loci positions
+    cmd1 = [
+        BIN_BED, "subtract",
+        "-a", str(loci_bed),
+        "-b", str(good_bed),
+        "-sorted",
+    ]
+    run_pipeline([cmd1], out_bed)
+    return out_bed
 
 
 def iter_fasta(fasta: Path):
@@ -400,7 +435,7 @@ def write_loci_and_stats_files(
     min_locus_length: int,
     max_locus_hetero_frequency: float,
     max_locus_variant_frequency: float,
-    read_depth_mask: np.ndarray,
+    # read_depth_mask: np.ndarray,
 ):
     """
     """
@@ -447,12 +482,12 @@ def write_loci_and_stats_files(
         # for lidx, liter in enumerate(locus_iter):
         for oheader, ldict in iter_parse_loci(database):
 
-            # skip if masked by max depth zscore
-            if read_depth_mask[lidx]:
-                lidx += 1
-                total_filters["max_depth_outlier"] += 1
-                logger.debug(f"filtered by max_depth_outlier: locus {lidx}")
-                continue
+            # # skip if masked by max depth zscore
+            # if read_depth_mask[lidx]:
+            #     lidx += 1
+            #     total_filters["max_depth_outlier"] += 1
+            #     logger.debug(f"filtered by max_depth_outlier: locus {lidx}")
+            #     continue
 
             # apply trim and filters to locus
             args = (
