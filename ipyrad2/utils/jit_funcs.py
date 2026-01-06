@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 
 import numpy as np
-from numba import njit
+# from numba import njit
 
 AMBIGARR = np.array(list(b"RSKYWM")).astype(np.uint8)
 
 
-@njit
+# @njit
 def max_heteros_count_numba(seqs: np.ndarray) -> int:
     """Return max number of samples with a shared polymorphism.
     """
@@ -19,7 +19,7 @@ def max_heteros_count_numba(seqs: np.ndarray) -> int:
     return counts.max()
 
 
-@njit
+# @njit
 def snp_count_numba(seqs: np.ndarray) -> np.ndarray:
     """Return the SNP array (see get_snps_array docstring).
 
