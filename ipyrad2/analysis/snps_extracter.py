@@ -12,13 +12,16 @@ Command line
 $ ipyrad snpex -d H5 --stdout --maf 0.2 --scaff Chr[1-2] --min-samp 4
 """
 
-from typing import Optional, Dict, List, Union, Tuple
-from pathlib import Path
+import itertools
 import numpy as np
 import pandas as pd
 import h5py
 from loguru import logger
+from pathlib import Path
+from typing import Optional, Dict, List, Union, Tuple
 
+from ..utils.exceptions import IPyradError
+from ..utils.pops import parse_pops_file, parse_imap
 
 # how many cols of SNPs to load in at once from snps, genos, snpsmap
 CHUNKSIZE = 10_000
@@ -83,8 +86,9 @@ class SNPsExtracter:
         min_sample_coverage: float,
         max_sample_missing: float,
         min_minor_allele_frequency: float,
-        imap: Path | None,
-        minmap: Path | None,
+        imap: Path | str | Dict | None,
+        minmap: Path | Dict | None,
+        exclude: Path | str | List | None = None,
     ):
 
         # store params
@@ -92,12 +96,14 @@ class SNPsExtracter:
         """String file path to a snps HDF5 file."""
         self.imap = imap if imap else {}
         """Dict mapping population names to a list of existing sample names."""
-        self.minmap = minmap if minmap else {i: 1 for i in self.imap}
+        self.minmap = minmap if minmap else {}
         """Dict mapping population names to mincov numbers or proportions per population."""
         self.mincov = min_sample_coverage
         """The minimum sample coverage across all samples or subsamples (if imap)."""
         self.maf = min_minor_allele_frequency
         """The minimum frequency of the minor allele else SNP is filtered."""
+        self.exclude = exclude if exclude else []
+        """A file or list of samples to remove before SNP extraction."""
 
         # attributes to be filled
         self.nsnps: int = None
@@ -119,29 +125,49 @@ class SNPsExtracter:
         self.stats: pd.Series=None
         """DataFrame with filtering statistics."""
 
-        self._get_snames_and_sidxs_subset()
-        self._get_imap_minmap(imap, minmap)
-
-        self._set_names_from_imap()
         self._set_nsnps_and_check_h5_file_format()
-        self._set_names_sidxs_and_dbnames()
+        self._get_exclude(self.exclude)
+        self._get_imap_minmap(self.imap, self.minmap)
+        self._get_snames_and_sidxs_subset()
 
-    def _get_snames_and_sidxs_subset(self, imap) -> None:
+
+    def _get_exclude(self, exclude):
+        if isinstance(exclude, str):
+            exclude = Path(exclude)
+        if isinstance(exclude, Path):
+            if not exclude.exists():
+                raise IPyradError(f"sample exclude file does not exist: {exclude}")
+            with open(exclude) as infile:
+                self.exclude = [x.strip() for x in infile.readlines()]
+        elif isinstance(exclude, list):
+            self.exclude = exclude
+        self.exclude = set(exclude)
+        logger.debug(f"Excluding samples: {self.exclude}")
+
+
+    def _get_snames_and_sidxs_subset(self) -> None:
         with h5py.File(self.data, 'r') as io5:
             # get sample names and get them as padded names
             snames = io5.attrs["names"]
 
             # auto-update exclude from imap difference
-            if imap:  # is not None:
-                imapset = set(itertools.chain(*imap.values()))
+            if self.imap:  # is not None:
+                imapset = set(itertools.chain(*self.imap.values()))
                 self.exclude.update(set(snames).difference(imapset))
                 logger.debug(
                     "dropping samples that are either not in the imap dict, "
                     f"or are in the exclude list: {self.exclude}")
 
+                # raise error if any imap sample names not in database names
+                badnames = set(imapset).difference(snames)
+                if badnames:
+                    raise ValueError(
+                        f"Samples {badnames} are not in data file: {self.data}")
+
             # filter to only the included samples, store their new indices (sidxs)
             self.sidxs = [i for (i, j) in enumerate(snames) if j not in self.exclude]
-            self.snames = [j for (i, j) in enumerate(snames) if i in self.sidxs]
+            self.snames = [j for (i, j) in enumerate(snames) if j in self.sidxs]
+
 
     def _get_imap_minmap(self, imap, minmap):
         """Set _imap and _minmap for seqarr filtering."""
@@ -150,66 +176,48 @@ class SNPsExtracter:
         if not imap:
             self.imap = {'all': self.snames}
             self.minmap = {'all': int(self.min_sample_coverage)}
-            logger.debug(f"sample coverage minmap = {self.minmap}")
 
         # if imap was provided, then (1) check the names; (2) apply a
         # min value to each group from minmap; or (3) raise errors.
         else:
-            if minmap is None:
-                raise IPyradError("must provide a minmap when using imap.")
+            if not isinstance(imap, (Path, Dict, str)):
+                raise IPyradError("imap must be one of Path, str, or Dict")
+            if isinstance(imap, str):
+                # If string path to a file convert to Path
+                imap = Path(imap)
+            if isinstance(imap, Path):
+                # Check if file exists
+                if not imap.exists():
+                    raise IPyradError(f"imap file does not exists: {imap}")
+                try:
+                    # Favor ipyrad style imap file including sample/pop mapping
+                    # and trailing minmap line (# pop1:10 Pop2:5 ...)
+                    imap, minmap = parse_pops_file(imap)
+                except IPyradError as e:
+                    logger.info("imap file doesn't include minmap info, parsing standard imap file format.")
+                    imap = parse_imap(imap)
+
+            if not minmap:
+                # Don't override if minmap was passed in
+                logger.info("No minmap specified. Including all samples per population by default.")
+                minmap = {x:len(imap[x]) for x in imap.keys()}
+
             if set(minmap) != set(imap):
                 raise IPyradError("imap and minmap keys must match.")
             self.imap = imap.copy()
-            self.minmap = {}
-            for key in self.imap:
-                self.minmap[key] = minmap[key].copy()
+            self.minmap = minmap.copy()
+            logger.debug(f"loaded imap = {self.imap}")
             logger.debug(f"sample coverage minmap = {self.minmap}")
 
-    # def _set_names_from_imap(self) -> None:
-    #     """Fill names, nsnps, and check input H5 file."""
-    #     self.names = []
-    #     for _, val in self.imap.items():
-    #         if isinstance(val, (list, tuple, np.ndarray)):
-    #             self.names.extend(val)
-    #         elif isinstance(val, str):
-    #             self.names.append(val)
-    #     # report repeated names
-    #     for name in self.names:
-    #         if self.names.count(name) > 1:
-    #             raise ValueError(f"Name {name} is repeated in imap.")
 
-    # def _set_nsnps_and_check_h5_file_format(self) -> None:
-    #     """Check input data is proper format, and get nsnps."""
-    #     if self.data.suffix == ".vcf":
-    #         raise TypeError("input should be hdf5, see the vcf_to_hdf5 tool.")
-    #     # this will raise an error msg if using an outdated version
-    #     with SnpsDatabase(self.data, 'r') as io5:
-    #         self.nsnps = int(io5.attrs['nsnps'])
-
-    # def _set_names_sidxs_and_dbnames(self) -> None:
-    #     """Check names in h5 file match those in imap dict. Also sets names."""
-    #     # this will raise an error msg if using an outdated version
-    #     with SnpsDatabase(self.data, 'r') as io5:
-
-    #         # get all names in database as List[str]
-    #         self.dbnames = list(io5.attrs["names"])
-
-    #         # raise error if any imap sample names not in database names
-    #         badnames = set(self.names).difference(self.dbnames)
-    #         if badnames:
-    #             raise ValueError(
-    #                 f"Samples [{badnames}] are not in data file: {self.data}")
-
-    #         # if no imap names then use db names, else subset to imap
-    #         # names but order into db names order
-    #         if not self.names:
-    #             self.names = self.dbnames
-    #         else:
-    #             self.names = [i for i in self.dbnames if i in self.names]
-
-    #         # update sidxs to mask rows not in selected samples
-    #         sidxs = sorted([self.dbnames.index(i) for i in self.names])
-    #         self.sidxs = np.array(sidxs)
+    def _set_nsnps_and_check_h5_file_format(self) -> None:
+        """Check input data is proper format, and get nsnps."""
+        if self.data.suffix in [".vcf", ".vcf.gz"]:
+            raise TypeError("input should be hdf5, see the vcf_to_hdf5 tool.")
+        # this will raise an error msg if using an outdated version
+        with h5py.File(self.data, 'r') as io5:
+            self.nsnps = int(io5.attrs['nsnps'])
+            self.snames = io5.attrs["names"]
 
 
     def _run(self, log_level: str="INFO", ipyclient=None):
