@@ -30,7 +30,7 @@ def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = N
     )
     tool.add_argument(
         "-r", "--reference", metavar="Path", type=Path, required=True,
-        help="Directory to write trimmed read files. Will be created if it doesn't exist.",
+        help="Path to the reference genome fasta.",
     )
     tool.add_argument(
         "-o", "--out", metavar="Path", type=Path, default="./MAPPED",
@@ -43,6 +43,14 @@ def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = N
     tool.add_argument(
         "-q", "--min-map-q", metavar="int", type=int, default=10,
         help="Min read alignment score (MAPQ). [default=10]",
+    )
+    tool.add_argument(
+        "-e", "--max-edit-dist", metavar="int", type=int, default=50,
+        help="Max differences between a read and the reference (NM). [default=50]",
+    )
+    tool.add_argument(
+        "-s", "--max-soft-clip", metavar="int", type=int, default=25,
+        help="Max soft-clipped bases in a mapped read. [default=25]",
     )
     tool.add_argument(
         "-m", "--mark-dups-by-coords", action="store_true",
