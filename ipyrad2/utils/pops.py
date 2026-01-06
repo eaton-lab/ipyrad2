@@ -6,7 +6,7 @@ from pathlib import Path
 from .exceptions import IPyradError
 
 
-def parse_pops_file(popfile: Path) -> Tuple[Dict[str, int], Dict[str, List[str]]]:
+def parse_pops_file(popfile: Path) -> Tuple[Dict[str, List[str]], Dict[str, int]]:
     """Parse an ipyrad1-style pop_assign_file and return a dictionary
     mapping pop names to tuples of minsamples and a list of sample
     names. The value of minsamples is used by denovo for selecting
