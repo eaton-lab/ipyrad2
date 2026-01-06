@@ -31,3 +31,12 @@ def parse_minmap(path: Path) -> Dict[str, int]:
     pass
 
 
+if __name__ == "__main__":
+    pass
+
+    test1 = Path("../tests/test_map1_imap.tsv")
+    test2 = Path("../tests/test_map2_imap.tsv")
+
+    imap1 = parse_imap(test1)
+    print(imap1)
+
