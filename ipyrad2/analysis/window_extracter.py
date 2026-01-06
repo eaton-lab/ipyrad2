@@ -469,9 +469,11 @@ if __name__ == "__main__":
 
     h5 = Path("/tmp/OUT_klmnop/assembly.seqs.hdf5")
     h5 = Path("/home/deren/Documents/ipyrad-tests/OUT/assembly.seqs.hdf5")
+    h5 = Path("/home/deren/Documents/ipyrad-tests/Ped2_OUT/assembly.hdf5")
     assert h5.exists(), "h5 doesn't exist"
 
     with h5py.File(h5, 'r') as io5:
+        print(len(io5.attrs['names']))
         print(io5["phymap"][:])
         print(io5["phy"].shape)
 
