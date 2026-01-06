@@ -162,10 +162,9 @@ def get_group_called_variants_in_vcf_chunks(tmpdir: Path, reference: Path, bam_f
     cmd1 = [
         BIN_BCF, "mpileup",
         "-f", str(reference),     # reference genome fa
-        # "-q", "1",                # note the default is 0, but 1 is recommended
-        "-q", str(min_map_q),   # if we apply -q here we need to apply same in beds.py
+        "-q", str(min_map_q),     # we apply the same -q in beds.py
         "-Q", str(min_base_q),    # default in mpileup is 13, but many use 20
-        "-d", str(10_000),        # TODO: expose as param
+        "-d", str(500),           # TODO: expose as param
         "-a", "FMT/DP,FMT/AD",    #
         "-R", str(locus_chunk),   # restrict calls to this chunk bed
         "--threads", str(threads_mpileup),
