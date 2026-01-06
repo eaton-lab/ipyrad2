@@ -103,12 +103,12 @@ def trim_sample_with_fastp(
     cmd.extend([
         "-q", str(min_quality + phred_qscore_offset - 33), # threshold to determine low qual bases
         "-u", "10",                                        # percentage of low qual bases allowed
-        "-M", str(min_quality + phred_qscore_offset - 33), # mean quality score used by --cut args
-        "--cut_front", "--cut_front_window_size", "4",
-        "--cut_tail", "--cut_tail_window_size", "4",
+        "-M", "30",                                        # mean quality score used by --cut args
+        "--cut_front", "--cut_front_window_size", "5",
+        "--cut_tail", "--cut_tail_window_size", "5",
         "-l", str(min_trimmed_length),
         "--trim_poly_g", "--trim_poly_x", "--poly_x_min_len", "10",
-        "-y", "-Y", "50",                 # turns on and sets complexity filter to 50
+        "-y",
         "--n_base_limit", str(max_low_quality_bases),
         "-j", str(stats_json),
         "-h", str(stats_html),
@@ -193,6 +193,7 @@ def write_stats_summary(snames: List[str], outdir: Path):
 
     # write human readable whitespace delimited.
     df.to_string(outfile, float_format=lambda x: f"{x:.6f}")
+    logger.info(f"trimming stats written to {outfile}")
 
 
 def run_trimmer(
