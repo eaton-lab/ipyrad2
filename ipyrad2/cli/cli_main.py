@@ -27,39 +27,39 @@ VERSION = str(ip.__version__)
 
 HEADER = f"""
 -------------------------------------------------------------
-ipyrad [v.{VERSION}]
+ipyrad2 [v.{VERSION}]
 Interactive assembly and analysis of RAD-seq data
 -------------------------------------------------------------\
 """
 
-DESCRIPTION = "ipyrad command line tool. Select a positional subcommand:"
+DESCRIPTION = "ipyrad2 command line tool. Select a positional subcommand:"
 
 EPILOG = """\
 Note
 ----
 Each subcommand has its own help screen, e.g.,:
-$ ipyrad demux -h
+$ ipyrad2 demux -h
 
 Examples
 --------
 # demux: demultiplexing data to samples by index or barcode
-$ ipyrad demux -d RAW/*.fastq.gz -b BARCODES.csv -m 1 -c 10 -o ./demux
+$ ipyrad2 demux -d RAW/*.fastq.gz -b BARCODES.csv -m 1 -c 10 -o ./demux
 
 # trim: trim reads for quality, adapters, and restriction overhangs
-$ ipyrad trim -d DATA/*.fastq.gz -o TRIMMED/ -q 20 -n 5 -c 10
+$ ipyrad2 trim -d DATA/*.fastq.gz -o TRIMMED/ -q 20 -n 5 -c 10
 
 # map: map reads to a reference genome and filter and sort BAMs
-$ ipyrad map -d DATA/*.fastq.gz -o BAMs -c 10
+$ ipyrad2 map -d DATA/*.fastq.gz -o BAMs -c 10
 
 # assemble: delimit rad loci, call variants, filter, and write outputs
-$ ipyrad assemble -d BAMS/*.bam -o OUT -p TEST -m 4 -q 20 -c 10
+$ ipyrad2 assemble -d BAMS/*.bam -o OUT -p TEST -m 4 -q 20 -c 10
 """
 
 
 def setup_parsers() -> argparse.ArgumentParser:
     """Setup and return an ArgumentParser w/ subcommands."""
     parser = argparse.ArgumentParser(
-        prog="ipyrad",
+        prog="ipyrad2",
         description=f"{HEADER}\n{DESCRIPTION}",
         epilog=EPILOG,
         formatter_class=make_wide(argparse.RawDescriptionHelpFormatter),
@@ -70,12 +70,12 @@ def setup_parsers() -> argparse.ArgumentParser:
     subparser = parser.add_subparsers(help="sub-commands", dest="subcommand")
 
     # add subcommands: these messages are subcommand headers
-    _setup_demux_subparser(subparser, f"{HEADER}\nipyrad demux: demultiplex pooled reads to sample files by index/barcode")
-    _setup_trim_subparser(subparser, f"{HEADER}\nipyrad trim: trim for quality, adapters, and restriction overhangs")
-    _setup_denovo_subparser(subparser, f"{HEADER}\nipyrad denovo: construct a reference locus library")
-    _setup_map_subparser(subparser, f"{HEADER}\nipyrad map: reference map, filter, and sort reads to bam files")
-    _setup_assemble_subparser(subparser, f"{HEADER}\nipyrad assemble: delimit loci, call variants, and write outputs")
-    _setup_wex_subparser(subparser, f"{HEADER}\nipyrad wex: window extracter to filter and write concatenated alignments")
+    _setup_demux_subparser(subparser, f"{HEADER}\nipyrad2 demux: demultiplex pooled reads to sample files by index/barcode")
+    _setup_trim_subparser(subparser, f"{HEADER}\nipyrad2 trim: trim for quality, adapters, and restriction overhangs")
+    _setup_denovo_subparser(subparser, f"{HEADER}\nipyrad2 denovo: construct a reference locus library")
+    _setup_map_subparser(subparser, f"{HEADER}\nipyrad2 map: reference map, filter, and sort reads to bam files")
+    _setup_assemble_subparser(subparser, f"{HEADER}\nipyrad2 assemble: delimit loci, call variants, and write outputs")
+    _setup_wex_subparser(subparser, f"{HEADER}\nipyrad2 wex: window extracter to filter and write concatenated alignments")
     return parser
 
 
@@ -146,11 +146,14 @@ def run_subcommand(args, _exit=True):
         run_trimmer(
             fastqs=args.fastqs,
             outdir=args.out,
-            restriction_overhangs=args.restriction_overhangs,
-            max_reads=args.max_reads,
-            min_trimmed_length=args.min_trimmed_length,
+            max_unqualified_percent=args.max_unqualified_percent,
             min_quality=args.min_quality,
-            max_low_quality_bases=args.max_low_quality_bases,
+            min_mean_window_quality=args.min_mean_window_quality,
+            cut_window_size=args.cut_window_size,
+            max_ns=args.max_ns,
+            min_trimmed_length=args.min_trimmed_length,
+            max_reads=args.max_reads,
+            restriction_overhangs=args.restriction_overhangs,
             max_reads_kmer=args.max_reads_kmer,
             phred_qscore_offset=args.phred_qscore_offset,
             disable_infer_re_overhangs=args.disable_infer_re_overhangs,
@@ -204,6 +207,8 @@ def run_subcommand(args, _exit=True):
             outdir=args.out,
             imap=args.imap,
             min_map_q=args.min_map_q,
+            max_edit_dist=args.max_edit_dist,
+            max_soft_clip=args.max_soft_clip,
             mark_dups_by_coords=args.mark_dups_by_coords,
             mark_dups_by_umis=args.mark_dups_by_umis,
             cores=args.cores,
