@@ -57,8 +57,8 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="Min mapping quality (MAPQ: 'confidence in the alignment'). [default=10]."
     )
     tool.add_argument(
-        "-qs", "--min-site-q", metavar="int", type=int, default=20,
-        help="Min variant site quality (QUAL: 'confidence a site is variant'). [default=20]."
+        "-qs", "--min-site-q", metavar="int", type=int, default=13,
+        help="Min variant site quality (QUAL: 'confidence a site is variant'). [default=13]."
     )
     tool.add_argument(
         "-qg", "--min-geno-q", metavar="int", type=int, default=13,
