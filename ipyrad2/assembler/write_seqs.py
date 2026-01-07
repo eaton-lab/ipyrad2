@@ -96,7 +96,8 @@ def write_seqs_hdf5(
 
     # get global sorted names with reference sequence on top
     snames = sorted(snames)
-    snames = ["assembly_reference_sequence"] + snames
+    if not exclude_reference:
+        snames = ["assembly_reference_sequence"] + snames
     nsamples = len(snames)
 
     # get optimal chunk size
