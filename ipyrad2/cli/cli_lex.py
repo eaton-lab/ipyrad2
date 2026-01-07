@@ -1,6 +1,6 @@
 #!/usr/env/bin python
 
-"""Window extracter command line
+"""Locus extracter command line
 """
 
 import argparse
@@ -11,26 +11,18 @@ from .make_wide import make_wide
 EPILOG = r"""
 Examples
 --------
-$ ipyrad wex -d seqs.hdf5 --print-scaffold-table
-$ ipyrad wex -d seqs.hdf5 -o OUT/ -n TEST -m 10
-$ ipyrad wex -d seqs.hdf5 -o OUT/ -w Chr1
-$ ipyrad wex -d seqs.hdf5 -o OUT/ -w Chr1 Chr2 Chr3
-$ ipyrad wex -d seqs.hdf5 -o OUT/ -w 'Chr\d+'  # note single-quotes for '\'
-$ ipyrad wex -d seqs.hdf5 -o OUT/ -w Chr[1-9]
-$ ipyrad wex -d seqs.hdf5 -o OUT/ -w Ag.*Chr1
-$ ipyrad wex -d seqs.hdf5 -o OUT/ -w Chr1:1-1000
-$ ipyrad wex -d seqs.hdf5 -o OUT/ -i POPs.txt -g MINs.txt
+$ ipyrad lex -d seqs.hdf5 -o OUT/ -n TEST -m 10 -N 100 -L 150
 """
 
 
-def _setup_wex_subparser(subparsers: argparse._SubParsersAction, header: str = None) -> None:
-    """Add `ipyrad assemble` subcommand parser.
+def _setup_lex_subparser(subparsers: argparse._SubParsersAction, header: str = None) -> None:
+    """Add `ipyrad analysis lex` subcommand parser.
 
     """
     tool = subparsers.add_parser(
-        "wex",
+        "lex",
         description=header,
-        help="Window extracter to filter and write a concatenated alignments.",
+        help="Locus extracter to select and write random alignments.",
         epilog=EPILOG,
         formatter_class=make_wide(argparse.RawDescriptionHelpFormatter, max_help_position=60, width=140),
     )
@@ -43,17 +35,26 @@ def _setup_wex_subparser(subparsers: argparse._SubParsersAction, header: str = N
         help="Prefix name for output alignment and stats files. [default='alignment']",
     )
     tool.add_argument(
-        "-o", "--out", metavar="Path", type=Path, default="output-wex",
-        help="Directory to write alignment and stats files. Created if it doesn't exist. [default=output-wex]",
+        "-o", "--out", metavar="Path", type=Path, default="output-lex",
+        help="Directory to write alignment and stats files. Created if it doesn't exist. [default=output-lex]",
     )
     tool.add_argument(
-        "-O", "--out-format", metavar="str", choices=["phy", "nex", "fa"], default="phy",
-        help="Output alignment file format (phy, nex, inex, or fa). [default=phy]",
+        "-O", "--out-format", metavar="str", choices=["phy", "nex", "bpp"], default="phy",
+        help="Output alignment file format (phy, nex, or bpp). [default=phy]",
     )
+    tool.add_argument(
+        "-N", "--nloci", metavar="int", type=int, default=100,
+        help="Number of randomly sampled loci to extract.",
+    )
+    tool.add_argument(
+        "-L", "--length", metavar="int", type=int, default=150,
+        help="Length of loci to extract (in bp).",
+    )
+    # TODO: It will probably be useful to implement an ld_block_size idea
+    #       to allow spacing between sampled loci (primarily for wgs data).
     tool.add_argument(
         "-w", "--windows", metavar="str", type=str, nargs="*",
-        help="Select one or more 'scaff' or 'scaff:start-end' (1-indexed) regions "
-        "to extract an alignment from. Alternatively pass in a .bed file specifying windows."
+        help="Select one or more 'scaff' or 'scaff:start-end' (1-indexed) regions to extract an alignment from."
     )
     tool.add_argument(
         "-m", "--min-sample-coverage", metavar="int", type=int, default=4,
@@ -93,10 +94,10 @@ def _setup_wex_subparser(subparsers: argparse._SubParsersAction, header: str = N
         help="Overwrite existing output files with identical names.",
     )
     tool.add_argument(
-        "-l", "--log-level", metavar="str", type=str, default="INFO",
+        "--log-level", metavar="str", type=str, default="INFO",
         help="Log level (DEBUG, INFO, WARN, ERROR) [default=INFO]",
     )
     tool.add_argument(
-        "-L", "--log-file", metavar="Path", type=Path,
+        "--log-file", metavar="Path", type=Path,
         help="Log file. Logging to stdout is also appended to this file. [default=None]."
     )

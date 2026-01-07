@@ -11,13 +11,12 @@ from .cli_trim import _setup_trim_subparser
 from .cli_denovo import _setup_denovo_subparser
 from .cli_map import _setup_map_subparser
 from .cli_assemble import _setup_assemble_subparser
-from .cli_wex import _setup_wex_subparser
+from .cli_analysis import _setup_analysis_subparser, run_analysis_tool
 from ..demuxer import run_demuxer
 from ..trimmer import run_trimmer
 from ..denovo import run_denovo
 from ..mapper import run_mapper
 from ..assembler import run_assembler
-from ..analysis.window_extracter import run_window_extracter
 from ..utils.logger import set_log_level
 from ..utils.exceptions import IPyradError
 from loguru import logger
@@ -70,12 +69,12 @@ def setup_parsers() -> argparse.ArgumentParser:
     subparser = parser.add_subparsers(help="sub-commands", dest="subcommand")
 
     # add subcommands: these messages are subcommand headers
-    _setup_demux_subparser(subparser, f"{HEADER}\nipyrad2 demux: demultiplex pooled reads to sample files by index/barcode")
-    _setup_trim_subparser(subparser, f"{HEADER}\nipyrad2 trim: trim for quality, adapters, and restriction overhangs")
-    _setup_denovo_subparser(subparser, f"{HEADER}\nipyrad2 denovo: construct a reference locus library")
-    _setup_map_subparser(subparser, f"{HEADER}\nipyrad2 map: reference map, filter, and sort reads to bam files")
-    _setup_assemble_subparser(subparser, f"{HEADER}\nipyrad2 assemble: delimit loci, call variants, and write outputs")
-    _setup_wex_subparser(subparser, f"{HEADER}\nipyrad2 wex: window extracter to filter and write concatenated alignments")
+    _setup_demux_subparser(subparser, f"{HEADER}\nipyrad demux: demultiplex pooled reads to sample files by index/barcode")
+    _setup_trim_subparser(subparser, f"{HEADER}\nipyrad trim: trim for quality, adapters, and restriction overhangs")
+    _setup_denovo_subparser(subparser, f"{HEADER}\nipyrad denovo: construct a reference locus library")
+    _setup_map_subparser(subparser, f"{HEADER}\nipyrad map: reference map, filter, and sort reads to bam files")
+    _setup_assemble_subparser(subparser, f"{HEADER}\nipyrad assemble: delimit loci, call variants, and write outputs")
+    _setup_analysis_subparser(subparser, f"{HEADER}\nipyrad analysis: utilities for downstream analyses")
     return parser
 
 
@@ -104,7 +103,7 @@ def command_line():
     if hasattr(args, "log_level"):
         set_log_level(args.log_level, args.log_file)
 
-    if args.subcommand not in ["demux", "trim", "denovo", "map", "assemble", "wex"]:
+    if args.subcommand not in ["demux", "trim", "denovo", "map", "assemble", "analysis"]:
         # NO SUBCOMMAND: print help
         parser.print_help()
         sys.exit(0)
@@ -254,27 +253,10 @@ def run_subcommand(args, _exit=True):
         )
         if _exit: sys.exit(0)  # noqa: E701
 
-    # WEX: --------------------------------------------------------
-    if args.subcommand == "wex":
-        logger.info("-------------------------------------------------------")
-        logger.info("----- ipyrad wex: extract alignments from windows -----")
-        logger.info("-------------------------------------------------------")
-        logger.info(f"CMD: ipyrad {' '.join(sys.argv[1:])}")
-        run_window_extracter(
-            data=args.data,
-            name=args.name,
-            outdir=args.out,
-            windows=args.windows,
-            min_sample_coverage=args.min_sample_coverage,
-            max_sample_missing=args.max_sample_missing,
-            imap=args.imap,
-            minmap=args.minmap,
-            exclude=args.exclude,
-            print_scaffold_table=args.print_scaffold_table,
-            stdout=args.stdout,
-            force=args.force,
-        )
-        if _exit: sys.exit(0)  # noqa: E701
+    # ANALYSIS: ---------------------------------------------------
+    if args.subcommand == "analysis":
+        run_analysis_tool(args)
+        sys.exit(0)
 
 
 if __name__ == "__main__":

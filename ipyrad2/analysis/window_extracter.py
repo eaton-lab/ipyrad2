@@ -39,6 +39,7 @@ nvariant_sites_in_windows_after_filtering: 20
 outfile: alignment.phy
 """
 
+from collections import defaultdict
 from typing import List, Dict, Tuple
 import sys
 from pathlib import Path
@@ -53,7 +54,7 @@ from ipyrad2.utils.exceptions import IPyradError
 
 NEXHEADER = """#nexus
 begin data;
-  dimensions ntax={ntax} nchar={nchar};
+  dimensions ntax={} nchar={};
   format datatype=dna missing=N gap=- interleave=yes;
   matrix
 """
@@ -68,6 +69,7 @@ class WindowExtracter:
         data: str,
         name: str,
         outdir: Path | str,
+        out_format: str,
         windows: str | List[str],
         min_sample_coverage: int | float,
         max_sample_missing: float,
@@ -81,6 +83,7 @@ class WindowExtracter:
         self.data = data
         self.name = name
         self.outdir = Path(outdir).expanduser().absolute()
+        self.out_format = out_format
         self.windows = [] if windows is None else [windows] if isinstance(windows, str) else list(windows)
         self.exclude = set(exclude if exclude else [])
         self.min_sample_coverage = min_sample_coverage
@@ -104,8 +107,10 @@ class WindowExtracter:
 
         # run commands
     def _run(self):
+        # First two are fast
         self._get_phymap_windows()
         self._get_phymap()
+        # This call is slow as it is accessing the full hdf5 data
         self._get_seqarr()
         return self._filter_seqarr()
 
@@ -151,13 +156,14 @@ class WindowExtracter:
         # min value to each group from minmap; or (3) raise errors.
         else:
             if minmap is None:
-                raise IPyradError("must provide a minmap when using imap.")
+                logger.info("No minmap provided. Assuming minimum one sample per population.")
+                minmap = {pop:1 for pop in imap.keys()}
             if set(minmap) != set(imap):
                 raise IPyradError("imap and minmap keys must match.")
             self.imap = imap.copy()
             self.minmap = {}
             for key in self.imap:
-                self.minmap[key] = minmap[key].copy()
+                self.minmap[key] = minmap[key]
             logger.debug(f"sample coverage minmap = {self.minmap}")
 
     def _get_phymap_windows(self) -> None:
@@ -167,6 +173,15 @@ class WindowExtracter:
         # rmincov must be float
         if not self.windows:
             raise IPyradError("must select one or more windows.")
+
+        # Load windows from bed file if they are passed in this way
+        if len(self.windows) == 1:
+            bedfile = Path(self.windows[0])
+            if bedfile.exists():
+                logger.info(f"Loading windows from bed file: '{bedfile}'")
+                self.windows = self._get_windows_from_bed(bedfile)
+            else:
+                logger.debug(f"Loading windows from command line arguments")
 
         # set names in index for easy fetching
         t = self.scaffold_table.set_index("scaffold_name")
@@ -218,7 +233,26 @@ class WindowExtracter:
 
         # store as dict mapping {scaff_index: window, ...}
         scaff_names = t.index.tolist()
-        self.phymap_windows = {scaff_names.index(i): j for (i, j) in windows.items()}
+        scaff_to_idx = {name: idx for idx, name in enumerate(scaff_names)}
+        self.phymap_windows = {
+            scaff_to_idx[i]: j
+            for i, j in windows.items()
+        }
+
+
+    def _get_windows_from_bed(self, bedfile: Path) -> Dict[str, Tuple[int, int]]:
+        """Read windows from bedfile for wex"""
+        windows = defaultdict(list)
+        with open(bedfile) as infile:
+            for line in infile:
+                # Ignore comments and blank lines
+                if line.startswith("#") or line.strip() == "":
+                    continue
+
+                chrom, start, end, *rest = line.rstrip("\t\n").split()
+                windows[chrom].append((start, end))
+        return windows
+
 
     def _get_phymap(self) -> None:
         """Load the phymap for selecting windows from the seqs array."""
@@ -304,7 +338,11 @@ class WindowExtracter:
             raise IPyradError("No samples passed max_sample_missing filter.")
         return fnames, seqs
 
-    def _write_to_phy(self) -> None:
+    def _write_to_phy(self, 
+                      write_stats: bool = True,
+                      prefix: str = None,
+                      bpp_format: bool = False,
+                      return_locus: bool = False) -> None:
         """Writes the .seqarr matrix as a string to .outfile."""
         # get the filtered alignment
         fnames, fseqarr = self._run()
@@ -315,30 +353,36 @@ class WindowExtracter:
 
         # build phy
         phy = []
+        prefix = prefix if prefix else ""
         for idx, _ in enumerate(fnames):
             seq = fseqarr[idx].tobytes().decode("utf-8")
-            phy.append(f"{pnames[idx]} {seq}")
+            phy.append(f"{prefix}{pnames[idx]} {seq}")
+
+        if write_stats:
+            self._write_stats(fnames, fseqarr, outfile)
 
         # write to temp file
         ntaxa = len(fnames)
         nsites = fseqarr.shape[1]
 
+        bpp_sep = "\n" if bpp_format else ""
         # write to stdout
         if self.stdout:
             logger.debug("wrote alignment to stdout")
-            sys.stdout.write(f"{ntaxa} {nsites}\n{'\n'.join(phy)}\n")
+            sys.stdout.write(f"{ntaxa} {nsites}\n{bpp_sep}{'\n'.join(phy)}\n")
             outfile = "STDOUT"
+        elif return_locus:
+            return f"{ntaxa} {nsites}\n{bpp_sep}{'\n'.join(phy)}\n"
         else:
             self.outdir.mkdir(exist_ok=True)
             outfile = self.outdir / f"{self.name}.phy"
             with open(outfile, 'w') as out:
-                out.write(f"{ntaxa} {nsites}\n")
+                out.write(f"{ntaxa} {nsites}\n{bpp_sep}")
                 out.write("\n".join(phy))
             logger.info(f"wrote alignment ({ntaxa}, {nsites}) to: {outfile}")
-        # write stats
-        self._write_stats(fnames, fseqarr, outfile)
 
-    def _write_to_nex(self, seqarr, names):
+
+    def _write_to_nex(self) -> None:
         """Writes concatenated alignment to nex format..."""
         # get the filtered alignment
         fnames, fseqarr = self._run()
@@ -358,7 +402,7 @@ class WindowExtracter:
         # grab a big block of data
         for block in range(0, fseqarr.shape[1], 100):
             # store interleaved seqs 100 chars with longname+2 before
-            stop = min(block + 100, seqarr.shape[1])
+            stop = min(block + 100, fseqarr.shape[1])
             for idx, name in enumerate(pnames):
                 seq = fseqarr[idx, block:stop].tobytes().decode()
                 lines.append(f"  {name}{seq}\n")
@@ -372,7 +416,7 @@ class WindowExtracter:
             outfile = "STDOUT"
         else:
             self.outdir.mkdir(exist_ok=True)
-            outfile = self.outdir / f"{self.name}.phy"
+            outfile = self.outdir / f"{self.name}.nex"
             with open(outfile, 'w') as out:
                 out.write("".join(lines))
             logger.info(f"wrote alignment ({ntaxa}, {nsites}) to: {outfile}")
@@ -420,6 +464,8 @@ def run_window_extracter(**kwargs):
         Prefix name used for outfiles. If None it is automatically set.
     outdir: Path | str
         Dir for output files. Created if it doesn't exist.
+    out_format: str
+        Format to write the alignments phy (default) or nex
     windows: str | List[str]:
         Subsample scaffold(s) by index number. If unsure, leave this
         empty when loading a file and then check the .scaffold_table
@@ -455,13 +501,20 @@ def run_window_extracter(**kwargs):
         ...
     """
     request_table = kwargs.pop("print_scaffold_table")
+
+    tool = WindowExtracter(**kwargs)
+
     if request_table:
-        tool = WindowExtracter(**kwargs)
         tool.scaffold_table.to_csv(sys.stdout, sep="\t")
         sys.exit(0)
 
-    tool = WindowExtracter(**kwargs)
-    tool._write_to_phy()
+    if tool.out_format == "phy":
+        tool._write_to_phy()
+    elif tool.out_format == "nex":
+        tool._write_to_nex()
+    else:
+        logger.error(f"Unrecognized output format: {tool.out_format}")
+
     sys.exit(0)
 
 

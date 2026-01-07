@@ -201,55 +201,89 @@ def iter_mafft_jobs(
 def write_ordered_consensus_stream_to_file(
     outdir: Path,
     log_level: str = "INFO",
-    max_workers: int = 6,
-    threads: int = 1,
     spacer_len: int = 24,
-    min_prop: float = 0.5,
 ) -> None:
     """Run MAFFT consensuses in parallel and write FASTA in mapping order.
 
     Parameters
     ----------
-    mapping_tsv
-        Path to mapping table (cols: locus, core).
-    summary_tsv
-        Path to summary table; assumes known column layout with core/seq.
     out_fa
         Output FASTA path.
     log_level
         Log level passed to the pool initializer.
-    max_workers
-        Number of worker processes.
-    threads
-        Threads per MAFFT subprocess (keep max_workers*threads ≤ cores).
     spacer_len
         Length of N-joiner to strip before alignment.
-    min_prop
-        Majority threshold per column for consensus.
     """
     # paths
     mapping_tsv = outdir / "loci.mapping.tsv"
     summary_tsv = outdir / "tmpdir" / "concat.summary.tsv"
     out_fa = outdir / "denovo_reference.fa"
 
-    # generator of: (id, (func, data))
-    jobs_it = iter_mafft_jobs(mapping_tsv, summary_tsv, spacer_len, min_prop, threads)
-    buffer: Dict[int, Tuple[str, str]] = {}
-    next_key = 0
-
     # open outfile and write loci
     with open(out_fa, "wt") as fh:
-        # feed jobs from generator to pool and write as they finish
-        kwargs = dict(jobs_iter=jobs_it, log_level=log_level, max_workers=max_workers)
-        for key, (locus_id, consensus) in run_with_pool_iter(**kwargs):
-            buffer[key] = (locus_id, consensus)
-            # Flush in-order results as far as we can
-            while next_key in buffer:
-                lid, cons = buffer.pop(next_key)
-                fh.write(f">locus_{lid}\n{cons}\n")
-                next_key += 1
+        for lid, records in iter_locus(mapping_tsv, summary_tsv, spacer_len=spacer_len):
+            # Take the longest sequence in this cluster as the representative
+            cons = max([x[1] for x in records], key=len)
+            fh.write(f">locus_{lid}\n{cons}\n")
     logger.info(f"wrote denovo reference to {out_fa}")
 
+
+# Old-style function that produced consensus sequence from MAFFT aligned
+# loci. We are skipping all the overhead and just taking the longest
+# record per locus as the 'representative'. Keeping this here as a all-back
+# but can be deleted when we are comfortable with the simplified function.
+# IAO 12/11/25
+#def write_ordered_consensus_stream_to_file(
+#    outdir: Path,
+#    log_level: str = "INFO",
+#    max_workers: int = 6,
+#    threads: int = 1,
+#    spacer_len: int = 24,
+#    min_prop: float = 0.5,
+#) -> None:
+#    """Run MAFFT consensuses in parallel and write FASTA in mapping order.
+#
+#    Parameters
+#    ----------
+#    mapping_tsv
+#        Path to mapping table (cols: locus, core).
+#    summary_tsv
+#        Path to summary table; assumes known column layout with core/seq.
+#    out_fa
+#        Output FASTA path.
+#    log_level
+#        Log level passed to the pool initializer.
+#    max_workers
+#        Number of worker processes.
+#    threads
+#        Threads per MAFFT subprocess (keep max_workers*threads ≤ cores).
+#    spacer_len
+#        Length of N-joiner to strip before alignment.
+#    min_prop
+#        Majority threshold per column for consensus.
+#    """
+#    # paths
+#    mapping_tsv = outdir / "loci.mapping.tsv"
+#    summary_tsv = outdir / "tmpdir" / "concat.summary.tsv"
+#    out_fa = outdir / "denovo_reference.fa"
+#
+#    # generator of: (id, (func, data))
+#    jobs_it = iter_mafft_jobs(mapping_tsv, summary_tsv, spacer_len, min_prop, threads)
+#    buffer: Dict[int, Tuple[str, str]] = {}
+#    next_key = 0
+#
+#    # open outfile and write loci
+#    with open(out_fa, "wt") as fh:
+#        # feed jobs from generator to pool and write as they finish
+#        kwargs = dict(jobs_iter=jobs_it, log_level=log_level, max_workers=max_workers)
+#        for key, (locus_id, consensus) in run_with_pool_iter(**kwargs):
+#            buffer[key] = (locus_id, consensus)
+#            # Flush in-order results as far as we can
+#            while next_key in buffer:
+#                lid, cons = buffer.pop(next_key)
+#                fh.write(f">locus_{lid}\n{cons}\n")
+#                next_key += 1
+#    logger.info(f"wrote denovo reference to {out_fa}")
 
 
 if __name__ == "__main__":

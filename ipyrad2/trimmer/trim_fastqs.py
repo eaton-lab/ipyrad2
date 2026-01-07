@@ -65,7 +65,7 @@ def trim_sample_with_fastp(
     umi_tag_in_i5: bool,
     threads: int,
 ) -> Dict[str, Tuple[Tuple[Path, Path], Dict[str, Any]]]:
-    """Run FASTP and return: {sname: ((r1, r2), stats)}
+    """Run FASTP and write stats per sample to outdir as json
     """
     out1 = outdir / f"{sname}.R1.trimmed.fastq.gz"
     out2 = outdir / f"{sname}.R2.trimmed.fastq.gz"
@@ -73,7 +73,10 @@ def trim_sample_with_fastp(
     stats_json = outdir / f"{sname}.stats.json"
 
     # check if data are paired
-    is_paired = fastqs[1].exists() and fastqs[1].name != "-null-"
+    try:
+        is_paired = fastqs[1].exists() and fastqs[1].name != "-null-"
+    except AttributeError:
+        is_paired = False
 
     # build command
     if is_paired:
@@ -132,7 +135,7 @@ def trim_sample_with_fastp(
     # run the command in subprocess
     logger.debug(f"CMD: {' '.join(cmd)}")
     run_pipeline([cmd])
-    logger.info(f"finished trimming {sname}")
+    logger.debug(f"finished trimming {sname}")
     return None
 
 
@@ -183,19 +186,30 @@ def write_stats_summary(snames: List[str], outdir: Path):
         df.loc[sname, "q20_rate_before"] = j["summary"]["before_filtering"]["q20_rate"]
         df.loc[sname, "q30_rate_before"] = j["summary"]["before_filtering"]["q30_rate"]
         df.loc[sname, "read1_mean_length_before"] = j["summary"]["before_filtering"]["read1_mean_length"]
-        df.loc[sname, "read2_mean_length_before"] = j["summary"]["before_filtering"]["read2_mean_length"]
         df.loc[sname, "total_reads_after"] = j["summary"]["after_filtering"]["total_reads"]
         df.loc[sname, "total_bases_after"] = j["summary"]["after_filtering"]["total_bases"]
         df.loc[sname, "q20_rate_after"] = j["summary"]["after_filtering"]["q20_rate"]
         df.loc[sname, "q30_rate_after"] = j["summary"]["after_filtering"]["q30_rate"]
         df.loc[sname, "read1_mean_length_after"] = j["summary"]["after_filtering"]["read1_mean_length"]
-        df.loc[sname, "read2_mean_length_after"] = j["summary"]["after_filtering"]["read2_mean_length"]
         df.loc[sname, "reads_filtered_by_low_quality"] = j["filtering_result"]["low_quality_reads"]
         df.loc[sname, "reads_filtered_by_too_many_N"] = j["filtering_result"]["too_many_N_reads"]
         df.loc[sname, "reads_filtered_by_low_complexity"] = j["filtering_result"]["low_complexity_reads"]
         df.loc[sname, "reads_filtered_by_too_short"] = j["filtering_result"]["too_short_reads"]
-        df.loc[sname, "adapter_trimmed_reads"] = j["adapter_cutting"]["adapter_trimmed_reads"]
-        df.loc[sname, "adapter_trimmed_bases"] = j["adapter_cutting"]["adapter_trimmed_bases"]
+        try:
+            df.loc[sname, "adapter_trimmed_reads"] = j["adapter_cutting"]["adapter_trimmed_reads"]
+            df.loc[sname, "adapter_trimmed_bases"] = j["adapter_cutting"]["adapter_trimmed_bases"]
+        except KeyError:
+            # SE data, no adapter trimming info
+            pass
+        try:
+            df.loc[sname, "read2_mean_length_before"] = j["summary"]["before_filtering"]["read2_mean_length"]
+            df.loc[sname, "read2_mean_length_after"] = j["summary"]["after_filtering"]["read2_mean_length"]
+        except KeyError:
+            # If SE, no read2 filtering
+            pass
+
+    # Drop na columns for SE data
+    df = df.dropna(axis=1)
 
     # write human readable whitespace delimited.
     df.to_string(outfile, float_format=lambda x: f"{x:.6f}")
@@ -246,7 +260,11 @@ def run_trimmer(
     # infer restriction overhangs by kmer analysis
     if not disable_infer_re_overhangs:
         re1 = get_overhang_from_kmers([i[0] for i in fastq_dict.values()], 20, 100_000, cores, log_level)
-        re2 = get_overhang_from_kmers([i[1] for i in fastq_dict.values()], 20, 100_000, cores, log_level)
+        try:
+            re2 = get_overhang_from_kmers([i[1] for i in fastq_dict.values()], 20, 100_000, cores, log_level)
+        except AttributeError:
+            # For SE fastq_dict form is (fq1, None), so set re2 to a default
+            re2 = ""
         logger.info(f"restriction site overhangs inferred by kmer analysis = {re1} {re2}")
         # allow user override but warn if it doesn't match inferred.
         if restriction_overhangs:
@@ -283,7 +301,7 @@ def run_trimmer(
             threads=threads,  # recommended >=3 since 2 are used for i/o
         )
         jobs[sname] = (trim_sample_with_fastp, kwargs)
-    results = run_with_pool(jobs, log_level, workers)
+    results = run_with_pool(jobs, log_level, workers, msg="Trimming")
     write_stats_summary(sorted(results), outdir)
 
 

@@ -17,12 +17,32 @@
 - assemble: allow imap to group samples for joint variant calls.
 - assemble: consensus do not write empty seqs, use ordered iterators by chr:pos
 - assemble: accept a loci.bed file and skip locus delimiting. Allow WGS only data in this case.
-- assemble: instead of warning about UMI tags on -u it could check for them.
+- assemble: instead of warning about UMI tags on -U it could check for them.
 - assemble: check filters again, why so few shared het hitting?
 - wex: check that alignments are correct when using -r or other exclude methods.
 - parallel: stderr writes temporarily to $TMPDIR. Instead set to outdir/tmpdir?
 - variants: check that snps are being removed from indel regions, and that we want that (in func: get_vcf_with_indels_resolved)
 - wex: better format for stats. Write missing per sample to stats.
+- map: collect stats from stats files into write_stats
+- assemble: accept a loci.bed file and skip locus delimiting. Allow WGS only data in this case.
+- denovo: test on real data.
+- trim: collect and summarize trim stats files into one file.
+- variants: try bcf is faster than vcf for intermediates.
+- variants: check that snps are being removed from indel regions, and that we want that.
+- pops: imap for population variant calls in assemble.
+- pops: imap for combining technical-reps in assemble [easy for variants, harder for beds?]
+- wex: better format for stats. Write missing per sample to stats.
+- assemble: instead of warning about UMI tags on -u it could check for them.
+- assemble: check filters again, why no shared het hitting?
+- assemble: organize and write assemble stats
+- analysis:
+    - test api with logger
+    - pca
+    - structure
+    - bpp
+    - raxml-ng
+    - treeslider
+    - more converters like wex?
 
 
 # TODO Low priority
@@ -90,4 +110,5 @@ ipyrad2 analysis pca -d HDF5 ... --scaffolds [defaults to all] -n name-prefix -o
 - [x] name: if splitting on _ from back fails, try from front.
 - [x] denovo: test on real data.
 - [x] denovo: develop SE pipeline.
-- [x] add analysis tools (wex/lex/treeslider) as 'analysis' subcommand
+- [x] analysis: add analysis tools (wex/lex/treeslider) as 'analysis' subcommand
+- [x] map: handle SE

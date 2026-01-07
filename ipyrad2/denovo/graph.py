@@ -89,12 +89,16 @@ def _duplicates_present(comp: Set[str]) -> bool:
     return max(c.values()) > 1
 
 
-def _get_subset_edges_above_threshold(nodes: Set[str], edict: Dict[Tuple[str, str], Tuple[float, float]], threshold: float) -> Dict[Tuple[str, str],Tuple[float,float]]:
+def _get_subset_edges_above_threshold(
+                                    nodes: Set[str],
+                                    edict: Dict[Tuple[str, str], Tuple[float, float]],
+                                    threshold: float) -> Dict[Tuple[str, str],Tuple[float,float]]:
     """Return dict mapping {edge: (pid, qcov} only for edges with pid >= t and for nodes in nodes."""
     out = {}
     for u, v in combinations(nodes, 2):
         a, b = sorted((u, v))
-        val = edict[(a, b)]
+        # Get returns None if the edge doesn't exist
+        val = edict.get((a, b))
         if val is None:
             continue
         pid, qcov = val
@@ -105,9 +109,9 @@ def _get_subset_edges_above_threshold(nodes: Set[str], edict: Dict[Tuple[str, st
 
 def iter_non_duplicated_subcomponent_by_ascending_pid(component: Set[str], edict: Dict[Tuple[str, str], Tuple[float, float]]) -> Iterator[Set[str]]:
     """
-    For the given component (set of seeds), find the *lowest* identity threshold t
-    such that if we keep only edges with pid >= t, all resulting subcomponents
-    have ≤ max_per_sample seeds per sample.
+    For the given component (set of seeds), find the *lowest* pairwise identity
+    threshold (pid) such that if we keep only edges with pid >= t, all resulting
+    subcomponents have ≤ max_per_sample seeds per sample.
 
     Returns:
         (subcomponents, chosen_threshold)
@@ -150,7 +154,7 @@ def iter_non_duplicated_subcomponent_by_ascending_pid(component: Set[str], edict
                 yield sub
                 to_remove.update(sub)
             else:
-                logger.warning(f"duplicates in {sub}")
+                logger.debug(f"duplicates in {sub}")
         remaining.difference_update(to_remove)
 
         # end loop if all nodes have been assigned to subgroups

@@ -70,6 +70,22 @@ def get_coverage_bed_graphs(sname: str, bam_file: Path, reference: Path, tmpdir:
     out_bed_merge = bed_dir / f"{sname}.fragments.merged.bed"  # merged, no counts
     fai_path = reference.with_suffix(reference.suffix + ".fai")
 
+    # Test for pe vs se bam file by checking PAIRED bit of the first few reads
+    cmd1 = ["samtools",
+       "view",
+       "-f", "0x1",
+       bam_file,
+    ]
+    cmd2 = ["head", "-n", "1000"]
+    cmd3 = ["wc", "-l"]
+
+    _, ct, _ = run_pipeline([cmd1, cmd2, cmd3])
+
+    is_paired = False
+    # This is very simple. Count the number of lines in the samtools view call.
+    if int(ct.strip()) > 0:
+        is_paired = True
+
     # CHECKED that this properly pipes on large files. It does.
     # Note: collate has heavy I/O writing tmp files here on large WGS files.
     # this puts F/R pairs next to each other.
@@ -86,17 +102,24 @@ def get_coverage_bed_graphs(sname: str, bam_file: Path, reference: Path, tmpdir:
     # Chr1    60908424        60908533        Chr1    60908434        60908543        LH00150:341:22HGMLLT3:3:1160:35876:20034        49      -       +
     # Chr3    5915120         5915253         Chr3    5915131         5915265         LH00150:341:22HGMLLT3:3:2236:23034:9892         57      +       -
     # Chr2    109898149       109898235       Chr2    109898287       109898367       LH00150:341:22HGMLLT3:3:1287:23015:18000        54      +       -
-    cmd2 = [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]
+    cmd2 = [BIN_BED, "bamtobed", "-bedpe" if is_paired else "", "-i", "-"]
     # extract only the records from this table where the mean mapq passes this steps filter
     # Chr1    60908424        60908533        Chr1    60908434        60908543        LH00150:341:22HGMLLT3:3:1160:35876:20034        49      -       +
     # Chr3    5915120         5915253         Chr3    5915131         5915265         LH00150:341:22HGMLLT3:3:2236:23034:9892         57      +       -
     # Chr2    109898149       109898235       Chr2    109898287       109898367       LH00150:341:22HGMLLT3:3:1287:23015:18000        54      +       -
-    cmd3 = ["awk", "-v", f'q={min_map_q}', r'BEGIN{OFS="\t"} ($8+0) >= q']
+    cmd3 = ["awk", "-v", f'q={min_map_q}']
+    if is_paired:
+        cmd3 += [r'BEGIN{OFS="\t"} (${8+0) >= q']
+    else:
+        cmd3 += [r'BEGIN{OFS="\t"} (${5+0) >= q']
     # check start/end values and extract only (chrom, start, end)
     # Chr4    108577598       108577715
     # Chr4    106107228       106107344
     # Chr1    45721044        45721144
-    cmd4 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
+    if is_paired:
+        cmd4 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
+    else:
+        cmd4 = ["awk", r'BEGIN{OFS="\t"} {print $1,$2,$3}']
     # sort beds by genome coordinates
     # Chr1    825268  825547
     # Chr1    825268  825547
@@ -128,6 +151,122 @@ def get_coverage_bed_graphs(sname: str, bam_file: Path, reference: Path, tmpdir:
     shutil.rmtree(coll_dir)
     logger.debug(f"wrote bed graph for {sname}")
     return out_bed_merge
+
+
+# ======= deprecated SE code now incorporated above.
+#     # stream the bed for each read/read pair. toggle `-bedpe` only for PE data
+#     cmd2 = [BIN_BED, "bamtobed"]
+#     if is_paired:
+#         cmd2.append("-bedpe")
+#     cmd2.extend(["-i", "-"])
+
+#     # filter pairs on mapq: applies same mapq min as in variants.py
+#     # mapq in bed for se is column 5; for pe is column 8
+#     qcol = 5
+#     if is_paired:
+#         qcol = 8
+#     cmd3 = ["awk", "-v", f'q={min_map_q}', r'BEGIN{OFS="\t"} ' + f'(${qcol}+0) >= q']
+
+#     if is_paired:
+#         # check and pull out only chrom, start, end
+#         cmd4 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
+#     else:
+#         # For SE data we just need the first 3 columns of the input bed
+#         cmd4 = ["awk", r'BEGIN{OFS="\t"} {print $1,$2,$3}']
+
+#     # sort beds
+#     cmd5 = [BIN_BED, "sort", "-i", "-"]
+#     # get coverage for each site from overlapping beds
+#     cmd6 = [BIN_BED, "genomecov", "-i", "-", "-g", str(fai_path), "-bg"]
+#     # pipeline
+#     for cmd in [cmd1, cmd2, cmd3, cmd4, cmd5, cmd6]:
+#         logger.debug(" ".join(cmd))
+#     run_pipeline([cmd1, cmd2, cmd3, cmd4, cmd5, cmd6], out_path)
+#     shutil.rmtree(coll_dir)
+#     logger.debug(f"wrote bed graph for {sname}")
+#     return out_path
+
+
+
+# def get_fragment_beds(sname: str, bam_file: Path, threads: int, tmpdir: Path) -> Path:
+#     r"""Produce a fragments BED (full inserts) from a coordinate-sorted BAM.
+
+#     Shell command
+#     -------------
+#     >>> $ samtools collate -u -@ 2 -O S1.sorted.bam \
+#     >>>   | bedtools bamtobed -bedpe -i - \
+#     >>>   | awk 'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}' \
+#     >>>   | bedtools sort -i - > S1.fragments.bed
+#     """
+#     bed_dir = tmpdir / "beds"
+#     out_path = bed_dir / f"{sname}.fragments.bed"
+#     bed_dir.mkdir(parents=True, exist_ok=True)
+
+#     # CHECKED that this properly pipes on large files. It does.
+#     # Note: collate has heavy I/O writing tmp files here.
+#     coll_dir = tmpdir / f"{sname}.collate"
+#     coll_dir.mkdir(exist_ok=True)
+#     cmd1 = [
+#         BIN_SAM, "collate",
+#         "-@", str(min(threads, 4)),             # doesn't benefit from >4
+#         "-T", str(coll_dir / f"{sname}"),
+#         "-r", "1000000",
+#         "-u",
+#         "-O",
+#         str(bam_file),
+#     ]
+#     cmd2 = [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]
+#     cmd3 = ["awk", r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}']
+#     cmd4 = [BIN_BED, "sort", "-i", "-"]
+#     run_pipeline([cmd1, cmd2, cmd3, cmd4], out_path)
+#     shutil.rmtree(coll_dir)
+#     logger.debug(f"wrote fragment beds for {sname}")
+#     return out_path
+
+
+# def get_fragment_coverage_beds(sname: str, reference: Path, tmpdir: Path) -> Path:
+#     """write depth filtered bed for each sample.
+
+#     >>> $ bedtools genomecov -i BED -g REF.scaflens -bg > fragments.bedgraph
+#     """
+#     # create a tmp file with REF scaffold length
+#     bed_dir = tmpdir / "beds"
+#     fragment_bed = bed_dir / f"{sname}.fragments.bed"
+#     out_path = bed_dir / f"{sname}.fragments.bedgraph"
+#     fai_path = reference.with_suffix(reference.suffix + ".fai")
+#     assert fai_path.exists(), "must call `samtools faidx $REF`"
+
+#     # get bedgraph format for storing depths
+#     cmd = [
+#         BIN_BED, "genomecov",
+#         "-i", str(fragment_bed),
+#         "-g", str(fai_path),          # genome file to define chrom lens
+#         "-bg",                        # report depth in bedgraph format
+#     ]
+#     run_pipeline([cmd], out_path)
+#     fragment_bed.unlink()
+#     return out_path
+
+
+# def get_fragment_merged_coverage_beds(sname: str, tmpdir: Path):
+#     """write bed with intervals of coverage above {min_depth_majrule}.
+
+#     >>> $ awk -v MIN=3 '$4>=MIN' sname.fragments.bedgraph \
+#     >>>   | bedtools merge -i - > sname.loci.min3.bed
+#     """
+#     # paths
+#     bed_dir = tmpdir / "beds"
+#     bedgraph = bed_dir / f"{sname}.fragments.bedgraph"
+#     out_path = bed_dir / f"{sname}.fragments.merged.bed"
+
+#     # keep all RAD beds above depth=1 and merge
+#     # TODO: The docstring says this honors min_depth_majrule, but here it doesn't
+#     cmd1 = ["awk", "-v", "MIN=1", r'$4>=MIN', bedgraph]
+#     cmd2 = [BIN_BED, "merge", "-i", "-"]
+#     # -d merge beds within this many sites of each other.
+#     run_pipeline([cmd1, cmd2], out_path)
+#     return out_path
+# >>>>>>> 24fdcf86e91a9aad562701d4ab2a9706ef0f1595
 
 
 def get_across_sample_loci_bed(
@@ -251,7 +390,7 @@ def old_get_across_sample_loci_bed(
 
     # write genome sorted copy of each bed file
     sorted_paths = []
-    with tempfile.TemporaryDirectory(prefix="bedmerge_") as tmpd:
+    with tempfile.TemporaryDirectory(prefix="bedmerge_", delete=False) as tmpd:
         for i, src in enumerate(bed_files):
             dst = Path(tmpd) / f"{i:04d}_{src.name}.sorted.bed"
             sort_cmd = [
@@ -271,8 +410,15 @@ def old_get_across_sample_loci_bed(
         # cmd2: threshold by K
         cmd2 = ["awk", f'BEGIN{{OFS="\\t"}} $4>={int(min_sample_coverage)} {{print $1,$2,$3,$4,$5}}']
 
-        # cmd3: merge sub-intervals, keeping min support and distinct sample list
+        # cmd3: Sort again to ensure proper order for the merge
         cmd3 = [
+            BIN_BED, "sort",
+            "-g", str(ref_info),
+            "-i", "-",
+        ]
+
+        # cmd4: merge sub-intervals, keeping min support and distinct sample list
+        cmd4 = [
             BIN_BED, "merge",
             "-i", "-",
             "-d", str(int(min_merge_distance)),
@@ -280,11 +426,13 @@ def old_get_across_sample_loci_bed(
             "-o", "min",
         ]
 
-        # cmd4: filter intervals shorter than min_len (default=20)
-        cmd4 = ["awk", "-v", f"L={min_locus_length}", 'BEGIN{OFS=FS="\t"} ($3-$2) >= L']
+        # cmd5: filter intervals shorter than min_len (default=20)
+        cmd5 = ["awk", "-v", f"L={min_locus_length}", 'BEGIN{OFS=FS="\t"} ($3-$2) >= L']
 
         # run pipeline
-        run_pipeline([cmd1, cmd2, cmd3, cmd4], bed_path)
+        for cmd in [cmd1, cmd2, cmd3, cmd4, cmd5]:
+            logger.debug(" ".join(cmd))
+        run_pipeline([cmd1, cmd2, cmd3, cmd4, cmd5], bed_path)
     return bed_path
 
 

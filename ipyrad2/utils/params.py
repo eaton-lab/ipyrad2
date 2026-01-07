@@ -52,7 +52,12 @@ def new_params(name: str = None, force: bool = False):
                         "project_dir":"./",
                         "raw_fastq_path":"/path/to/fastqs/*.gz",
                         "barcodes_path":"/path/to/bcodes.txt",
-                        "reference_sequence":"/path/to/ref.fa"}}
+                        "sorted_fastq_path":"/path/to/sorted_fastqs/*.gz",
+                        "reference_sequence":"/path/to/ref.fa",
+                        "pop_assign_file":"/path/to/pops.txt",
+                       }
+               }
+
         doc.update(main)
         paramsfile.write(tomlkit.dumps(doc) + "\n")
 
@@ -63,7 +68,24 @@ def new_params(name: str = None, force: bool = False):
         for command in subcommands :
             paramsfile.write(f"[{command}]\n")
             args = arg_defaults[command]
-            # Remove args that don't make sense in a params file
+            # demux - Remove barcodes which is a classic mode main param
+            _ = args.pop("barcodes", None)
+            # demux/trim/denovo/map - Remove fastqs which either comes in from main
+            #   params or is set as default in classic mode
+            _ = args.pop("fastqs", None)
+            # map/assemble - Remove reference as it is either passed in or 
+            #   constructed in classic mode
+            _ = args.pop("reference", None)
+            # assemble - Remove rad_bams/wgs_bams which are constructed in classic mode
+            _ = args.pop("rad_bams", None)
+            _ = args.pop("wgs_bams", None)
+            # assemble - Remove name which is passed in to classic mode
+            _ = args.pop("name", None)
+            # Remove all output directories. Classic mode will use force to use
+            # the defaults, so all classic mode directories are determined solely
+            # by the project_dir and name parameters
+            _ = args.pop("out", None)
+            # Remove other args that don't make sense in a params file
             _ = args.pop("cores", None)
             _ = args.pop("threads", None)
             _ = args.pop("force", None)

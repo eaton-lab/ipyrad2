@@ -3,30 +3,22 @@
 """
 """
 
+import argparse
 import glob
+import ipyrad2 as ip
 import os
 import sys
-import argparse
-from ipyrad2.cli.make_wide import make_wide
-from ipyrad2.cli.cli_demux import _setup_demux_subparser
-from ipyrad2.cli.cli_trim import _setup_trim_subparser
-from ipyrad2.cli.cli_denovo import _setup_denovo_subparser
-from ipyrad2.cli.cli_map import _setup_map_subparser
-from ipyrad2.cli.cli_assemble import _setup_assemble_subparser
-from ipyrad2.cli.cli_wex import _setup_wex_subparser
-from ..demuxer import run_demuxer
-from ..trimmer import run_trimmer
-from ..denovo import run_denovo
-from ..mapper import run_mapper
-from ..assembler import run_assembler
-from ..analysis.window_extracter import run_window_extracter
-from ..utils.logger import set_log_level
-from ..utils.exceptions import IPyradError
-from ..utils.params import read_params, new_params
+import traceback
+
 from argparse import Namespace
 from loguru import logger
 from pathlib import Path
-import ipyrad2 as ip
+
+from ipyrad2.cli.make_wide import make_wide
+from ..utils.logger import set_log_level
+from ..utils.exceptions import IPyradError
+from ..utils.params import read_params, new_params
+from ..utils.pops import parse_pops_file
 
 VERSION = str(ip.__version__)
 
@@ -72,6 +64,7 @@ def setup_parsers() -> argparse.ArgumentParser:
         help="Log file. Logging to stdout is also appended to this file. [default=None]."
     )
     parser.add_argument("-f", "--force", action="store_true", help="force overwrite of existing data")
+    parser.add_argument("-d", "--debug", action="store_true", help="Print debug information")
     parser.add_argument("-v", "--version", action='version', version=f"ipyrad {VERSION}")
     parser.add_argument('-h', '--help', action='help', help=argparse.SUPPRESS)
 
@@ -103,10 +96,12 @@ def command_line():
         _flagnew(args.new)
         sys.exit(0)
 
-    if args.params is not None:
+    elif args.params is not None:
         params = read_params(args.params)
         if not os.path.exists(params.main.project_dir):
             os.mkdir(params.main.project_dir)
+    else:
+        sys.exit("Classic mode requires either -n or -p")
 
     # LOGGING: -----------------------------------------------------
     if hasattr(args, "log_level"):
@@ -119,41 +114,84 @@ def command_line():
         # Black magic to merge s1 specific args with the few useful ones
         # we read from the cli, e.g. cores, force, and logging info
         s1_args = Namespace(**{**vars(s1_args), **vars(args)})
-        # Update demux params from the params file
-        s1_args.fastqs = params.main.raw_fastq_path
-        s1_args.barcodes = params.main.barcodes_path
+        # Check if sorted_fastq_path is set and contains valid fq files
+        # This implies the user wants to bring in their own fq files and skip step 1.
+        p = Path(params.main.sorted_fastq_path)
+        fq_files = list(p.parent.glob(p.name))
+        # If the glob succeeds then fq_files will be len > 1, and all *.gz files should exist
+        if len(fq_files) and all([x.exists() for x in fq_files]):
+            logger.info("Skipping step 1: sorted_fastq_files is set and fq files exist.")
+        else:
+            # Update demux params from the params file
+            s1_args.fastqs = params.main.raw_fastq_path
+            s1_args.barcodes = params.main.barcodes_path
 
-        s1_args.out = Path(params.main.project_dir) / (params.main.name + "_DEMUX")
-        ip.cli.cli_main.run_subcommand(s1_args, _exit=False)
+            s1_args.out = Path(params.main.project_dir) / (params.main.name + "_fastqs")
+            ip.cli.cli_main.run_subcommand(s1_args, _exit=False)
 
     # TRIM: -------------------------------------------------------
     if "2" in args.steps:
         s2_args = params.trim
         s2_args.subcommand = "trim"
         s2_args = Namespace(**{**vars(s2_args), **vars(args)})
-        s2_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_DEMUX/*.gz")
-        s2_args.out = Path(params.main.project_dir) / (params.main.name + "_TRIMMED")
+        # Check if sorted_fastq_path is set and contains valid fq files
+        # This implies the user wants to bring in their own fq files and skip step 1.
+        try:
+            p = Path(params.main.sorted_fastq_path)
+            fq_files = list(p.parent.glob(p.name))
+        except ValueError:
+            # Blank sorted_fastq_path will raise this when trying to glob PosixPath('.')
+            fq_files = []
+
+        # If the glob succeeds then fq_files will be len > 1, and all *.gz files should exist
+        if len(fq_files) and all([x.exists() for x in fq_files]):
+            s2_args.fastqs = p
+        else:
+            # Fall back to assuming the user already ran step 1
+            s2_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_fastqs/*.gz")
+
+        s2_args.out = Path(params.main.project_dir) / (params.main.name + "_edits")
         ip.cli.cli_main.run_subcommand(s2_args, _exit=False)
 
     # DENOVO: --------------------------------------------------------
     if "3" in args.steps:
-        # TODO: Handle skipping step 3 if reference_sequence parameter is specified
-        s3_args = params.denovo
-        s3_args.subcommand = "denovo"
-        s3_args = Namespace(**{**vars(s3_args), **vars(args)})
-        s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_TRIMMED/*.gz")
-        s3_args.out = Path(params.main.project_dir) / (params.main.name + "_CLUSTERS")
-        ip.cli.cli_main.run_subcommand(s3_args, _exit=False)
+        ref_seq = Path(params.main.reference_sequence)
+        # Ensure ref_seq doesn't exist. If reference_sequence parameter is blank in params file it
+        # will be created as '.', so guard against this as well.
+        if ref_seq.exists() and not (str(ref_seq) == '.'):
+            logger.info("Reference sequence exists, skipping denovo reference assembly.")
+        else:
+            s3_args = params.denovo
+            s3_args.subcommand = "denovo"
+            s3_args = Namespace(**{**vars(s3_args), **vars(args)})
+            s3_args.out = Path(params.main.project_dir) / (params.main.name + "_reference")
+            # Try to parse pops file to subsample fastqs for building pseudo-reference
+            pops_file = Path(params.main.pop_assign_file)
+            if pops_file.exists() and not (str(pops_file) == '.'):
+                logger.info("pop_assign_file does not exist, skipping subsample selection.")
+                # Defaults to using all sample edits files
+                # TODO: Could be better to randomly select a handful, but this might be
+                #       better to implement inside the denovo.py code, so it works for CLI as well
+                s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
+            else:
+                # TODO: Maybe this isn't necessary here 
+                s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
+            # TODO: Add something to test the number of .gz files and complain if there are too many.
+            #       Might be good to recommend using an imap file, and then sampling 2-3 individuals per pop
+            ip.cli.cli_main.run_subcommand(s3_args, _exit=False)
 
     # MAP: --------------------------------------------------------
     if "4" in args.steps:
-        # TODO: Handle switching between denovo built reference vs user specified
         s4_args = params.map
         s4_args.subcommand = "map"
         s4_args = Namespace(**{**vars(s4_args), **vars(args)})
-        s4_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_TRIMMED/*.gz")
-        s4_args.reference = Path(params.main.project_dir) / (params.main.name + "_CLUSTERS/denovo_reference.fa")
-        s4_args.out = Path(params.main.project_dir) / (params.main.name + "_MAPPED")
+        s4_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
+        # If user passed in reference then use this else use the default ref from step 3
+        if os.path.exists(params.main.reference_sequence):
+            s4_args.reference = Path(params.main.reference_sequence)
+        else:
+            s4_args.reference = Path(params.main.project_dir) / (params.main.name + "_reference/denovo_reference.fa")
+        s4_args.out = Path(params.main.project_dir) / (params.main.name + "_mapped")
         ip.cli.cli_main.run_subcommand(s4_args, _exit=False)
 
     # ASSEMBLE: ---------------------------------------------------
@@ -162,10 +200,17 @@ def command_line():
         s5_args.subcommand = "assemble"
         s5_args = Namespace(**{**vars(s5_args), **vars(args)})
         s5_args.name = params.main.name
-        bams = glob.glob(str(Path(params.main.project_dir) / (params.main.name + "_MAPPED/*.bam")))
+        bams = glob.glob(str(Path(params.main.project_dir) / (params.main.name + "_mapped/*.bam")))
         s5_args.rad_bams = [Path(x) for x in bams]
-        s5_args.reference = Path(params.main.project_dir) / (params.main.name + "_CLUSTERS/denovo_reference.fa")
-        s5_args.out = Path(params.main.project_dir) / (params.main.name + "_OUT")
+        # TODO: Handle wgs_bams in classic mode
+        s5_args.wgs_bams = None
+        # Toggle whether to use the passed in or denovo constructed reference sequence
+        if os.path.exists(params.main.reference_sequence):
+            s5_args.reference = Path(params.main.reference_sequence)
+        else:
+            s5_args.reference = Path(params.main.project_dir) / (params.main.name + "_reference/denovo_reference.fa")
+
+        s5_args.out = Path(params.main.project_dir) / (params.main.name + "_outfiles")
         ip.cli.cli_main.run_subcommand(s5_args, _exit=False)
 
     sys.exit(0)

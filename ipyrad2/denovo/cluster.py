@@ -84,7 +84,7 @@ def build_sample_summary(sname: str, outdir: Path, joined_spacer: int = 24) -> p
     df = pd.DataFrame(out_rows, columns=columns)
     out_path = outdir / f"{sname}.summary.tsv"
     df.to_csv(out_path, sep="\t", index=False)
-    logger.info(f"Wrote {len(df)} clusters → {out_path}")
+    logger.debug(f"Wrote {len(df)} clusters → {out_path}")
     return df
 
 
