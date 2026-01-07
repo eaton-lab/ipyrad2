@@ -457,13 +457,13 @@ def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) ->
     return out_vcf_gz
 
 
-def write_vcf(name: str, outdir: Path, threads: int) -> Path:
+def write_vcf(name: str, outdir: Path, tmpdir: Path, threads: int) -> Path:
     """Get the final VCF filtered by the final BED file to remove
     filtered loci or trimmed edges.
     """
     loci_bed = outdir / f"{name}.bed"
     out_vcf_gz = outdir / f"{name}.vcf.gz"
-    in_vcf_gz = outdir / "tmpdir" / "vcfs" / "variants.resolved.vcf.gz"
+    in_vcf_gz = tmpdir / "vcfs" / "variants.resolved.vcf.gz"
 
     cmd = [
         BIN_BCF, "view",

@@ -300,6 +300,7 @@ def run_assembler(
             snames=snames,
             name=name,
             outdir=outdir,
+            tmpdir=tmpdir,
             exclude_reference=exclude_reference,
             min_locus_sample_coverage=min_locus_sample_coverage,
             min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
@@ -309,9 +310,10 @@ def run_assembler(
             # read_depth_mask=read_depth_mask,
         )),
         "seqs": (write_seqs_hdf5, dict(
+            snames=snames,
             name=name,
             outdir=outdir,
-            snames=snames,
+            tmpdir=tmpdir,
             reference=reference,
             exclude_reference=exclude_reference,
             min_locus_sample_coverage=min_locus_sample_coverage,
@@ -326,7 +328,7 @@ def run_assembler(
 
     # get the final vcf file
     logger.info("writing variants file (.vcf.gz)")
-    write_vcf(name, outdir, threads)
+    write_vcf(name, outdir, tmpdir, threads)
 
     # add snps dataset to the database file
     logger.info("writing snps database (.hdf5)")

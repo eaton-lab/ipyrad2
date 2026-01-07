@@ -429,6 +429,7 @@ def write_loci_and_stats_files(
     snames: List[str],
     name: str,
     outdir: Path,
+    tmpdir: Path,
     exclude_reference: bool,
     min_locus_sample_coverage: int,
     min_locus_trim_sample_coverage: int,
@@ -440,7 +441,7 @@ def write_loci_and_stats_files(
     """
     """
     # database file is in the tmpdir inside outdir
-    database = outdir / "tmpdir" / f"{name}.database.fa"
+    database = tmpdir / f"{name}.database.fa"
     loci_file = outdir / f"{name}.loci.txt"
 
     # add reference to stats outputs

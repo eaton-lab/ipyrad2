@@ -77,6 +77,7 @@ def choose_chunk_cols(
 def write_seqs_hdf5(
     name: str,
     outdir: Path,
+    tmpdir: Path,
     snames: List[str],
     reference: Path,
     exclude_reference: bool,
@@ -90,7 +91,7 @@ def write_seqs_hdf5(
     """Write seqs h5 database from loci file.
     """
     # paths
-    database = outdir / "tmpdir" / f"{name}.database.fa"
+    database = tmpdir / f"{name}.database.fa"
     seqs_database = outdir / f"{name}.hdf5"
 
     # get global sorted names with reference sequence on top
