@@ -89,6 +89,7 @@ class SNPsExtracter:
         imap: Path | str | Dict | None,
         minmap: Path | Dict | None,
         exclude: Path | str | List | None = None,
+        include_reference: bool = False,
     ):
 
         # store params
@@ -104,6 +105,8 @@ class SNPsExtracter:
         """The minimum frequency of the minor allele else SNP is filtered."""
         self.exclude = exclude if exclude else []
         """A file or list of samples to remove before SNP extraction."""
+        self.include_reference = include_reference
+        """Whether to include the reference sequence in the output snps."""
 
         # attributes to be filled
         self.nsnps: int = None
@@ -141,6 +144,8 @@ class SNPsExtracter:
                 self.exclude = [x.strip() for x in infile.readlines()]
         elif isinstance(exclude, list):
             self.exclude = exclude
+        if not self.include_reference:
+            self.exclude.append("assembly_reference_sequence")
         self.exclude = set(exclude)
         logger.debug(f"Excluding samples: {self.exclude}")
 
@@ -149,6 +154,10 @@ class SNPsExtracter:
         with h5py.File(self.data, 'r') as io5:
             # get sample names and get them as padded names
             snames = io5.attrs["names"]
+            if not self.include_reference:
+                # Remove the reference sequence from snames because
+                # it shifts indexing into the genos dataset off by one
+                snames = snames[snames != "assembly_reference_sequence"]
 
             # auto-update exclude from imap difference
             if self.imap:  # is not None:
@@ -166,7 +175,7 @@ class SNPsExtracter:
 
             # filter to only the included samples, store their new indices (sidxs)
             self.sidxs = [i for (i, j) in enumerate(snames) if j not in self.exclude]
-            self.snames = [j for (i, j) in enumerate(snames) if j in self.sidxs]
+            self.snames = [j for (i, j) in enumerate(snames) if i in self.sidxs]
 
 
     def _get_imap_minmap(self, imap, minmap):
@@ -220,7 +229,7 @@ class SNPsExtracter:
             self.snames = io5.attrs["names"]
 
 
-    def _run(self, log_level: str="INFO", ipyclient=None):
+    def run(self, log_level: str="INFO", ipyclient=None):
         """Parse genotype calls from HDF5 snps file.
 
         This runs the filtering steps to extract and filter SNP data
@@ -314,25 +323,28 @@ class SNPsExtracter:
         chunkslice = slice(start, start + CHUNKSIZE)
         with h5py.File(self.data, 'r') as io5:
 
-            # snps is used to filter multi-allel and indel containing.
-            snps = io5["snps"]
-            # genos are the actual calls we want, after filtering.
-            genos = io5["genos"]
+            # CATGKWMRYN data per SNP as ascii uint8
+            # shape: (nsamples, nsnps)
+            snps = io5["genos"][:, :, 2]
+            # 0/0 or 0/1 or 1/1 or 0/2 REF/ALT info per snp
+            # shape: (nsamples, nsnps, 2)
+            genos = io5["genos"][:, :, :2]
             # snpsmap is the position information of SNPs on loci.
+            # ["loc", "loc_idx", "loc_pos", "scaff", "pos"]
             snpsmap = io5["snpsmap"]
 
             # get size of the mask to create
             start = chunkslice.start
-            end = min(chunkslice.stop, snps.shape[1])
+            end = min(chunkslice.stop, genos.shape[1])
             nsnps = end - start
 
             # select slice for this chunk and sample set
             snpsmap = snpsmap[start:end, :2]
             snps = snps[self.sidxs, start:end]
-            genos = genos[start:end, self.sidxs, :].astype(np.uint8)
+            genos = genos[self.sidxs, start:end, :].astype(np.uint8)
 
             # measure number of missing cells
-            nmissing = np.sum(genos == 9)
+            nmissing = np.sum(genos == 255)
             ntotal = genos.size
 
             # get filter masks and diploid genotypes
