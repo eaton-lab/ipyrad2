@@ -52,8 +52,7 @@ def existing_results_force_or_raise(outdir, tmpdir, name, force):
                 shutil.rmtree(tmpdir)
             rfiles = [
                 outdir / f"{name}.loci.txt",
-                outdir / f"{name}.seqs.hdf5",
-                outdir / f"{name}.snps.hdf5",
+                outdir / f"{name}.hdf5",
                 outdir / f"{name}.stats_loci.tsv",
                 outdir / f"{name}.stats_samples.tsv",
                 outdir / f"{name}.stats_coverage.tsv",
