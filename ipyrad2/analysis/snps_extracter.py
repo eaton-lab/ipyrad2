@@ -151,31 +151,23 @@ class SNPsExtracter:
 
 
     def _get_snames_and_sidxs_subset(self) -> None:
-        with h5py.File(self.data, 'r') as io5:
-            # get sample names and get them as padded names
-            snames = io5.attrs["names"]
-            if not self.include_reference:
-                # Remove the reference sequence from snames because
-                # it shifts indexing into the genos dataset off by one
-                snames = snames[snames != "assembly_reference_sequence"]
+        # auto-update exclude from imap difference
+        if self.imap:  # is not None:
+            imapset = set(itertools.chain(*self.imap.values()))
+            self.exclude.update(set(self.snames).difference(imapset))
+            logger.debug(
+                "dropping samples that are either not in the imap dict, "
+                f"or are in the exclude list: {self.exclude}")
 
-            # auto-update exclude from imap difference
-            if self.imap:  # is not None:
-                imapset = set(itertools.chain(*self.imap.values()))
-                self.exclude.update(set(snames).difference(imapset))
-                logger.debug(
-                    "dropping samples that are either not in the imap dict, "
-                    f"or are in the exclude list: {self.exclude}")
+            # raise error if any imap sample names not in database names
+            badnames = set(imapset).difference(self.snames)
+            if badnames:
+                raise ValueError(
+                    f"Samples {badnames} are not in data file: {self.data}")
 
-                # raise error if any imap sample names not in database names
-                badnames = set(imapset).difference(snames)
-                if badnames:
-                    raise ValueError(
-                        f"Samples {badnames} are not in data file: {self.data}")
-
-            # filter to only the included samples, store their new indices (sidxs)
-            self.sidxs = [i for (i, j) in enumerate(snames) if j not in self.exclude]
-            self.snames = [j for (i, j) in enumerate(snames) if i in self.sidxs]
+        # filter to only the included samples, store their new indices (sidxs)
+        self.sidxs = [i for (i, j) in enumerate(self.snames) if j not in self.exclude]
+        self.snames = [j for (i, j) in enumerate(self.snames) if i in self.sidxs]
 
 
     def _get_imap_minmap(self, imap, minmap):
@@ -184,7 +176,7 @@ class SNPsExtracter:
         # and use the global mincov as the min coverage of that group.
         if not imap:
             self.imap = {'all': self.snames}
-            self.minmap = {'all': int(self.min_sample_coverage)}
+            self.minmap = {'all': int(self.mincov)}
 
         # if imap was provided, then (1) check the names; (2) apply a
         # min value to each group from minmap; or (3) raise errors.
@@ -206,6 +198,12 @@ class SNPsExtracter:
                     logger.info("imap file doesn't include minmap info, parsing standard imap file format.")
                     imap = parse_imap(imap)
 
+            # If the user passes in an imap, but also passes in 'exclude' samples
+            # that are _in_ this imap then we need to remove them. Assume user is
+            # calling the exclude argument with preference.
+            for k, v in imap.items():
+                imap[k] = [x for x in v if x not in self.exclude]
+
             if not minmap:
                 # Don't override if minmap was passed in
                 logger.info("No minmap specified. Including all samples per population by default.")
@@ -220,14 +218,18 @@ class SNPsExtracter:
 
 
     def _set_nsnps_and_check_h5_file_format(self) -> None:
-        """Check input data is proper format, and get nsnps."""
+        """Check input data is proper format, get nsnps, and set snames"""
         if self.data.suffix in [".vcf", ".vcf.gz"]:
             raise TypeError("input should be hdf5, see the vcf_to_hdf5 tool.")
         # this will raise an error msg if using an outdated version
         with h5py.File(self.data, 'r') as io5:
             self.nsnps = int(io5.attrs['nsnps'])
-            self.snames = io5.attrs["names"]
-
+            snames = io5.attrs["names"]
+            if not self.include_reference:
+                # Remove the reference sequence from snames because
+                # it shifts indexing into the genos dataset off by one
+                snames = snames[snames != "assembly_reference_sequence"]
+            self.snames = snames
 
     def run(self, log_level: str="INFO", ipyclient=None):
         """Parse genotype calls from HDF5 snps file.
@@ -375,17 +377,17 @@ class SNPsExtracter:
         masks[:, 0] = np.any(snps == 45, axis=0)
 
         # mask1 is True if a third or fourth allele is present.
-        masks[:, 1] = np.sum(genos == 2, axis=2).sum(axis=1).astype(bool)
-        masks[:, 1] += np.sum(genos == 3, axis=2).sum(axis=1).astype(bool)
+        masks[:, 1] = np.sum(genos == 2, axis=2).sum(axis=0).astype(bool)
+        masks[:, 1] += np.sum(genos == 3, axis=2).sum(axis=0).astype(bool)
 
         # mask2 is True if sample coverage is below mincov.
         # mask missing calls from genotype array
-        genomask = np.ma.array(data=genos, mask=(genos == 9))
+        genomask = np.ma.array(data=genos, mask=(genos == 255))
 
         # count number of non-masked haplotypes in each site [2, 2, 4, 0, ...]
         # here a zero indicates the the site is fully masked (i.e., missing)
         # for the selected set of samples.
-        nhaplos = (~genomask.mask).sum(axis=2).sum(axis=1)
+        nhaplos = (~genomask.mask).sum(axis=2).sum(axis=0)
 
         # This accomodates missing haploid calls (0/9) since it counts alleles
         if isinstance(self.mincov, int):
@@ -401,13 +403,13 @@ class SNPsExtracter:
             mincov = self.minmap[pop]
 
             # get the indices for samples in this pop
-            imap_sidxs = [self.names.index(i) for i in samps]
+            imap_sidxs = [self.snames.index(i) for i in samps]
 
             # select the samples from the geno array
-            subarr = genomask[:, imap_sidxs, :]
+            subarr = genomask[imap_sidxs, :, :]
 
             # get number of haplotypes skipping masked missing
-            nhaplos = (~subarr.mask).sum(axis=2).sum(axis=1)
+            nhaplos = (~subarr.mask).sum(axis=2).sum(axis=0)
             if isinstance(mincov, int):
                 masks[:, 3] += nhaplos < (2 * mincov)
             elif isinstance(mincov, float):
@@ -421,7 +423,7 @@ class SNPsExtracter:
         # call, which is already filtered by the bi-allele filter.
         diplo_common = (genomask
             .sum(axis=2)
-            .mean(axis=1)
+            .mean(axis=0)
             .round()
             .astype(int)
             .data
@@ -433,8 +435,8 @@ class SNPsExtracter:
         masks[:, 4] = np.all(diplo_common == diplos, axis=0)
 
         # mask5 is True if maf is below minmaf setting -----------
-        called_0 = (genomask == 0).sum(axis=2).sum(axis=1).data
-        called_1 = (genomask == 1).sum(axis=2).sum(axis=1).data
+        called_0 = (genomask == 0).sum(axis=2).sum(axis=0).data
+        called_1 = (genomask == 1).sum(axis=2).sum(axis=0).data
 
         # this suppresses a divide by zero error which represents sites
         # with no observations of alleles 0 or 1. This is OK since such
