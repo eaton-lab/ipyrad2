@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional, Dict, List, Union, Tuple
 
 from ..utils.exceptions import IPyradError
+from ..utils.parallel import run_with_pool
 from ..utils.pops import parse_pops_file, parse_imap
 
 # how many cols of SNPs to load in at once from snps, genos, snpsmap
@@ -264,7 +265,7 @@ class SNPsExtracter:
             for start in range(0, self.nsnps, CHUNKSIZE):
                 jobs[start] = (self._get_masks_chunk, {"start":start})
 
-            results = run_with_pool(jobs, self.log_level, self.ncores, msg="Filtering SNPs")
+            results = run_with_pool(jobs, log_level, self.ncores, msg="Filtering SNPs")
 
         # collect results from chunked jobs
         for job in results:
