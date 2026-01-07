@@ -429,7 +429,7 @@ class SNPsExtracter:
             .data
         )
         # get diploid calls at each site
-        diplos = genomask.sum(axis=2).data.T
+        diplos = genomask.sum(axis=2).data
 
         # mask4 is sites where all samples match common geno.
         masks[:, 4] = np.all(diplo_common == diplos, axis=0)
