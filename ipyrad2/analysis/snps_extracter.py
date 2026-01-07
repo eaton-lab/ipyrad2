@@ -90,6 +90,7 @@ class SNPsExtracter:
         minmap: Path | Dict | None,
         exclude: Path | str | List | None = None,
         include_reference: bool = False,
+        ncores: int = 1,
     ):
 
         # store params
@@ -107,6 +108,8 @@ class SNPsExtracter:
         """A file or list of samples to remove before SNP extraction."""
         self.include_reference = include_reference
         """Whether to include the reference sequence in the output snps."""
+        self.ncores = ncores
+        """Number of cores to parallelize snp filtering on."""
 
         # attributes to be filled
         self.nsnps: int = None
@@ -231,7 +234,7 @@ class SNPsExtracter:
                 snames = snames[snames != "assembly_reference_sequence"]
             self.snames = snames
 
-    def run(self, log_level: str="INFO", ipyclient=None):
+    def run(self, log_level: str="INFO"):
         """Parse genotype calls from HDF5 snps file.
 
         This runs the filtering steps to extract and filter SNP data
@@ -252,25 +255,23 @@ class SNPsExtracter:
         ntotal = 0
 
         # run `get_masks_chunk()` on a single core or in parallel
-        if ipyclient is None:
+        if self.ncores == 1:
+            results = {}
+            for start in range(0, self.nsnps, CHUNKSIZE):
+                results[start] = self._get_masks_chunk(start)
+        else:
             jobs = {}
             for start in range(0, self.nsnps, CHUNKSIZE):
-                jobs[start] = self._get_masks_chunk(start)
-        else:
-            lbview = ipyclient.load_balanced_view()
-            prog = ProgressBar({}, "SNP filtering")
-            for start in range(0, self.nsnps, CHUNKSIZE):
-                prog.jobs[start] = lbview.apply(self._get_masks_chunk, start)
-            prog.block()
-            prog.check()
-            jobs = prog.jobs
+                jobs[start] = (self._get_masks_chunk, {"start":start})
+
+            results = run_with_pool(jobs, self.log_level, self.ncores, msg="Filtering SNPs")
 
         # collect results from chunked jobs
-        for job in jobs:
+        for job in results:
             try:
-                snpsmap, snps, genos, masks, nmiss, ntot = jobs[job].get()
+                snpsmap, snps, genos, masks, nmiss, ntot = results[job].get()
             except (NameError, AttributeError):
-                snpsmap, snps, genos, masks, nmiss, ntot = jobs[job]
+                snpsmap, snps, genos, masks, nmiss, ntot = results[job]
             snpsmap_arrs.append(snpsmap)
             snps_arrs.append(snps)
             genos_arrs.append(genos)
@@ -299,7 +300,7 @@ class SNPsExtracter:
             missing_percent = 1.
 
         # report stats
-        stats.samples = len(self.names)
+        stats.samples = len(self.snames)
         stats.pre_filter_snps = self.nsnps
         stats.pre_filter_percent_missing = 100 * (nmissing / ntotal)
         stats.filter_by_indels_present = mask[:, 0].sum()
