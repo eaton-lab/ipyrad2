@@ -71,14 +71,9 @@ def get_coverage_bed_graphs(sname: str, bam_file: Path, reference: Path, tmpdir:
     fai_path = reference.with_suffix(reference.suffix + ".fai")
 
     # Test for pe vs se bam file by checking PAIRED bit of the first few reads
-    cmd1 = ["samtools",
-       "view",
-       "-f", "0x1",
-       bam_file,
-    ]
+    cmd1 = [BIN_SAM, "view", "-f", "0x1", bam_file]
     cmd2 = ["head", "-n", "1000"]
     cmd3 = ["wc", "-l"]
-
     _, ct, _ = run_pipeline([cmd1, cmd2, cmd3])
 
     is_paired = False
@@ -109,9 +104,9 @@ def get_coverage_bed_graphs(sname: str, bam_file: Path, reference: Path, tmpdir:
     # Chr2    109898149       109898235       Chr2    109898287       109898367       LH00150:341:22HGMLLT3:3:1287:23015:18000        54      +       -
     cmd3 = ["awk", "-v", f'q={min_map_q}']
     if is_paired:
-        cmd3 += [r'BEGIN{OFS="\t"} (${8+0) >= q']
+        cmd3 += [r'BEGIN{OFS="\t"} ($8+0) >= q']
     else:
-        cmd3 += [r'BEGIN{OFS="\t"} (${5+0) >= q']
+        cmd3 += [r'BEGIN{OFS="\t"} ($5+0) >= q']
     # check start/end values and extract only (chrom, start, end)
     # Chr4    108577598       108577715
     # Chr4    106107228       106107344
