@@ -82,7 +82,6 @@ def run_assembler(
     max_locus_variant_frequency: float,
     populations: Path,
     masks: List[str] | None,
-    exclude_reference: bool,
     cores: int,
     threads: int,
     force: bool,
@@ -287,7 +286,7 @@ def run_assembler(
     # ---- LOCUS BUILDING ----------------------------------------------
     # ------------------------------------------------------------------
     logger.info("assembling loci")
-    args = (name, snames, reference, tmpdir, exclude_reference, masks)
+    args = (name, snames, reference, tmpdir, masks)
     build_locus_fasta_database(*args)
 
     # ------------------------------------------------------------------
@@ -300,7 +299,6 @@ def run_assembler(
             name=name,
             outdir=outdir,
             tmpdir=tmpdir,
-            exclude_reference=exclude_reference,
             min_locus_sample_coverage=min_locus_sample_coverage,
             min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
             min_locus_length=min_locus_length,
@@ -314,7 +312,6 @@ def run_assembler(
             outdir=outdir,
             tmpdir=tmpdir,
             reference=reference,
-            exclude_reference=exclude_reference,
             min_locus_sample_coverage=min_locus_sample_coverage,
             min_locus_trim_sample_coverage=min_locus_sample_coverage,
             min_locus_length=min_locus_length,

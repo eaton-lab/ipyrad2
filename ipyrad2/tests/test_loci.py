@@ -22,7 +22,6 @@ if __name__ == "__main__":
         snames=snames,
         reference=REF,
         outdir=OUT,
-        exclude_reference=False,
         masks=[],
     )
     build_locus_fasta_database(**kwargs)

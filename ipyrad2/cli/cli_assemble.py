@@ -116,10 +116,6 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="Site patterns to mask (e.g., restriction overhangs). [default=None]",
     )
     tool.add_argument(
-        "-e", "--exclude-reference", action="store_true",
-        help="Do not include the reference sequence as a sample in outputs",
-    )
-    tool.add_argument(
         "-c", "--cores", metavar="int", type=int, default=6,
         help="Max number of cores to use. [default=6]",
     )

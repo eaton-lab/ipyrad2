@@ -221,7 +221,6 @@ def build_locus_fasta_database(
     snames: List[str],
     reference: Path,
     tmpdir: Path,
-    exclude_reference: bool,
     masks: List[str],
 ) -> Tuple[Path, Path]:
     """..."""
@@ -230,9 +229,8 @@ def build_locus_fasta_database(
     fastas = [consensus_dir / f"{i}.consensus.fa" for i in sorted(snames)]
 
     # insert reference as first sample unless explicitly excluded
-    if not exclude_reference:
-        reference_fa = consensus_dir / "assembly_reference_sequence.consensus.fa"
-        fastas = [reference_fa] + fastas
+    reference_fa = consensus_dir / "assembly_reference_sequence.consensus.fa"
+    fastas = [reference_fa] + fastas
 
     # get names
     snames = [i.name.rsplit(".consensus.fa")[0] for i in fastas]
@@ -430,7 +428,6 @@ def write_loci_and_stats_files(
     name: str,
     outdir: Path,
     tmpdir: Path,
-    exclude_reference: bool,
     min_locus_sample_coverage: int,
     min_locus_trim_sample_coverage: int,
     min_locus_length: int,
@@ -446,8 +443,7 @@ def write_loci_and_stats_files(
 
     # add reference to stats outputs
     refname = "assembly_reference_sequence"
-    if not exclude_reference:
-        snames.append(refname)
+    snames.append(refname)
 
     # get name padding for loci file
     max_len = max(len(i) for i in snames) + 2
@@ -455,7 +451,7 @@ def write_loci_and_stats_files(
 
     # stats
     total_locus_cov = Counter()
-    total_sample_cov = {i: 0 for i in [refname] + snames}
+    total_sample_cov = {i: 0 for i in snames}
     total_filters = {
         "min_length": 0,
         "min_samples": 0,
@@ -600,7 +596,6 @@ if __name__ == "__main__":
     data.files.loci_database = data.stepdir / f"{data.name}.database.fa"
 
     # parse loci from database
-    # data.params.exclude_reference = False
     samples = data.samples
     write_loci_and_stats_files(data, samples)
 

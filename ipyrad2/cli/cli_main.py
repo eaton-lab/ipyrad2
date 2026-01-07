@@ -245,7 +245,6 @@ def run_subcommand(args, _exit=True):
             max_locus_variant_frequency=args.max_locus_variant_frequency,
             populations=args.populations,
             masks=args.masks,
-            exclude_reference=args.exclude_reference,
             cores=args.cores,
             threads=args.threads,
             force=args.force,

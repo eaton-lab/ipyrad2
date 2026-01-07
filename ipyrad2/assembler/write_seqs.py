@@ -80,7 +80,6 @@ def write_seqs_hdf5(
     tmpdir: Path,
     snames: List[str],
     reference: Path,
-    exclude_reference: bool,
     min_locus_sample_coverage: int,
     min_locus_trim_sample_coverage: int,
     min_locus_length: int,
@@ -96,8 +95,7 @@ def write_seqs_hdf5(
 
     # get global sorted names with reference sequence on top
     snames = sorted(snames)
-    if not exclude_reference:
-        snames = ["assembly_reference_sequence"] + snames
+    snames = ["assembly_reference_sequence"] + snames
     nsamples = len(snames)
 
     # get optimal chunk size
@@ -273,7 +271,6 @@ if __name__ == "__main__":
         outdir=DIR,
         snames=SNAMES,
         reference=REF,
-        exclude_reference=False,
         min_locus_sample_coverage=4,
         min_locus_trim_sample_coverage=4,
         min_locus_length=35,
