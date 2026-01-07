@@ -93,7 +93,7 @@ def run_assembler(
     loci_bed = loci_bed.expanduser().absolute() if loci_bed else None
     reference = reference.expanduser().absolute()
     outdir = outdir.expanduser().absolute()
-    tmpdir = outdir / "tmpdir"
+    tmpdir = outdir / f"{name}_tmpdir"
 
     # run this many multithreaded jobs concurrently
     workers = max(1, cores // threads)
