@@ -185,11 +185,16 @@ class PCA(object):
         )
 
         # run snp extracter to parse data files
+        # log_level = "ERROR" if quiet else "INFO"
         ext.run()
         self.snps = ext.genos
         self.snpsmap = ext.snpsmap
         self.names = ext.snames
         self._mvals = np.sum(self.snps == _MISSING_GENO)
+        self._stats = ext.stats
+        if not self.quiet:
+            stats = self._stats.map(lambda x: f"{x:.3f}".rstrip("0").rstrip("."))
+            logger.success(f"\n{stats}")
 
         # make imap for imputing if not used in filtering.
         if not self.imap:
@@ -208,6 +213,11 @@ class PCA(object):
         # impute missing data
         if (self.impute_method is not False) and self._mvals:
             self._impute_data()
+        elif self.impute_method == False:
+            # Disabling imputation entirely makes the simulated data look funny
+            # but this is because we are coding missing genotypes as 255 instead
+            # of as 9, which distorts the PCA much more intensely.
+            logger.warning("Imputation disabled. Interpret PCA results with care.")
 
 
     def _seed(self):
