@@ -25,7 +25,8 @@ from ..utils.parallel import run_with_pool
 from ..utils.pops import parse_pops_file, parse_imap
 
 # Value of missing data in the snps matrix
-_MISSING_VALUE = 255
+_MISSING_GENO = 255
+_MISSING_SNP = 78
 
 # how many cols of SNPs to load in at once from snps, genos, snpsmap
 CHUNKSIZE = 10_000
@@ -298,7 +299,7 @@ class SNPsExtracter:
 
         # record missing pre-impute (TODO: move to ?)
         if self.genos.size:
-            missing_cells = np.sum(self.genos == _MISSING_VALUE)
+            missing_cells = np.sum(self.genos == _MISSING_GENO)
             missing_percent = missing_cells / self.genos.size
         else:
             missing_percent = 1.
@@ -351,7 +352,7 @@ class SNPsExtracter:
             genos = genos[self.sidxs, start:end, :].astype(np.uint8)
 
             # measure number of missing cells
-            nmissing = np.sum(genos == _MISSING_VALUE)
+            nmissing = np.sum(genos == _MISSING_GENO)
             ntotal = genos.size
 
             # get filter masks and diploid genotypes
@@ -387,7 +388,7 @@ class SNPsExtracter:
 
         # mask2 is True if sample coverage is below mincov.
         # mask missing calls from genotype array
-        genomask = np.ma.array(data=genos, mask=(genos == _MISSING_VALUE))
+        genomask = np.ma.array(data=genos, mask=(genos == _MISSING_GENO))
 
         # count number of non-masked haplotypes in each site [2, 2, 4, 0, ...]
         # here a zero indicates the the site is fully masked (i.e., missing)
@@ -457,7 +458,7 @@ class SNPsExtracter:
             masks[:, 5] = freqs < self.maf
 
         # set missing values in diploid genotype array
-        diplos[snps == 78] = _MISSING_VALUE
+        diplos[snps == _MISSING_SNP] = _MISSING_GENO
         return masks, diplos
 
     ################################################################

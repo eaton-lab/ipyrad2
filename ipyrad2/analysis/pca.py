@@ -18,7 +18,7 @@ from typing import Dict, List, Union, Tuple
 # ipyrad tools
 from ..utils.exceptions import IPyradError
 from ..utils.pops import parse_pops_file, parse_imap
-from .snps_extracter import SNPsExtracter, _MISSING_VALUE
+from .snps_extracter import SNPsExtracter, _MISSING_GENO
 from .snps_imputer import SNPsImputer
 from .utils import subsample_snps
 from .vcf_to_hdf5 import VCFtoHDF5 as vcf_to_hdf5
@@ -175,7 +175,6 @@ class PCA(object):
             self.data = converter.database
 
         # load .snps and .snpsmap from HDF5
-        first = (True if isinstance(self.impute_method, int) else quiet)
         ext = SNPsExtracter(
             data=self.data,
             imap=self.imap,
@@ -187,10 +186,10 @@ class PCA(object):
 
         # run snp extracter to parse data files
         ext.run()
-        self.snps = ext.snps
+        self.snps = ext.genos
         self.snpsmap = ext.snpsmap
         self.names = ext.snames
-        self._mvals = np.sum(self.snps == 78)
+        self._mvals = np.sum(self.snps == _MISSING_GENO)
 
         # make imap for imputing if not used in filtering.
         if not self.imap:
@@ -198,7 +197,7 @@ class PCA(object):
             self.minmap = {'1': 0.5}
 
         # record missing data per sample
-        miss_arr = np.sum(self.snps == 78, axis=1) / self.snps.shape[1]
+        miss_arr = np.sum(self.snps == _MISSING_GENO, axis=1) / self.snps.shape[1]
         miss = {}
         for name in self.names:
             miss[name] = round(miss_arr[self.names.index(name)], 3)
@@ -266,7 +265,7 @@ class PCA(object):
                 self.topcov, self.niters, self.quiet)
 
         elif self.impute_method == "random":
-            missing = self.snps == 9
+            missing = self.snps == _MISSING_GENO
             self.snps[missing] = 0
             self.snps[missing] += np.random.choice([0,1,2], self.snps.shape)[missing].astype(np.uint64)
             self._print(
@@ -275,7 +274,7 @@ class PCA(object):
             )
 
         else:
-            missing = self.snps == 9
+            missing = self.snps == _MISSING_GENO
             self.snps[missing] = 0
             self._print(
                 "Imputation (null; sets to 0): {:.1f}%, {:.1f}%, {:.1f}%"
