@@ -72,7 +72,7 @@ class SNPsImputer(object):
             self.snps = self._impute_sample()
 
         else:
-            self.snps[self.snps == 9] = 0
+            self.snps[self.snps == _MISSING_GENO] = 0
             self._print(
                 "Imputation: 'None'; (0, 1, 2) = {:.1f}%, {:.1f}%, {:.1f}%"
                 .format(100, 0, 0)            
@@ -97,21 +97,27 @@ class SNPsImputer(object):
             sidxs = sorted(self.names.index(i) for i in samps)
             data = newdata[sidxs, :].copy()
 
-            # number of alleles at each site that are not 9
-            nallels = np.sum(data != 9, axis=0) * 2
+            # number of alleles at each site that are not missing
+            nallels = np.sum(data != _MISSING_GENO, axis=0) * 2
 
             # get prob derived at each site using tmp array w/ missing to zero 
             tmp = data.copy()
-            tmp[tmp == 9] = 0
-            fderived = tmp.sum(axis=0) / nallels
+            tmp[tmp == _MISSING_GENO] = 0
+            with np.errstate(divide='ignore', invalid='ignore'):
+                # Silence the numpy RuntimeWarning
+                fderived = tmp.sum(axis=0) / nallels
+            # If nallels == 0 at a given site (100% missing site w/in the
+            # population), the divide will create NaNs in fderived. We
+            # replace these here with 0 to give 0 probability for the binomial
+            fderived[np.isnan(fderived)] = 0
 
             # sampler
             sampled = np.random.binomial(n=2, p=fderived, size=data.shape)
-            data[data == 9] = sampled[data == 9]
+            data[data == _MISSING_GENO] = sampled[data == _MISSING_GENO]
             newdata[sidxs, :] = data
 
         # get all imputed values
-        imputed = newdata[np.where(self.snps == 9)]
+        imputed = newdata[np.where(self.snps == _MISSING_GENO)]
         self._print(
             "Imputation: 'sampled'; (0, 1, 2) = {:.1f}%, {:.1f}%, {:.1f}%"
             .format(
@@ -148,20 +154,20 @@ class SNPsImputer(object):
             data = newdata[sidxs, :].copy()
 
             # number of alleles at each site that are not 9
-            nallels = np.sum(data != 9, axis=0) * 2
+            nallels = np.sum(data != _MISSING_GENO, axis=0) * 2
 
             # get prob derived at each site using tmp array w/ missing to zero 
             tmp = data.copy()
-            tmp[tmp == 9] = 0
+            tmp[tmp == _MISSING_GENO] = 0
             fderived = tmp.sum(axis=0) / nallels
 
             # sampler
             sampled = np.random.binomial(n=2, p=fderived, size=data.shape)
-            data[data == 9] = sampled[data == 9]
+            data[data == _MISSING_GENO] = sampled[data == _MISSING_GENO]
             newdata[sidxs, :] = data
 
         # get all imputed values
-        imputed = newdata[np.where(self.snps == 9)]
+        imputed = newdata[np.where(self.snps == _MISSING_GENO)]
         self._print(
             "Imputation: 'sampled'; (0, 1, 2) = {:.1f}%, {:.1f}%, {:.1f}%"
             .format(
