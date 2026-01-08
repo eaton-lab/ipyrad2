@@ -313,20 +313,21 @@ class PCA(object):
 
             # 1. Load orig data and filter with imap, minmap, mincov=step
             se = SNPsExtracter(
-                self.data,
+                data=self.data,
                 imap=kmeans_imap,
                 minmap=kmeans_minmap,
-                mincov=kmeans_mincov,
-                quiet=self.quiet,
+                min_sample_coverage=kmeans_mincov,
+                min_minor_allele_frequency=0,
+                max_sample_missing=1,
             )
-            se.parse_genos_from_hdf5()
+            se.run()
 
             # update snpsmap to new filtered data to use for subsampling
             self.snpsmap = se.snpsmap
 
             # 2. Impute missing data using current kmeans clusters
             impdata = SNPsImputer(
-                se.snps, se.names, kmeans_imap, "sample", self.quiet).run()
+                se.genos, se.snames, kmeans_imap, "sample", self.quiet).run()
 
             # x. On final iteration return this imputed array as the result
             if it == niters - 1:
@@ -342,10 +343,11 @@ class PCA(object):
             kmeans_model.fit(pcadata)
             labels = np.unique(kmeans_model.labels_)
             kmeans_imap = {
-                i: [se.names[j] for j in
+                i: [se.snames[j] for j in
                     np.where(kmeans_model.labels_ == i)[0]] for i in labels
             }
-            self._print(kmeans_imap)
+            self._print("Current k-means pop map:")
+            self._print(f'{"\n".join(["  " + str(pop) + "\t" + str(samps) for pop, samps in kmeans_imap.items()])}')
             self._print("")
 
 
