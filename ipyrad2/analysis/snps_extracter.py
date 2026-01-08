@@ -24,6 +24,9 @@ from ..utils.exceptions import IPyradError
 from ..utils.parallel import run_with_pool
 from ..utils.pops import parse_pops_file, parse_imap
 
+# Value of missing data in the snps matrix
+_MISSING_VALUE = 255
+
 # how many cols of SNPs to load in at once from snps, genos, snpsmap
 CHUNKSIZE = 10_000
 STATS_HEADER = [
@@ -295,7 +298,7 @@ class SNPsExtracter:
 
         # record missing pre-impute (TODO: move to ?)
         if self.genos.size:
-            missing_cells = np.sum(self.genos == 9)
+            missing_cells = np.sum(self.genos == _MISSING_VALUE)
             missing_percent = missing_cells / self.genos.size
         else:
             missing_percent = 1.
@@ -348,7 +351,7 @@ class SNPsExtracter:
             genos = genos[self.sidxs, start:end, :].astype(np.uint8)
 
             # measure number of missing cells
-            nmissing = np.sum(genos == 255)
+            nmissing = np.sum(genos == _MISSING_VALUE)
             ntotal = genos.size
 
             # get filter masks and diploid genotypes
@@ -384,14 +387,14 @@ class SNPsExtracter:
 
         # mask2 is True if sample coverage is below mincov.
         # mask missing calls from genotype array
-        genomask = np.ma.array(data=genos, mask=(genos == 255))
+        genomask = np.ma.array(data=genos, mask=(genos == _MISSING_VALUE))
 
         # count number of non-masked haplotypes in each site [2, 2, 4, 0, ...]
         # here a zero indicates the the site is fully masked (i.e., missing)
         # for the selected set of samples.
         nhaplos = (~genomask.mask).sum(axis=2).sum(axis=0)
 
-        # This accomodates missing haploid calls (0/9) since it counts alleles
+        # This accomodates missing haploid calls (0/255) since it counts alleles
         if isinstance(self.mincov, int):
             masks[:, 2] = nhaplos < (2 * self.mincov)
         elif isinstance(self.mincov, float):
@@ -453,8 +456,8 @@ class SNPsExtracter:
                 freqs[freqs > 0.5] = 1 - (freqs[freqs > 0.5])
             masks[:, 5] = freqs < self.maf
 
-        # set 9 for missing values in diploid genotype array
-        diplos[snps == 78] = 9
+        # set missing values in diploid genotype array
+        diplos[snps == 78] = _MISSING_VALUE
         return masks, diplos
 
     ################################################################
@@ -503,7 +506,7 @@ class SNPsExtracter:
             Random number generator seed.
         return_sites: bool
             If True sites np.uint8 values are returned, else diploid
-            genotypes (0,1,2,9) are returned.
+            genotypes (0,1,2,255) are returned.
         invariant_loci: Optional[int]
             An optional additional number of invariant loci to resample
             from. When one of these is randomly sampled no SNPs are
