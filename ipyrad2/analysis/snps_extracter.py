@@ -317,8 +317,10 @@ class SNPsExtracter:
         stats.post_filter_snps = self.snpsmap.shape[0]
         stats.post_filter_snp_containing_linkage_blocks = np.unique(self.snpsmap[:, 0]).size
         stats.post_filter_percent_missing = 100 * missing_percent
-        logger.log(log_level, f"filter statistics:\n{stats}")
         self.stats = stats
+        # For pretty printing
+        stats = stats.map(lambda x: f"{x:.3f}".rstrip("0").rstrip("."))
+        logger.log("INFO", f"filter statistics:\n{stats}")
 
     ################################################################
     ## processing functions
