@@ -26,7 +26,7 @@ BIN_BWA = str(BIN / "bwa-mem2")
 BIN_SAMTOOLS = str(BIN / "samtools")  # indexing
 
 
-def map_filter_sort_mark_pairs(sname: str, fastqs: Tuple[Path, Path], reference: Path, outdir: Path, mark_dups_by_umis: bool, min_map_q: int, threads: int) -> Path:
+def map_filter_sort_mark_pairs(sname: str, fastqs: Tuple[Path, Path], reference: Path, mark_dups_by_umis: bool, min_map_q: int, max_soft_clip: int, max_edit_dist: int, outdir: Path, threads: int) -> Path:
     """Map reads to the reference to get a sorted bam.
 
     This pipeline is for PE data w duplication marking information,
@@ -55,6 +55,8 @@ def map_filter_sort_mark_pairs(sname: str, fastqs: Tuple[Path, Path], reference:
     tmp_stats1 = outdir / "tmpdir" / f"{sname}.tmp.stats1.json"
     tmp_stats2 = outdir / "tmpdir" / f"{sname}.tmp.stats2.json"
     tmp_stats3 = outdir / "tmpdir" / f"{sname}.tmp.stats3.json"
+    tmp_stats4 = outdir / "tmpdir" / f"{sname}.tmp.stats4.json"
+    tmp_stats5 = outdir / "tmpdir" / f"{sname}.tmp.stats5.json"
     tmp_stats_dups = outdir / "tmpdir" / f"{sname}.tmp.stats_dups.txt"
 
     # Split threads between BWA and samtools
@@ -67,7 +69,7 @@ def map_filter_sort_mark_pairs(sname: str, fastqs: Tuple[Path, Path], reference:
     # -L 1,1  # reduce penalty for clipping
     cmd1 = [
         BIN_BWA, "mem",
-        # "-Y",                   # mark supplementary with soft-clip. We exclude supplementals anyways.
+        "-Y",                     # mark supplementary with soft-clip. We exclude supplementals anyways.
         "-T", "20",               # minimum alignmnet score to output (default=30). This is different from MAPQ in samtools.
         "-R", f"@RG\\tID:{sname}\\tSM:{sname}",  # store sample name.
         "-K", "50000000",         # stable nbases chunk size. Improves repeatability.
@@ -151,19 +153,40 @@ def map_filter_sort_mark_pairs(sname: str, fastqs: Tuple[Path, Path], reference:
         "-o", "-",
         str(bam_markdup),
     ]
+
+    # filter to require paired and constrain distance between pairs
     cmd8 = [
         BIN_SAMTOOLS, "view",
+        "-b", "-u",
         "-e", '((flag&4)==0) && ((flag&8)==0) && (rnext=="=" || rnext==rname) && (tlen>=-2000 && tlen<=2000)',
         "--save-counts", str(tmp_stats3),
-        "--write-index",
-        "-o", str(out_tmp_bam),
+        "-o", "-",
     ]
-    run_pipeline([cmd7, cmd8])
+
+    # allow at most this many soft-clipped bases
+    cmd9 = [
+        BIN_SAMTOOLS, "view",
+        "-b", "-u",
+        "-e", f"sclen <= {max_soft_clip}",
+        "--save-counts", str(tmp_stats4),
+        "-o", "-",
+    ]
+
+    # allow at most this many changes relative to the reference
+    cmd10 = [
+        BIN_SAMTOOLS, "view",
+        "-b", "-u",
+        "-e", f"[NM] < {max_edit_dist}",
+        "--save-counts", str(tmp_stats5),
+        "-o", "-",
+    ]
+    run_pipeline([cmd7, cmd8, cmd9, cmd10], out_bam_tmp)
     logger.debug(f"finished mapping: {sname}")
 
     # rename files to finished name (protects for restarting w/o -f)
     os.replace(out_bam_tmp, out_bam)
-    os.replace(out_bam_tmp.with_suffix(out_bam_tmp.suffix + ".csi"), out_bam.with_suffix(out_bam.suffix + ".csi"))
+    cmd = [BIN_SAMTOOLS, "index", "-c", str(out_bam)]
+    run_pipeline([cmd])
 
     # remove tmp files
     bam_markdup.unlink()
@@ -216,6 +239,7 @@ def map_filter_sort_pairs(sname: str, fastqs: Tuple[Path, Path], reference: Path
         "-o", "-",
     ]
 
+    # filter for quality
     cmd3 = [
         BIN_SAMTOOLS, "view",
         "-b", "-u",
@@ -224,6 +248,7 @@ def map_filter_sort_pairs(sname: str, fastqs: Tuple[Path, Path], reference: Path
         "-o", "-",
     ]
 
+    # filter to require paired and constrain distance between pairs
     cmd4 = [
         BIN_SAMTOOLS, "view",
         "-b", "-u",
@@ -237,7 +262,6 @@ def map_filter_sort_pairs(sname: str, fastqs: Tuple[Path, Path], reference: Path
         BIN_SAMTOOLS, "view",
         "-b", "-u",
         "-e", f"sclen <= {max_soft_clip}",
-        # "-e", f"sclen <= {max_soft_clip}",
         "--save-counts", str(tmp_stats4),
         "-o", "-",
     ]
@@ -562,8 +586,8 @@ def run_mapper(
 ):
     # ------------------------------------------------------------
     # check reference and outdir paths
-    reference = reference.expanduser().absolute()
-    outdir = outdir.expanduser().absolute()
+    reference = reference.expanduser().resolve()
+    outdir = outdir.expanduser().resolve()
     tmpdir = outdir / "tmpdir"
     tmpdir.mkdir(exist_ok=True, parents=True)
 
@@ -600,9 +624,9 @@ def run_mapper(
             raise IPyradError("Data do not appear to be paired. Cannot mark duplicates for SE data.")
         # TODO: check for valid rather than just warn.
         if mark_dups_by_coords:
-            logger.warning("marking PCR duplicates by coordinates. Data is expected to be WGS, not RAD")
+            logger.warning("marking PCR duplicates by coordinates. Be sure this run includes only WGS samples, not RAD")
         if mark_dups_by_umis:
-            logger.warning("marking PCR duplicates. Data is expected to be RAD with i5 UMIs moved into read names")
+            logger.warning("marking PCR duplicates by i5 UMIs. Be sure you ran `ipyrad2 trim` with `-U` to store i5 tags for these samples")
 
     # store whether reads are paired.
     # TODO: this can raise an error when glob catches extras (e.g., not .fq, .gz, etc). Report that their glob might be bad?

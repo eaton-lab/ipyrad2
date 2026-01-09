@@ -247,11 +247,12 @@ def run_trimmer(
     fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx, suffix)
 
     # check outdir for existing and raise or remove
+    outdir = outdir.expanduser().absolute()
     result_files = [outdir / f"{sname}.R1.trimmed.fastq.gz" for sname in fastq_dict]
     if any(i.exists() for i in result_files):
         if not force:
             raise IPyradError(f"Trimmed fastqs exist in outdir: e.g., {result_files[0]}. Use --force to overwrite.")
-    outdir.mkdir(exist_ok=True)
+    outdir.mkdir(parents=True, exist_ok=True)
 
     # run at most this many concurrent jobs
     workers = max(1, cores // threads)

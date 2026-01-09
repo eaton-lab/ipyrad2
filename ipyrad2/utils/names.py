@@ -44,6 +44,9 @@ def get_paths_list_from_fastq_str(fastq_paths: Union[Path, List[Path]]) -> List[
 
     # for each Path in paths list expand into a list of Paths
     for path in paths:
+        # expand to a full path
+        path = path.expanduser().absolute()
+
         # raise if path is a dir.
         if path.is_dir():
             raise IPyradError(f"{path} is a dir. Use regex to select files in the dir (e.g., './path/*.fastq.gz')")

@@ -9,6 +9,7 @@ dependencies:
   - numpy
   - pandas
   - h5py
+  - tomlkit
   - samtools
   - bedtools
   - bcftools
@@ -16,5 +17,4 @@ dependencies:
   - bwa-mem2
   - vsearch
   - mafft
-  - tomlkit
   # - toytree >=3.0.1
