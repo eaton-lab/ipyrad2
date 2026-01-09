@@ -2,8 +2,7 @@
 
 """ Scikit-learn principal componenents analysis for missing data """
 
-#TODO: Add 'cores' param to parallelize SNPsExtracter
-#TODO: Get imputation working
+#TODO: get vcf2hdf5 working
 
 import os
 import sys
@@ -18,6 +17,7 @@ from typing import Dict, List, Union, Tuple
 # ipyrad tools
 from ..utils.exceptions import IPyradError
 from ..utils.pops import parse_pops_file, parse_imap
+from ..utils.parallel import run_with_pool
 from .snps_extracter import SNPsExtracter, _MISSING_GENO
 from .snps_imputer import SNPsImputer
 from .utils import subsample_snps
@@ -102,6 +102,9 @@ class PCA(object):
     ld_block_size: (int; default=20000)
         Only used during conversion of data imported as vcf.
         The size of linkage blocks (in base pairs) to split the vcf data into.
+    cores: (int; default=1)
+        Specify the number of cores to dedicate to the computation. Primarily
+        speeds up SNP extraction and running PCA replicates.
 
     Functions:
     ----------
@@ -119,6 +122,7 @@ class PCA(object):
         topcov=0.9,
         niters=5,
         ld_block_size=0,
+        cores=1,
         ):
 
         # only check import at init
@@ -138,6 +142,7 @@ class PCA(object):
         self.topcov = topcov
         self.niters = niters
         self.ld_block_size = ld_block_size
+        self.cores = cores
 
         # Parse imap/minmap, if provided
         if imap is None:
@@ -182,6 +187,7 @@ class PCA(object):
             min_sample_coverage=self.mincov,
             min_minor_allele_frequency=self.minmaf,
             max_sample_missing=1,
+            cores=self.cores,
         )
 
         # run snp extracter to parse data files
@@ -360,7 +366,7 @@ class PCA(object):
             data = self.snps[:, subsample_snps(self.snpsmap, seed)]
             if not quiet:
                 print(
-                    "Subsampling SNPs: {}/{}"
+                    "\nSubsampling SNPs: {}/{}"
                     .format(data.shape[1], self.snps.shape[1])
                 )
         else:
@@ -423,25 +429,41 @@ class PCA(object):
         seed = (seed if seed else self._seed())
         rng = np.random.RandomState(seed)
 
+        # This is the old serial replicate run method. Can delete if the parallel
+        # method seems stable. 1/9/26 iao
         # get data points for all replicate runs
-        datas = {}
-        vexps = {}
-        datas[0], vexps[0] = self._run(
-            subsample=subsample,
-            seed=rng.randint(0, 1e15),
-            quiet=quiet,
-        )
+#        datas = {}
+#        vexps = {}
+#        datas[0], vexps[0] = self._run(
+#            subsample=subsample,
+#            seed=rng.randint(0, 1e15),
+#            quiet=quiet,
+#        )
+#
+#        for idx in range(1, nreplicates):
+#            datas[idx], vexps[idx] = self._run(
+#                subsample=subsample,
+#                seed=rng.randint(0, 1e15),
+#                quiet=True)
 
-        for idx in range(1, nreplicates):
-            datas[idx], vexps[idx] = self._run(
-                subsample=subsample,
-                seed=rng.randint(0, 1e15),
-                quiet=True)
+        # If it is saved blank the `drawing` attribute. Something inside the
+        # Drawing object is a generator and it won't pickle to pass to the
+        # parallel engines (throws an exception). Running more replicates
+        # implies that you will be redrawing anyway, so it shouldn't bother anyone
+        self.drawing = []
 
-        # store results to object
-        self.pcaxes = datas
-        self.variances = vexps
+        jobs = {}
+        for rep in range(0, nreplicates):
+            kwargs = {"subsample":subsample,
+                "seed":rng.randint(0, 1e15),
+                "quiet":quiet if rep == 0 else True,
+            }
+            jobs[rep] = (self._run, kwargs)
 
+        results = run_with_pool(jobs, "SUCCESS", self.cores, msg=f"Running {nreplicates} replicate PCAs")
+
+        self.pcaxes = {idx:x[0] for idx, x in results.items()}
+        self.variances = {idx:x[1] for idx, x in results.items()}
 
 
     def draw(
