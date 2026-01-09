@@ -56,8 +56,8 @@ def setup_parsers() -> argparse.ArgumentParser:
     parser.add_argument("-c", action='store', dest='cores', type=int, default=8, help="number of CPU cores to use (Default=8)")
     parser.add_argument("-t", action='store', dest='threads', type=int, default=2, help="tune threading of multi-threaded binaries (Default=2)")
     parser.add_argument(
-        "-l", "--log-level", metavar="str", type=str, default="INFO",
-        help="Log level (DEBUG, INFO, WARN, ERROR) [default=INFO]",
+        "-l", "--log-level", metavar="str", type=str, default="SUCCESS",
+        help="Log level (DEBUG, INFO, SUCCESS, WARN, ERROR) [default=SUCCESS]",
     )
     parser.add_argument(
         "-L", "--log-file", metavar="Path", type=Path,
@@ -117,7 +117,12 @@ def command_line():
         # Check if sorted_fastq_path is set and contains valid fq files
         # This implies the user wants to bring in their own fq files and skip step 1.
         p = Path(params.main.sorted_fastq_path)
-        fq_files = list(p.parent.glob(p.name))
+        try:
+            fq_files = list(p.parent.glob(p.name))
+        except ValueError:
+            # If sorted_fastq_path is empty then Path("") returns "." (cwd)
+            # which the glob does not like. Catch it and set fq_files to []
+            fq_files = []
         # If the glob succeeds then fq_files will be len > 1, and all *.gz files should exist
         if len(fq_files) and all([x.exists() for x in fq_files]):
             logger.info("Skipping step 1: sorted_fastq_files is set and fq files exist.")
@@ -159,7 +164,7 @@ def command_line():
         # Ensure ref_seq doesn't exist. If reference_sequence parameter is blank in params file it
         # will be created as '.', so guard against this as well.
         if ref_seq.exists() and not (str(ref_seq) == '.'):
-            logger.info("Reference sequence exists, skipping denovo reference assembly.")
+            logger.success("Reference sequence exists, skipping denovo reference assembly.")
         else:
             s3_args = params.denovo
             s3_args.subcommand = "denovo"
