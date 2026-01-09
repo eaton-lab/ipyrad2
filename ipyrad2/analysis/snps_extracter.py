@@ -82,8 +82,8 @@ class SNPsExtracter:
         in two samples, or homozygous in only one sample. Float values
         take into account the proportion of samples with missing data
         in each site so that it is a proportion of the alleles present.
-    ncores: int
-        If ncores > 1 the work is parallelized on this many processors.
+    cores: int
+        If cores > 1 the work is parallelized on this many processors.
     """
     def __init__(
         self,
@@ -95,7 +95,7 @@ class SNPsExtracter:
         minmap: Path | Dict | None,
         exclude: Path | str | List | None = None,
         include_reference: bool = False,
-        ncores: int = 1,
+        cores: int = 1,
     ):
 
         # store params
@@ -113,7 +113,7 @@ class SNPsExtracter:
         """A file or list of samples to remove before SNP extraction."""
         self.include_reference = include_reference
         """Whether to include the reference sequence in the output snps."""
-        self.ncores = ncores
+        self.cores = cores
         """Number of cores to parallelize snp filtering on."""
 
         # attributes to be filled
@@ -260,7 +260,7 @@ class SNPsExtracter:
         ntotal = 0
 
         # run `get_masks_chunk()` on a single core or in parallel
-        if self.ncores == 1:
+        if self.cores == 1:
             results = {}
             for start in range(0, self.nsnps, CHUNKSIZE):
                 results[start] = self._get_masks_chunk(start)
@@ -269,7 +269,7 @@ class SNPsExtracter:
             for start in range(0, self.nsnps, CHUNKSIZE):
                 jobs[start] = (self._get_masks_chunk, {"start":start})
 
-            results = run_with_pool(jobs, log_level, self.ncores, msg="Filtering SNPs")
+            results = run_with_pool(jobs, log_level, self.cores, msg="Filtering SNPs")
 
         # collect results from chunked jobs
         for job in results:
