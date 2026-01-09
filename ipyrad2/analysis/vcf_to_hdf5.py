@@ -1,6 +1,16 @@
 #!/usr/bin/env python
+"""
+convert VCF to database format for SNP analyses"
 
-"convert VCF to database format for SNP analyses"
+snpsmap (ip2 specification)
+-------
+description: The map of SNP positions on RAD loci and genome scaffolds.
+Loci, scaffolds, and positions are all stored 0-indexed.
+dtype: np.uint8
+shape: (nsnps, 5)
+attrs["columns"]: ["loc", "loc_idx", "loc_pos", "scaff", "pos"]
+attrs["indexing"]: [0, 0, 0, 0, 0]
+"""
 
 import os
 import tempfile
@@ -11,7 +21,6 @@ import pandas as pd
 
 from ..utils.progress import ProgressBar
 from ..utils.exceptions import IPyradError
-#from ..assemble.utils import TRANSFULL, GETCONS, IPyradError
 from .snps_extracter import _MISSING_GENO
 
 class VCFtoHDF5(object):
@@ -44,7 +53,7 @@ class VCFtoHDF5(object):
         self.quiet = quiet
 
         # check for data file
-        self.database = os.path.join(self.workdir, self.name + ".snps.hdf5")
+        self.database = os.path.join(self.workdir, self.name + ".hdf5")
         assert os.path.exists(self.data), "file {} not found".format(self.data)
         if not os.path.exists(self.workdir):
             os.makedirs(self.workdir)
@@ -165,7 +174,7 @@ class VCFtoHDF5(object):
             io5["snps"].attrs["names"] = [i.encode() for i in self.names]
             io5["genos"].attrs["names"] = [i.encode() for i in self.names]
             io5["snpsmap"].attrs["columns"] = [
-                b"locus", b"locidx", b"locpos", b"scaf", b"scafpos",
+                b"loc", b"loc_idx", b"loc_pos", b"scaff", b"pos",
             ]
 
 
@@ -207,10 +216,10 @@ class VCFtoHDF5(object):
             # iterate over chunks of the file
             xx = 0
             lastchrom = "NULL"
-            e0 = 0  # 1-indexed new-locus index, will advance in get_snps/lastchrom
+            e0 = -1  # 0-indexed new-locus index, will advance in get_snps/lastchrom
             e1 = 0  # 0-indexed snps-per-loc index
             e2 = 0  # 0-indexed snps-per-loc position
-            e3 = 0  # 1-indexed original-locus index, TODO, advancer
+            e3 = 0  # 0-indexed original-locus index, TODO, advancer
             e4 = 0  # 0-indexed global snps counter
             for chunkdf in self.df:
 
@@ -229,7 +238,6 @@ class VCFtoHDF5(object):
 
                 # write to HDF5
                 io5['snps'][:, xx:xx + chunkdf.shape[0]] = snps.T
-                io5['genos'][:, :, 2] = snps
                 io5['genos'][xx:xx + chunkdf.shape[0], :, :2] = genos
                 io5['snpsmap'][xx:xx + chunkdf.shape[0], :] = snpsmap
                 xx += chunkdf.shape[0]
@@ -243,145 +251,6 @@ class VCFtoHDF5(object):
 
             # close h5 handle
             self._print("")
-
-
-    def build_matrix(self):
-        """
-        Fill database with VCF data
-        """
-
-        # load vcf as dataframe (chunking makes this an iterator)
-        self.df = pd.read_csv(self.data, sep="\t", skiprows=self.hlines)
-
-        # get ref and alt alleles as a string series
-        refalt = (self.df.REF + self.df.ALT).apply(str.replace, args=(",", ""))
-
-        # genos array to fill from geno indices and refalt
-        genos = np.zeros((self.nsnps, self.nsamples, 2), dtype="u1")
-        snps = np.zeros((self.nsnps, self.nsamples), dtype="S1")
-        snpsmap = np.zeros((self.nsnps, 5), dtype="u4")
-
-        # iterate over samples indices
-        for sidx in range(self.nsamples):
-
-            # store geno calls for this sample (+9 goes to geno columns in vcf)
-            glist = self.df.iloc[:, sidx + 9].apply(get_genos).apply(sorted)
-            genos[:, sidx, :] = pd.concat([
-                glist.apply(lambda x: x[0]),
-                glist.apply(lambda x: x[1]),
-            ], axis=1)
-
-            # iterate over geno indices to get alleles
-            for gidx in range(genos.shape[0]):
-
-                # this sample's geno
-                sgeno = genos[gidx, sidx]
-                genos[gidx, sidx] = sgeno
-
-                # bail if geno is missing (TODO: or indel).
-                if sgeno[0] == _MISSING_GENO:
-                    call = b"N"
-                    snps[gidx, sidx] = call
-                    continue
-
-                # convert to geno alleles
-                call0 = refalt[gidx][sgeno[0]]
-                call1 = refalt[gidx][sgeno[1]]
-
-                # get ambiguity code
-                if call0 != call1:
-                    call = TRANSFULL[(call0, call1)].encode()
-                else:
-                    call = call0
-
-                # store call
-                snps[gidx, sidx] = call
-
-        # convert snps to uint8
-        snps = snps.view("u1").T
-
-        #TODO: The ip2 vcf doesn't have a 'source' tag like the ip1 version did
-        # snpsmap: if ipyrad denovo it's easy, and they should just use hdf5.
-        if ("ipyrad" in self.source) and ("pseudo-ref" in self.reference):
-            snpsmap[:, 0] = self.df["#CHROM"].factorize()[0].astype("u4") + 1
-            snpsmap[:, 1] = np.concatenate(
-                [range(i[1].shape[0]) for i in self.df.groupby("#CHROM")])
-            snpsmap[:, 2] = self.df.POS
-            snpsmap[:, 3] = 0
-            snpsmap[:, 4] = range(snpsmap.shape[0])
-            self.df["BLOCK"] = self.df["#CHROM"]
-
-        # snpsmap: if ipyrad ref VCF the per-RAD loc info is available too
-        elif "ipyrad" in self.source:
-
-            # skip to generic vcf method if ld_block_size is set:
-            if not self.ld_block_size:
-                snpsmap[:, 0] = self.df["#CHROM"].factorize()[0]
-                snpsmap[:, 1] = np.concatenate(
-                    [range(i[1].shape[0]) for i in self.df.groupby("#CHROM")])
-                snpsmap[:, 2] = self.df.POS
-                snpsmap[:, 3] = 0
-                snpsmap[:, 4] = range(snpsmap.shape[0])
-                self.df["BLOCK"] = self.df["#CHROM"]
-
-        # snpsmap: for other program's VCF's we need ldsize arg to chunk.
-        else:
-            if not self.ld_block_size:
-                print("wat")
-                raise IPyradError(
-                    "You must enter an ld_block_size estimate for this VCF.")
-
-        # (TODO: numpy/numba this loop instead of pand)
-        # cut it up by block size (unless it's denovo, then skip.)
-        if (self.ld_block_size) and ("pseudo-ref" not in self.reference):
-
-            # block and df index counters
-            bidx = 0
-            dfidx = 0
-
-            # iterate over existing scaffolds
-            for _, scaff in self.df.groupby("#CHROM"):
-
-                # start and end of this scaffold
-                gpos = scaff.iloc[0, 1]
-                end = scaff.POS.max()
-
-                # iterate to break scaffold into linkage blocks
-                while 1:
-
-                    # grab a block
-                    mask = (scaff.POS >= gpos) & (scaff.POS < gpos + self.ld_block_size)
-                    block = scaff[mask]
-
-                    # check for data and sample a SNP
-                    if block.size:
-
-                        # enter new block into dataframe
-                        self.df.loc[dfidx:dfidx + block.shape[0], "BLOCK"] = bidx
-                        dfidx += block.shape[0]
-                        bidx += 1
-
-                    # advance counter
-                    gpos += self.ld_block_size
-
-                    # break on end of scaff
-                    if gpos > end:
-                        break
-
-            # store it (CHROMS/BLOCKS are stored 1-indexed !!!!!!)
-            snpsmap[:, 0] = self.df.BLOCK + 1
-            snpsmap[:, 1] = np.concatenate(
-                [range(i[1].shape[0]) for i in self.df.groupby("BLOCK")])
-            snpsmap[:, 2] = self.df.POS
-            snpsmap[:, 3] = self.df["#CHROM"].factorize()[0] + 1
-            snpsmap[:, 4] = range(self.df.shape[0])
-
-        # store to database
-        with h5py.File(self.database, 'a') as io5:
-            io5['snps'][:] = snps
-            io5['genos'][:] = genos
-            io5['snpsmap'][:] = snpsmap
-        del snps
 
 
     def get_snpsmap(self, chunkdf, lastchrom, e0, e1, e2, e4):
@@ -442,6 +311,12 @@ class VCFtoHDF5(object):
                 snpsmap[:, 3] = snpsmap[:, 0]
                 snpsmap[:, 4] = range(e4, snpsmap.shape[0] + e4)
 
+        else:
+            # snpsmap: for other program's VCF's we need ldsize arg to chunk.
+            if not self.ld_block_size:
+                raise IPyradError(
+                    "You must enter an ld_block_size estimate for this VCF.")
+
         # cut it up by block size (unless it's denovo, then skip.)
         if (self.ld_block_size) and ("pseudo-ref" not in self.reference):
 
@@ -481,7 +356,7 @@ class VCFtoHDF5(object):
                     if gpos > end:
                         break
 
-            # store it (CHROMS/BLOCKS are stored 1-indexed !!!!!!)
+            # store it (CHROMS/BLOCKS are stored 0-indexed !!!!!!)
             snpsmap[:, 0] = chunkdf.BLOCK
             snpsmap[:, 1] = np.concatenate(
                 [range(i[1].shape[0]) for i in chunkdf.groupby("BLOCK")])
