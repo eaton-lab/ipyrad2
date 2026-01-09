@@ -12,6 +12,8 @@ Command line
 $ ipyrad snpex -d H5 --stdout --maf 0.2 --scaff Chr[1-2] --min-samp 4
 """
 
+# TODO: Subsampling/linkage functions either need to be fixed or removed
+
 import itertools
 import numpy as np
 import pandas as pd
