@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import h5py
 from loguru import logger
+from packaging.version import parse
 from pathlib import Path
 from typing import Optional, Dict, List, Union, Tuple
 
@@ -233,6 +234,11 @@ class SNPsExtracter:
             raise TypeError("input should be hdf5, see the vcf_to_hdf5 tool.")
         # this will raise an error msg if using an outdated version
         with h5py.File(self.data, 'r') as io5:
+            try:
+                if parse(str(io5.attrs["version"])) < parse("2.0"):
+                    raise IPyradError()
+            except (KeyError, IPyradError):
+                raise IPyradError("hdf5 database version must be >= 2.0")
             self.nsnps = int(io5.attrs['nsnps'])
             snames = io5.attrs["names"]
             if not self.include_reference:

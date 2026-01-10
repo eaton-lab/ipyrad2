@@ -40,6 +40,7 @@ outfile: alignment.phy
 """
 
 from collections import defaultdict
+from packaging.version import parse
 from typing import List, Dict, Tuple
 import sys
 from pathlib import Path
@@ -50,7 +51,6 @@ import h5py
 from loguru import logger
 # from ..utils.exceptions import IPyradError
 from ipyrad2.utils.exceptions import IPyradError
-
 
 NEXHEADER = """#nexus
 begin data;
@@ -117,7 +117,10 @@ class WindowExtracter:
     def _get_scaffold_table(self) -> None:
         """Store table with scaffold names and lengths in the order they are stored in H5."""
         with h5py.File(self.data, 'r') as io5:
-            if io5.attrs["version"] < 2.0:
+            try:
+                if parse(str(io5.attrs["version"])) < parse("2.0"):
+                    raise IPyradError()
+            except (KeyError, IPyradError):
                 raise IPyradError("hdf5 database version must be >= 2.0")
             scaff_names = io5.attrs["scaffold_names"]
             scaff_lengths = io5.attrs["scaffold_lengths"]
@@ -358,9 +361,6 @@ class WindowExtracter:
             seq = fseqarr[idx].tobytes().decode("utf-8")
             phy.append(f"{prefix}{pnames[idx]} {seq}")
 
-        if write_stats:
-            self._write_stats(fnames, fseqarr, outfile)
-
         # write to temp file
         ntaxa = len(fnames)
         nsites = fseqarr.shape[1]
@@ -372,6 +372,7 @@ class WindowExtracter:
             sys.stdout.write(f"{ntaxa} {nsites}\n{bpp_sep}{'\n'.join(phy)}\n")
             outfile = "STDOUT"
         elif return_locus:
+            outfile = "/dev/null"
             return f"{ntaxa} {nsites}\n{bpp_sep}{'\n'.join(phy)}\n"
         else:
             self.outdir.mkdir(exist_ok=True)
@@ -380,6 +381,9 @@ class WindowExtracter:
                 out.write(f"{ntaxa} {nsites}\n{bpp_sep}")
                 out.write("\n".join(phy))
             logger.info(f"wrote alignment ({ntaxa}, {nsites}) to: {outfile}")
+
+        if write_stats:
+            self._write_stats(fnames, fseqarr, outfile)
 
 
     def _write_to_nex(self) -> None:

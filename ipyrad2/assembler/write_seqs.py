@@ -40,6 +40,7 @@ import pandas as pd
 import numpy as np
 from loguru import logger
 from .loci import iter_parse_loci, filter_trim_locus
+from ipyrad2 import __version__ as __ip2version__
 
 
 def get_fai_values(reference: Path, key: str) -> np.ndarray:
@@ -117,7 +118,7 @@ def write_seqs_hdf5(
     with h5py.File(seqs_database, "w", **kwargs) as io5:
 
         # database metadata.
-        io5.attrs["version"] = 2.0
+        io5.attrs["version"] = __ip2version__
         io5.attrs["names"] = snames
         io5.attrs["reference"] = str(reference)
         io5.attrs["scaffold_lengths"] = [int(i) for i in get_fai_values(reference, "length")]
