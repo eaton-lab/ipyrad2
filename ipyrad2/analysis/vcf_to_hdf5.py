@@ -22,6 +22,7 @@ import pandas as pd
 from ..utils.progress import ProgressBar
 from ..utils.exceptions import IPyradError
 from .snps_extracter import _MISSING_GENO
+from ipyrad2 import __version__ as __ip2version__
 
 class VCFtoHDF5(object):
     """
@@ -117,7 +118,7 @@ class VCFtoHDF5(object):
         Skip and count ## lines, and get names from first # line in VCF.
         """
         # store a list of chrom names
-        chroms = set()
+        self.chroms = set()
 
         if self.data.endswith(".gz"):
             import gzip
@@ -151,13 +152,14 @@ class VCFtoHDF5(object):
             # meta snps data
             else:
                 self.nsnps += 1
-                chroms.add(data[0])
+                self.chroms.add(data[0])
 
         # close file handle
         infile.close()
 
-        # convert chroms into a factorized list
-        self._print("VCF: {} SNPs; {} scaffolds".format(self.nsnps, len(chroms)))        
+        # Convert to list and sort chroms
+        self.chroms = sorted(list(self.chroms))
+        self._print("VCF: {} SNPs; {} scaffolds".format(self.nsnps, len(self.chroms)))
 
 
     def init_database(self):
@@ -176,6 +178,12 @@ class VCFtoHDF5(object):
             io5["snpsmap"].attrs["columns"] = [
                 b"loc", b"loc_idx", b"loc_pos", b"scaff", b"pos",
             ]
+            io5.attrs["names"] = np.array(self.names, dtype="object")
+            io5.attrs["nsnps"] = np.int64(self.nsnps)
+            io5.attrs["reference"] = self.reference
+            io5.attrs["scaffold_lengths"] = np.array([-1])
+            io5.attrs["scaffold_names"] = np.array(self.chroms, dtype="object")
+            io5.attrs["version"] =str(__ip2version__)
 
 
     def _finalize_database(self):
@@ -196,6 +204,9 @@ class VCFtoHDF5(object):
     def build_chunked_matrix(self):
         """
         Fill HDF5 database with VCF data in chunks at a time.
+
+        This would be tricky to parallelize because you need to pass some
+        values from one snpsmap to the next chunk for bookkeeping.
         """
 
         # chunk retriever
@@ -362,9 +373,14 @@ class VCFtoHDF5(object):
                 [range(i[1].shape[0]) for i in chunkdf.groupby("BLOCK")])
             # add ldx counter from last chunk
             snpsmap[snpsmap[:, 0] == snpsmap[:, 0].min(), 1] += e1
-            snpsmap[:, 2] = chunkdf.POS
+            # Constructing a snpsmap from a vcf file does not give us information
+            # about locus position of each snp, so here we implement an incrementing
+            # integer index for this column. It doesn't do anything.
+            snpsmap[:, 2] = range(e4, chunkdf.shape[0] + e4)
             snpsmap[:, 3] = chunkdf["#CHROM"].factorize()[0] + original_e0
-            snpsmap[:, 4] = range(e4, chunkdf.shape[0] + e4)
+            # POS comes directly from the vcf, and is 1-based, so subtract 1
+            # here to put it in 0-index
+            snpsmap[:, 4] = chunkdf.POS - 1
         return snpsmap, currchrom
 
 

@@ -123,6 +123,7 @@ class PCA(object):
         niters=5,
         ld_block_size=0,
         cores=1,
+        force=False,
         ):
 
         # only check import at init
@@ -143,6 +144,7 @@ class PCA(object):
         self.niters = niters
         self.ld_block_size = ld_block_size
         self.cores = cores
+        self.force = force
 
         # Parse imap/minmap, if provided
         if imap is None:
@@ -175,7 +177,7 @@ class PCA(object):
                 quiet=quiet,
             )
             # run the converter
-            converter.run()
+            converter.run(force=self.force)
             # Set data to the new hdf5 file
             self.data = converter.database
 
