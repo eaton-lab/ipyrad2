@@ -296,7 +296,7 @@ def map_filter_sort_pairs(sname: str, fastqs: Tuple[Path, Path], reference: Path
     return out_bam
 
 
-def map_filter_sort_single(sname: str, fastqs: Tuple[Path, Path], reference: Path, min_map_q: int, outdir: Path, threads: int, **kwargs) -> Path:
+def map_filter_sort_single(sname: str, fastqs: Tuple[Path, Path], reference: Path, min_map_q: int, max_soft_clip: int, max_edit_dist: int, outdir: Path, threads: int, **kwargs) -> Path:
     """Map reads to the reference to get a sorted bam.
 
     This pipeline is for SE data w/o duplication marking information.
@@ -307,6 +307,8 @@ def map_filter_sort_single(sname: str, fastqs: Tuple[Path, Path], reference: Pat
     tmp_stats1 = outdir / "tmpdir" / f"{sname}.tmp.stats1.json"
     tmp_stats2 = outdir / "tmpdir" / f"{sname}.tmp.stats2.json"
     tmp_stats3 = outdir / "tmpdir" / f"{sname}.tmp.stats3.json"
+    tmp_stats4 = outdir / "tmpdir" / f"{sname}.tmp.stats4.json"
+    tmp_stats5 = outdir / "tmpdir" / f"{sname}.tmp.stats5.json"
 
     # Split threads between BWA and samtools
     bwa_threads = max(1, int(threads * 0.75))
@@ -347,14 +349,32 @@ def map_filter_sort_single(sname: str, fastqs: Tuple[Path, Path], reference: Pat
     cmd4 = [
         BIN_SAMTOOLS, "view",
         "-b", "-u",
-        # TODO: Document what this is doing
+        # TODO: Document what this is doing. Lol.
         "-e", '((flag&4)==0) && ((flag&8)==0)',
         "--save-counts", str(tmp_stats3),
         "-o", "-",
     ]
 
-    # coordinate sort
+    # allow at most this many soft-clipped bases
     cmd5 = [
+        BIN_SAMTOOLS, "view",
+        "-b", "-u",
+        "-e", f"sclen <= {max_soft_clip}",
+        "--save-counts", str(tmp_stats4),
+        "-o", "-",
+    ]
+
+    # allow at most this many changes relative to the reference
+    cmd6 = [
+        BIN_SAMTOOLS, "view",
+        "-b", "-u",
+        "-e", f"[NM] < {max_edit_dist}",
+        "--save-counts", str(tmp_stats5),
+        "-o", "-",
+    ]
+
+    # coordinate sort
+    cmd7 = [
         BIN_SAMTOOLS, "sort",
         "-m", "256M",                # per-thread memory
         "-T", str(tmp_prefix),
@@ -364,7 +384,7 @@ def map_filter_sort_single(sname: str, fastqs: Tuple[Path, Path], reference: Pat
         "-o", str(out_bam),
         "-",
     ]
-    cmds = [cmd1, cmd2, cmd3, cmd4, cmd5]
+    cmds = [cmd1, cmd2, cmd3, cmd4, cmd5, cmd6, cmd7]
     run_pipeline(cmds)
     logger.debug(f"finished mapping: {sname}")
     return out_bam
@@ -536,6 +556,8 @@ def count_mapped_reads(sname: str, outdir: Path) -> int:
     s1.unlink()
     s2.unlink()
     s3.unlink()
+    s4.unlink()
+    s5.unlink()
     if sd.exists():
         sd.unlink()
     return data
