@@ -213,6 +213,7 @@ def get_concat_chunk_vcfs(tmpdir: Path, threads: int):
     ] + [str(i) for i in sorted_vcfs]
     run_pipeline([cmd])
 
+    # TODO: Probably want to actually uncomment this eventually. iao 01/11/26
     # clean up tmp chunk files
     # for chunk in sorted_vcfs:
     #     if chunk.exists():

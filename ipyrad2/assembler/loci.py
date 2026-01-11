@@ -527,7 +527,9 @@ def write_loci_and_stats_files(
                 # increment sample counters
                 for sname in tnames:
                     total_sample_cov[sname] += 1
-                total_locus_cov[len(tnames)] += 1
+                # Do not count the reference sequence in locus coverage, so
+                # decrement the # of samples at a locus (n - 1)
+                total_locus_cov[len(tnames) - 1] += 1
                 for stat in total_stats:
                     total_stats[stat] += stats[stat]
 
@@ -574,7 +576,7 @@ def write_loci_and_stats_files(
 
     # write locus coverage stats --------------------------------------
     # TODO: add pre-filtered bed stats here.
-    locus_cov = pd.DataFrame(index=['nloci'], data={i: total_locus_cov[i] for i in range(len(snames) + 1)}).T
+    locus_cov = pd.DataFrame(index=['nloci'], data={i: total_locus_cov[i] for i in range(len(snames))}).T
     locus_cov.to_string(outdir / f"{name}.stats_locus_coverage.txt")
 
     # report stats files to user

@@ -241,6 +241,7 @@ def run_assembler(
     # each job does not use much RAM, so run many at 1-3 threads per job
     run_with_pool(jobs, log_level, vworkers, msg="Calling variants")      # <=3 threads per job
 
+    logger.info("concatenating vcf files")
     # write concatenated loci chunks
     get_concat_chunk_vcfs(tmpdir, threads)
 
