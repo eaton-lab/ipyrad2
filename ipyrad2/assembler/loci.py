@@ -576,7 +576,7 @@ def write_loci_and_stats_files(
 
     # write locus coverage stats --------------------------------------
     # TODO: add pre-filtered bed stats here.
-    locus_cov = pd.DataFrame(index=['nloci'], data={i: total_locus_cov[i] for i in range(len(snames))}).T
+    locus_cov = pd.DataFrame(index=['nloci'], data={i: total_locus_cov[i] for i in range(1, len(snames))}).T
     locus_cov.to_string(outdir / f"{name}.stats_locus_coverage.txt")
 
     # report stats files to user
