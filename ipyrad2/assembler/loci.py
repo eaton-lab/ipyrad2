@@ -567,6 +567,8 @@ def write_loci_and_stats_files(
             out.write(f"{key}\t{total_stats[key]}\n")
 
     # write sample coverage -------------------------------------------
+    # First remove the reference sequence, if it exists
+    total_sample_cov.pop("assembly_reference_sequence", [])
     sample_cov = pd.DataFrame(index=["nloci"], data={i: total_sample_cov[i] for i in total_sample_cov}).T
     sample_cov.to_string(outdir / f"{name}.stats_sample_cov.txt")
 
