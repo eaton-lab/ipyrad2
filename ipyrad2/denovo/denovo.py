@@ -195,7 +195,7 @@ def run_denovo(
     outdir.mkdir(exist_ok=True)
     denovo_reference = outdir / "denovo_reference.fa"
     tmpdir = outdir / "tmpdir"
-    logger.warning(tmpdir)
+    logger.debug(tmpdir)
     fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx)
     is_paired = list(fastq_dict.values())[0][1] is not None
     workers = max(1, cores // threads)
@@ -205,6 +205,16 @@ def run_denovo(
         if not force:
             raise IPyradError("denovo reference results exist in outdir. Use --force to overwrite.")
         else:
+            # Clean up stale bwa-mem2 index files
+            suffs = [".pac", ".ann", ".amb", ".0123", ".bwt.2bit.64"]  # bwa-mem2
+            # don't use Path.with_suffix here b/c '.fa.ann' double suffix is messy.
+            paths = [denovo_reference.with_suffix(denovo_reference.suffix + i) for i in suffs]
+            for i in paths:
+                try:
+                    i.unlink()
+                except FileNotFoundError:
+                    pass
+            # Clean up the tmpdir
             shutil.rmtree(tmpdir)
     tmpdir.mkdir(exist_ok=True)
 
