@@ -136,9 +136,9 @@ def get_pairs_or_single_by_trim(
         if perfect_pairs(names_to_paths, fastqs):
             logger.info(f"paired files by user args: -dx={delim} -di={delim_index}")
             return {i: tuple(sorted(j)) for i, j in names_to_paths.items()}
-        logger.info("pairing files by name-delim failed. Falling back to auto-detection.")
+        logger.warning("pairing files by name-delim failed. Falling back to auto-detection.")
 
-    # try to pair samples by splitting on '.'
+    # try to pair samples by splitting on '.' from right
     hits = []
     idx = 1
     while 1:
@@ -229,7 +229,7 @@ def get_pairs_or_single_by_trim(
         stem = fastqs[0].name.rsplit(".", 2)[0]
         return {stem: (fastqs[0], None)}
 
-    # get get unique SE name by stripping characters from right
+    # get unique SE name by stripping characters from right
     hits = []
     for cut in range(1, min_len):
         names_to_paths = defaultdict(list)
