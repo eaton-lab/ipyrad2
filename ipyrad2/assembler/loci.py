@@ -589,7 +589,10 @@ def write_loci_and_stats_files(
 
 
 def max_heteros_count(seqs: np.ndarray) -> int:
-    """Return max number of samples with a shared polymorphism.
+    """
+    Return max number of samples with a shared polymorphism.
+    Here the reference sequence is in the seqs array, but it should not
+    have ambiguous sites, so it won't contribute to the count.
     """
     counts = np.zeros(seqs.shape[1], dtype=np.uint16)
     for fidx in range(seqs.shape[1]):
