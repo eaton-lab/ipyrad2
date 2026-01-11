@@ -181,7 +181,10 @@ def run_pipeline(
                     os.unlink(name)
                 except Exception:
                     pass
-
+        # TODO: This only catches the rc from  the last command, which if it is
+        #       in a pipeline that fails and becomes empty, passing empty data
+        #       can sometimes be a valid input which programs (bedtools) will
+        #       happily consume and succeed.
         if rc != 0:
             raise RuntimeError(
                 f"pipeline failed (rc={rc}): {cmds[-1]}\n{bytes(err_all).decode(errors='replace')}"

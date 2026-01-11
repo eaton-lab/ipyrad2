@@ -314,13 +314,17 @@ def get_across_sample_loci_bed(
     # Chr1    3045768 3045944 3       A,B,D
     cmd2 = ["awk", f'BEGIN{{OFS="\\t"}} $4>={int(min_sample_coverage)} {{print $1,$2,$3,$4,$5}}']
 
+    # The input bed file per sample are in sort order, but the call to multiinter
+    # can shuffle sorting, so _actually_ sort by REF order here
+    cmd3 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
+
     # merge sub-intervals by MIN_MERGE_DISTANCE
     # Chr1    1792068 1792384 4
     # Chr1    2344873 2344902 3
     # Chr1    2665674 2665760 3
     # Chr1    2824851 2824932 4
     # Chr1    3045768 3045944 3
-    cmd3 = [
+    cmd4 = [
         BIN_BED, "merge",
         "-i", "-",
         "-d", str(int(min_merge_distance)),
@@ -333,10 +337,12 @@ def get_across_sample_loci_bed(
     # Chr1    2665674 2665760 3
     # Chr1    2824851 2824932 4
     # Chr1    3045768 3045944 3
-    cmd4 = ["awk", "-v", f"L={min_locus_length}", 'BEGIN{OFS=FS="\t"} ($3-$2) >= L']
+    cmd5 = ["awk", "-v", f"L={min_locus_length}", 'BEGIN{OFS=FS="\t"} ($3-$2) >= L']
 
     # run pipeline
-    run_pipeline([cmd1, cmd2, cmd3, cmd4], out_bed)
+    cmds = [cmd1, cmd2, cmd3, cmd4, cmd5]
+    logger.trace(cmds)
+    run_pipeline(cmds, out_bed)
     return out_bed
 
 

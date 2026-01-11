@@ -142,11 +142,13 @@ def make_lowdepth_mask(sname: str, min_sample_depth: int, tmpdir: Path):
     run_pipeline([cmd1, cmd2, cmd3], good_bed)
 
     # subtract good loci positions from all loci positions
+    # Pass in ref_info so the sort order is retained
     cmd1 = [
         BIN_BED, "subtract",
         "-a", str(loci_bed),
         "-b", str(good_bed),
         "-sorted",
+        "-g", str(ref_info)
     ]
     run_pipeline([cmd1], out_bed)
     return out_bed
@@ -359,12 +361,14 @@ def filter_trim_locus(
     }
 
     # apply min_samples filter --------------------------------------
-    if seqs.shape[0] < min_locus_sample_coverage:
+    # -1 to exclude the reference sequence from sample coverage counts
+    if seqs.shape[0] - 1 < min_locus_sample_coverage:
         filters["min_samples"] = True
 
     # apply edge trimming ---- --------------------------------------
     # get number of bases to trim from each side where sample cov < min_trim_sample_cov
-    site_sample_covs = np.sum((seqs != 78) & (seqs != 45), axis=0)
+    # Exclude reference sequence from site sample coverage counts (start at idx 1)
+    site_sample_covs = np.sum((seqs[1:] != 78) & (seqs[1:] != 45), axis=0)
     cov_sufficient = np.where(site_sample_covs >= min_locus_trim_sample_coverage)[0]
     try:
         trim_left = int(cov_sufficient[0])
@@ -383,7 +387,8 @@ def filter_trim_locus(
     stats["variant_phylo_informative_sites"] = int(np.sum(snpsarr == 2))
 
     # do not count sites where variation is not possible (sample_cov=1)
-    stats["locus_cov"] = int(tseqs.shape[0])
+    # -1 to exclude the reference sequence from sample coverage counts
+    stats["locus_cov"] = int(tseqs.shape[0]) - 1
     stats["nsites"] = int(tseqs.shape[1])
     stats["nsites_sample_cov_greater_than_1"] = int(np.sum(tsite_sample_covs > 1))
     stats["nsites_sample_cov_greater_than_2"] = int(np.sum(tsite_sample_covs > 2))
@@ -415,7 +420,8 @@ def filter_trim_locus(
     # filter for max shared het sites ----------------------------------------------------
     if tseqs.size:
         max_shared_h = max_heteros_count(tseqs)
-        max_shared_h_prop = max_shared_h / tseqs.shape[0]
+        # -1 to exclude the reference sequence from sample coverage counts
+        max_shared_h_prop = max_shared_h / (tseqs.shape[0] - 1)
         if max_shared_h_prop > max_locus_hetero_frequency:
             filters["max_shared_hetero_frequency"] = True
 
