@@ -11,7 +11,6 @@
 # TODO
 - cli: subcommand splash messages should show the ipyrad version.
 - map: add checks in concat_tech_reps_into_tmpdir for bad names.
-- [...] assemble: replace numba code to be pure numpy and remove numba as a dependency.
 - assemble: need to bring back a max-H consensus filter.
 - assemble: max_snps filter is not working. Consider variant quality with this...?
 - assemble: allow imap to group samples for joint variant calls.
@@ -112,3 +111,4 @@ ipyrad2 analysis pca -d HDF5 ... --scaffolds [defaults to all] -n name-prefix -o
 - [x] denovo: develop SE pipeline.
 - [x] analysis: add analysis tools (wex/lex/treeslider) as 'analysis' subcommand
 - [x] map: handle SE
+- [x] assemble: replace numba code to be pure numpy and remove numba as a dependency.

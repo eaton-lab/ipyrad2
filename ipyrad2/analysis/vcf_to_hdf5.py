@@ -442,12 +442,11 @@ def chunk_to_arrs(chunkdf, nsamples):
     genos[:, :, 0] = g0
     genos[:, :, 1] = g1
 
-    # numba func to fill
-    snps = jfill_snps(nsnps, nsamples, ref, g0, g1, alts1, alts2, alts3)
+    snps = fill_snps(nsnps, nsamples, ref, g0, g1, alts1, alts2, alts3)
     return genos, snps
 
 
-def jfill_snps(nsnps, nsamples, ref, g0, g1, alts1, alts2, alts3):
+def fill_snps(nsnps, nsamples, ref, g0, g1, alts1, alts2, alts3):
 
     # fill snps
     snps = np.zeros((nsnps, nsamples), dtype=np.uint8)

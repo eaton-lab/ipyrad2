@@ -26,6 +26,7 @@ from typing import Optional, Dict, List, Union, Tuple
 from ..utils.exceptions import IPyradError
 from ..utils.parallel import run_with_pool
 from ..utils.pops import parse_pops_file, parse_imap
+from .utils import subsample_snps, subsample_loci
 
 # Value of missing data in the snps matrix
 _MISSING_GENO = 255
@@ -477,22 +478,20 @@ class SNPsExtracter:
     def subsample_snps(self, random_seed:Optional[int]=None, log_level: str="INFO") -> np.ndarray:
         """Return an array with 1 SNP sampled per locus/linkage-block.
 
-        Uses numba jit function for speed, and snpsmap array to find
-        linkage information.
+        Parse snpsmap array to find linkage information.
         """
         rng = np.random.default_rng(random_seed)
-        subarr = self.snps[:, jsubsample_snps(self.snpsmap, rng.integers(2**31))]
+        subarr = self.snps[:, subsample_snps(self.snpsmap, rng.integers(2**31))]
         logger.log(log_level, f"subsampled {subarr.shape[1]} unlinked SNPs.")
         return subarr
 
     def subsample_genos(self, random_seed:Optional[int]=None, log_level: str="INFO") -> np.ndarray:
         """Return an array with 1 SNP geno sampled per locus/linkage-block.
 
-        Uses numba jit function for speed, and snpsmap array to find
-        linkage information.
+        Parse snpsmap array to find linkage information.
         """
         rng = np.random.default_rng(random_seed)
-        subarr = self.genos[:, jsubsample_snps(self.snpsmap, rng.integers(2**31))]
+        subarr = self.genos[:, subsample_snps(self.snpsmap, rng.integers(2**31))]
         logger.log(log_level, f"subsampled {subarr.shape[1]} unlinked SNPs.")
         return subarr
 
@@ -543,7 +542,7 @@ class SNPsExtracter:
         those 1000 loci.
         """
         rng = np.random.default_rng(random_seed)
-        nloci, lidxs = jsubsample_loci(self.snpsmap, rng.integers(2**31))
+        nloci, lidxs = subsample_loci(self.snpsmap, rng.integers(2**31))
         if return_sites:
             subarr = self.snps[:, lidxs]
         else:

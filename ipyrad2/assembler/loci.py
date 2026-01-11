@@ -17,13 +17,14 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 from ..utils.seqs import comp
-from ..utils.jit_funcs import snp_count_numba, max_heteros_count_numba
 from ..utils.parallel import run_pipeline
 
 BIN = Path(sys.prefix) / "bin"
 BIN_SAM = str(BIN / "samtools")
 BIN_BCF = str(BIN / "bcftools")
 BIN_BED = str(BIN / "bedtools")
+
+AMBIGARR = np.array(list(b"RSKYWM")).astype(np.uint8)
 
 
 def write_sam_faidx(tmpdir: Path) -> Path:
@@ -377,7 +378,7 @@ def filter_trim_locus(
     tsite_sample_covs = site_sample_covs[trim_left:seqs.shape[1] - trim_right]
 
     # get snps array
-    snpsarr = snp_count_numba(tseqs)
+    snpsarr = snp_count(tseqs)
     stats["variant_sites"] = int(np.sum(snpsarr > 0))
     stats["variant_phylo_informative_sites"] = int(np.sum(snpsarr == 2))
 
@@ -413,7 +414,7 @@ def filter_trim_locus(
 
     # filter for max shared het sites ----------------------------------------------------
     if tseqs.size:
-        max_shared_h = max_heteros_count_numba(tseqs)
+        max_shared_h = max_heteros_count(tseqs)
         max_shared_h_prop = max_shared_h / tseqs.shape[0]
         if max_shared_h_prop > max_locus_hetero_frequency:
             filters["max_shared_hetero_frequency"] = True
@@ -575,6 +576,88 @@ def write_loci_and_stats_files(
     # be used to mask these from the final VCF
     with open(outdir / f"{name}.bed", "w") as out:
         out.write("\n".join("\t".join(map(str, i)) for i in beds))
+
+
+def max_heteros_count(seqs: np.ndarray) -> int:
+    """Return max number of samples with a shared polymorphism.
+    """
+    counts = np.zeros(seqs.shape[1], dtype=np.uint16)
+    for fidx in range(seqs.shape[1]):
+        subcount = 0
+        for ambig in AMBIGARR:
+            subcount += np.sum(seqs[:, fidx] == ambig)
+        counts[fidx] = subcount
+    return counts.max()
+
+
+def snp_count(seqs: np.ndarray) -> np.ndarray:
+    """Return the SNP array (see get_snps_array docstring).
+
+    Parameters
+    ----------
+    seqs: ndarray
+        A locus sequence array shape (ntaxa, nsites) in np.uint8.
+    rowstart: int
+        Taxon row to start on. Default if 0 (iter over all taxa),
+        but when excluding the reference as counting towards
+        identifying variants then the first row is skipped (the
+        reference sample is always first row).
+    """
+    # record for every site as 0, 1, or 2, where 0 indicates the site
+    # is invariant, 1=autapomorphy, and 2=synapomorphy.
+    snpsarr = np.zeros(seqs.shape[1], dtype=np.uint8)
+
+    # iterate over all loci
+    for site in range(seqs.shape[1]):
+
+        # count Cs As Ts and Gs at each site (up to 65535 sample depth)
+        catg = np.zeros(4, dtype=np.uint16)
+
+        # select the site column (potentially skipping first sample if ref.)
+        ncol = seqs[:, site]
+
+        # iterate over bases in the site column recording
+        for idx in range(ncol.shape[0]):
+            if ncol[idx] == 67:    # C
+                catg[0] += 1
+            elif ncol[idx] == 65:  # A
+                catg[1] += 1
+            elif ncol[idx] == 84:  # T
+                catg[2] += 1
+            elif ncol[idx] == 71:  # G
+                catg[3] += 1
+            elif ncol[idx] == 82:  # R
+                catg[1] += 1       # A
+                catg[3] += 1       # G
+            elif ncol[idx] == 75:  # K
+                catg[2] += 1       # T
+                catg[3] += 1       # G
+            elif ncol[idx] == 83:  # S
+                catg[0] += 1       # C
+                catg[3] += 1       # G
+            elif ncol[idx] == 89:  # Y
+                catg[0] += 1       # C
+                catg[2] += 1       # T
+            elif ncol[idx] == 87:  # W
+                catg[1] += 1       # A
+                catg[2] += 1       # T
+            elif ncol[idx] == 77:  # M
+                catg[0] += 1       # C
+                catg[1] += 1       # A
+
+        # sort counts so we can find second most common site.
+        catg.sort()
+
+        # if invariant      [0, 0, 0, 9] -> 0
+        # if autapomorphy   [0, 0, 1, 8] -> 1
+        # if synapomorphy   [0, 0, 2, 7] -> 2
+        if catg[2] == 0:
+            pass
+        elif catg[2] == 1:
+            snpsarr[site] = 1
+        else:
+            snpsarr[site] = 2
+    return snpsarr
 
 
 if __name__ == "__main__":
