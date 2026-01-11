@@ -327,13 +327,19 @@ def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) ->
     # 1) decompose multi-allelic and indels into extra lines
     cmd1 = [
         BIN_BCF, "norm",
+        # -f Use this reference sequence fasta file
         "-f", str(reference),
+        # -m split multi-allelic sites
         "-m", "-both",
         "--threads", str(threads),
+        # -W auto-index the output file
         "-W",
+        # Output file (gzipped)
         "-Oz", "-o", str(vcf_dir / "norm.vcf.gz"),
+        # Input file
         str(in_vcf_gz),
     ]
+    logger.trace(repr(cmd1))
     run_pipeline([cmd1])
 
     # ------------------------------------------------------------
@@ -346,6 +352,7 @@ def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) ->
         "-W",
         str(vcf_dir / "norm.vcf.gz"),
     ]
+    logger.trace(repr(cmd1))
     run_pipeline([cmd1])
 
     cmd1 = [
@@ -356,6 +363,7 @@ def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) ->
         "-W",
         str(vcf_dir / "norm.vcf.gz"),
     ]
+    logger.trace(repr(cmd1))
     run_pipeline([cmd1])
 
     # -----------------------------------------------------------
@@ -377,7 +385,9 @@ def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) ->
     cmd2 = ["awk", awk_prog]
     cmd3 = ["sort", "-k1,1", "-k2,2n", "-T", str(vcf_dir)]
     cmd4 = [BIN_BED, "merge", "-i", "-"]
-    run_pipeline([cmd1, cmd2, cmd3, cmd4], indel_beds)
+    cmds = [cmd1, cmd2, cmd3, cmd4]
+    logger.trace(repr(cmds))
+    run_pipeline(cmds, indel_beds)
 
     # if indel beds is empty then just keep and rename the snps.vcf.gz
     if indel_beds.stat().st_size == 0:
@@ -395,7 +405,9 @@ def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) ->
             "-Oz", "-o", str(out_vcf_gz),
             "-W",
         ]
-        run_pipeline([cmd1, cmd2])
+        cmds = [cmd1, cmd2]
+        logger.trace(repr(cmds))
+        run_pipeline(cmds)
         return out_vcf_gz
 
     # ----------------------------------------------------------
@@ -408,6 +420,7 @@ def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) ->
         "-W",
         str(vcf_dir / "snps.vcf.gz"),
     ]
+    logger.trace(repr(cmd1))
     run_pipeline([cmd1])
 
     # ----------------------------------------------------------
@@ -427,7 +440,9 @@ def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) ->
         "-W",
         str(vcf_dir / "combined.vcf.gz"),
     ]
+    logger.trace(repr(cmd1))
     run_pipeline([cmd1])
+    logger.trace(repr(cmd2))
     run_pipeline([cmd2])
 
     # 8) Collapse biallelic records at same POS back to multi-allelic; sort & index
@@ -442,7 +457,9 @@ def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) ->
         "-Oz", "-o", str(out_vcf_gz),
         "-W",
     ]
-    run_pipeline([cmd1, cmd2])
+    cmds = [cmd1, cmd2]
+    logger.trace(repr(cmds))
+    run_pipeline(cmds)
 
     # clean up
     # for path in vcf_dir.glob("*.vcf.gz"):
