@@ -678,7 +678,7 @@ def run_mapper(
                 jobs[sname] = (map_filter_sort_single, kwargs)
 
     # run mapping jobs in parallel
-    run_with_pool(jobs, log_level, workers, msg="Mapping")
+    run_with_pool(jobs, log_level, workers, msg="Mapping samples to reference")
 
     # get bam file stats and write to a file
     jobs = {}
