@@ -97,7 +97,7 @@ def get_coverage_bed_graphs(sname: str, bam_file: Path, reference: Path, tmpdir:
     # Chr1    60908424        60908533        Chr1    60908434        60908543        LH00150:341:22HGMLLT3:3:1160:35876:20034        49      -       +
     # Chr3    5915120         5915253         Chr3    5915131         5915265         LH00150:341:22HGMLLT3:3:2236:23034:9892         57      +       -
     # Chr2    109898149       109898235       Chr2    109898287       109898367       LH00150:341:22HGMLLT3:3:1287:23015:18000        54      +       -
-    cmd2 = [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]
+    cmd2 = [BIN_BED, "bamtobed", "-i", "-"]
     if is_paired:
         cmd2.insert(2, "-bedpe")
     # extract only the records from this table where the mean mapq passes this steps filter
@@ -144,10 +144,10 @@ def get_coverage_bed_graphs(sname: str, bam_file: Path, reference: Path, tmpdir:
     cmd9 = [BIN_BED, "merge", "-d", str(min_merge_distance), "-i", "-"]
     # Chr1    833321  833418
     # Chr1    837052  837240
-    cmds = []
+    cmds = [cmd1, cmd2, cmd3, cmd4, cmd5, cmd6, cmd7, cmd8, cmd9]
     logger.trace(repr(cmds))
-    ret = run_pipeline([cmd1, cmd2, cmd3, cmd4, cmd5, cmd6, cmd7, cmd8, cmd9], out_bed_merge)
-    logger.trace(ret)
+    ret = run_pipeline(cmds, out_bed_merge)
+    logger.trace(f"Return code/error msg for {sname}: {ret}")
 
     shutil.rmtree(coll_dir)
     logger.debug(f"wrote bed graph for {sname}")
