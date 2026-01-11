@@ -229,7 +229,7 @@ def build_locus_fasta_database(
     consensus_dir = tmpdir / "consensus_seqs"
     fastas = [consensus_dir / f"{i}.consensus.fa" for i in sorted(snames)]
 
-    # insert reference as first sample unless explicitly excluded
+    # insert reference as first sample
     reference_fa = consensus_dir / "assembly_reference_sequence.consensus.fa"
     fastas = [reference_fa] + fastas
 
@@ -377,8 +377,8 @@ def filter_trim_locus(
     tseqs = seqs[:, trim_left:seqs.shape[1] - trim_right]
     tsite_sample_covs = site_sample_covs[trim_left:seqs.shape[1] - trim_right]
 
-    # get snps array
-    snpsarr = snp_count(tseqs)
+    # get snps array. Start at row 1 to exclude reference from the stats
+    snpsarr = snp_count(tseqs, rowstart=1)
     stats["variant_sites"] = int(np.sum(snpsarr > 0))
     stats["variant_phylo_informative_sites"] = int(np.sum(snpsarr == 2))
 
@@ -590,7 +590,7 @@ def max_heteros_count(seqs: np.ndarray) -> int:
     return counts.max()
 
 
-def snp_count(seqs: np.ndarray) -> np.ndarray:
+def snp_count(seqs: np.ndarray, rowstart: int = 0) -> np.ndarray:
     """Return the SNP array (see get_snps_array docstring).
 
     Parameters
@@ -614,7 +614,7 @@ def snp_count(seqs: np.ndarray) -> np.ndarray:
         catg = np.zeros(4, dtype=np.uint16)
 
         # select the site column (potentially skipping first sample if ref.)
-        ncol = seqs[:, site]
+        ncol = seqs[rowstart:, site]
 
         # iterate over bases in the site column recording
         for idx in range(ncol.shape[0]):
