@@ -164,7 +164,7 @@ def run_assembler(
                 threads=threads,
             )
             jobs[sname] = (get_coverage_bed_graphs, kwargs)
-        run_with_pool(jobs, log_level, workers)            # multithreaded
+        run_with_pool(jobs, log_level, workers, msg="Writing bed graphs")            # multithreaded
 
         logger.info("delimiting shared coverage beds (loci)")
         args = (list(bam_dict), min_locus_sample_coverage, min_locus_merge_distance, min_locus_length, tmpdir)
@@ -239,7 +239,7 @@ def run_assembler(
         )
         jobs[chunk] = (get_group_called_variants_in_vcf_chunks, kwargs)
     # each job does not use much RAM, so run many at 1-3 threads per job
-    run_with_pool(jobs, log_level, vworkers)      # <=3 threads per job
+    run_with_pool(jobs, log_level, vworkers, msg="Calling variants")      # <=3 threads per job
 
     # write concatenated loci chunks
     get_concat_chunk_vcfs(tmpdir, threads)
@@ -271,14 +271,14 @@ def run_assembler(
     for sname, bam_file in all_dict.items():
         kwargs = dict(sname=sname, min_sample_depth=min_sample_depth, tmpdir=tmpdir)
         jobs[sname] = (make_lowdepth_mask, kwargs)
-    run_with_pool(jobs, log_level, cores)
+    run_with_pool(jobs, log_level, cores, msg="Building coverage masks")
 
     logger.info("extracting consensus sequences")
     jobs = {}
     for sname, bam_file in all_dict.items():
         kwargs = dict(sname=sname, reference=reference, tmpdir=tmpdir, keep_insertions=False)
         jobs[sname] = (get_consensus, kwargs)
-    run_with_pool(jobs, log_level, vworkers)
+    run_with_pool(jobs, log_level, vworkers, msg="Extracting consensus sequences")
 
     # ------------------------------------------------------------------
     # ---- LOCUS BUILDING ----------------------------------------------
@@ -318,7 +318,7 @@ def run_assembler(
             # read_depth_mask=read_depth_mask,
         ))
     }
-    run_with_pool(jobs, log_level, workers)
+    run_with_pool(jobs, log_level, workers, msg="Writing output files")
 
     # get the final vcf file
     logger.info("writing variants file (.vcf.gz)")
@@ -340,7 +340,7 @@ def run_assembler(
     for sname, bam_file in all_dict.items():
         kwargs = dict(bam_file=bam_file, loci_bed=outdir / f"{name}.bed", min_map_q=min_map_q, ref_info=tmpdir / "REF_info.txt")
         jobs[sname] = (get_sample_coverage_stats_in_loci_bed, kwargs)
-    results = run_with_pool(jobs, log_level, workers)
+    results = run_with_pool(jobs, log_level, workers, msg="Calculating final assembly stats")
     df = pd.DataFrame(data={i: results[i][0] for i in snames}).T
     df["nloci_before_filtering"] = stats_before["nloci"]
     df["mean_depth_per_locus_with_nonzero_mapping_before_filtering"] = stats_before["mean_depth_per_locus_with_nonzero_mapping"]
