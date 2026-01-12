@@ -247,6 +247,7 @@ def run_denovo(
         build_sample_summary(sname, tmpdir)
     concat_summaries(tmpdir)
 
+    #TODO: Add some logging messages here so people can see progress
     logger.info("Clustering consensus sequences across samples")
     vsearch_cluster_across(tmpdir, similarity_threshold_across, threads)
 
