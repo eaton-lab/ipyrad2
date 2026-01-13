@@ -14,6 +14,9 @@ def read_params(paramsfile: str):
     """
 
     """
+    paramsfile = Path(paramsfile)
+    if not paramsfile.exists():
+        raise IPyradError(f"Params file not found: {paramsfile}")
     with open(paramsfile) as infile:
         params = tomlkit.load(infile)
 
