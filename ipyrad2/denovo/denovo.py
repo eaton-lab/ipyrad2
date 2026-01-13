@@ -206,7 +206,7 @@ def run_denovo(
             raise IPyradError("denovo reference results exist in outdir. Use --force to overwrite.")
         else:
             # Clean up stale bwa-mem2 index files
-            suffs = [".pac", ".ann", ".amb", ".0123", ".bwt.2bit.64"]  # bwa-mem2
+            suffs = [".pac", ".ann", ".amb", ".0123", ".bwt.2bit.64", ".fai"]  # bwa-mem2
             # don't use Path.with_suffix here b/c '.fa.ann' double suffix is messy.
             paths = [denovo_reference.with_suffix(denovo_reference.suffix + i) for i in suffs]
             for i in paths:
