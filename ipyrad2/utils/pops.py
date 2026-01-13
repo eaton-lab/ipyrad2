@@ -41,6 +41,9 @@ def parse_pops_file(popfile: Path) -> Tuple[Dict[str, List[str]], Dict[str, int]
             minlist = mindat[i].replace(",", "").split()
             popmins.update({i.split(':')[0]: int(i.split(':')[1])
                                     for i in minlist})
+        if set(popdict.keys()) != set(popmins.keys()):
+            raise IPyradError(IMAP_MINMAP_DISAGREE.format(popdict.keys(),
+                                                          popmins.keys()))
     else:
         raise IPyradError(MIN_SAMPLES_PER_POP_MALFORMED)
 
@@ -93,6 +96,15 @@ def parse_minmap(path: Path) -> Dict[str, int]:
     group\tsize
     """
     pass
+
+IMAP_MINMAP_DISAGREE = """\n
+    The populations specified in the main body of the populations file do
+    not agree with the populations specified on the minmap line (final line
+    of the imap file.
+
+    populations for all samples: {}
+    populations in minmap: {}
+"""
 
 
 MIN_SAMPLES_PER_POP_MALFORMED = """\n\
