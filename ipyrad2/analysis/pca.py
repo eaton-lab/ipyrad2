@@ -256,7 +256,7 @@ class PCA(object):
 
         if not minmap:
             # Don't override if minmap was passed in
-            logger.debug("No minmap specified. Defaulting to min 1 sample per population.")
+            logger.debug("No minmap specified. Defaulting to retain all samples per population.")
             minmap = {x:len(imap[x]) for x in imap.keys()}
 
         if set(minmap) != set(imap):
