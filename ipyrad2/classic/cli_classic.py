@@ -173,14 +173,12 @@ def command_line():
             # Try to parse pops file to subsample fastqs for building pseudo-reference
             pops_file = Path(params.main.pop_assign_file)
             if pops_file.exists() and not (str(pops_file) == '.'):
-                logger.info("pop_assign_file does not exist, skipping subsample selection.")
-                # Defaults to using all sample edits files
-                # TODO: Could be better to randomly select a handful, but this might be
-                #       better to implement inside the denovo.py code, so it works for CLI as well
-                s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
+                s3_args.imap = pops_file
+            elif not pops_file.exists():
+                raise IPyradError(f"pop_assign_file does not exist: {str(pops_file.absolute())}")
             else:
-                # TODO: Maybe this isn't necessary here 
-                s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
+                s3_args.imap = None
+            s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
             # TODO: Add something to test the number of .gz files and complain if there are too many.
             #       Might be good to recommend using an imap file, and then sampling 2-3 individuals per pop
             ip.cli.cli_main.run_subcommand(s3_args, _exit=False)
