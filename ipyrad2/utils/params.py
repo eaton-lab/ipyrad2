@@ -10,6 +10,15 @@ from types import SimpleNamespace
 from typing import Dict, List
 
 
+DEFAULT_PATHS = {
+    "raw_fastq_path":"/path/to/fastqs/*.gz",
+    "barcodes_path":"/path/to/bcodes.txt",
+    "sorted_fastq_path":"/path/to/sorted_fastqs/*.gz",
+    "reference_sequence":"/path/to/ref.fa",
+    "pop_assign_file":"/path/to/pops.txt",
+}
+
+
 def read_params(paramsfile: str):
     """
 
@@ -19,6 +28,11 @@ def read_params(paramsfile: str):
         raise IPyradError(f"Params file not found: {paramsfile}")
     with open(paramsfile) as infile:
         params = tomlkit.load(infile)
+
+    # Blank any default paths on read of params file to prevent any weird errors
+    for param, path in DEFAULT_PATHS.items():
+        if params["main"][param] == path:
+            params["main"][param] = ""
 
     params = _replace_values(params.unwrap(), -1, None)
     params = RecursiveNamespace(**params)
@@ -53,13 +67,11 @@ def new_params(name: str = None, force: bool = False):
         doc = tomlkit.document()
         main = {"main":{"name":name,
                         "project_dir":"./",
-                        "raw_fastq_path":"/path/to/fastqs/*.gz",
-                        "barcodes_path":"/path/to/bcodes.txt",
-                        "sorted_fastq_path":"/path/to/sorted_fastqs/*.gz",
-                        "reference_sequence":"/path/to/ref.fa",
-                        "pop_assign_file":"/path/to/pops.txt",
                        }
                }
+
+        # Add default paths
+        main["main"].update(DEFAULT_PATHS)
 
         doc.update(main)
         paramsfile.write(tomlkit.dumps(doc) + "\n")
