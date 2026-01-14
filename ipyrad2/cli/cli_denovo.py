@@ -33,6 +33,12 @@ def _setup_denovo_subparser(subparsers: argparse._SubParsersAction, header: str 
         help="Directory to write trimmed read files. Will be created if it doesn't exist. [default=CLUSTERS]",
     )
     tool.add_argument(
+        "-i", "--imap", metavar="Path", type=Path, default=None,
+        help="Individual-to-population mapping file with sample\tpop on each line. "
+        "This subselects only the samples in the file for performing the "
+        "reference assembly.",
+    )
+    tool.add_argument(
         "-s", "--similarity-threshold-within", metavar="float", type=float, default=0.95,
         help="Sequence similarity threshold for clustering within samples. [default=0.95]",
     )
@@ -45,7 +51,7 @@ def _setup_denovo_subparser(subparsers: argparse._SubParsersAction, header: str 
         help="Min replication of sequences for inclusion. [default=2]",
     )
     tool.add_argument(
-        "-i", "--min-length", metavar="int", type=int, default=35,
+        "-M", "--min-length", metavar="int", type=int, default=35,
         help="Min length of merged paired sequences. [default=35]",
     )
     tool.add_argument(

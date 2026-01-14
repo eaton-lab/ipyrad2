@@ -10,7 +10,9 @@ PAIRED END
 
 """
 
-from typing import List
+from typing import List, Dict, Tuple
+import numpy as np
+import itertools
 import sys
 import shutil
 # import tempfile
@@ -23,6 +25,7 @@ from .align import write_ordered_consensus_stream_to_file
 from ..utils.exceptions import IPyradError
 from ..utils.names import get_name_to_fastq_dict
 from ..utils.parallel import run_pipeline, run_with_pool
+from ..utils.pops import parse_pops_file, parse_imap
 
 BIN = Path(sys.prefix) / "bin"
 BIN_VSEARCH = str(BIN / "vsearch")
@@ -176,6 +179,7 @@ def vsearch_cluster_across(
 def run_denovo(
     fastqs: List[Path],
     outdir: Path,
+    imap: Path | None,
     similarity_threshold_within: float,
     similarity_threshold_across: float,
     min_dereplication_size: int,
@@ -201,6 +205,7 @@ def run_denovo(
     workers = max(1, cores // threads)
 
     # -------------------------------------------
+    # Clean up stale files from previous denovo assembly
     if tmpdir.exists() or denovo_reference.exists():
         if not force:
             raise IPyradError("denovo reference results exist in outdir. Use --force to overwrite.")
@@ -219,6 +224,13 @@ def run_denovo(
     tmpdir.mkdir(exist_ok=True)
 
     # -------------------------------------------
+    # Use imap for subsetting samples for building denovo reference
+    # Potentially return a subset of fastqs determined either by the contents
+    # of imap or by randomly selecting 10 samples total
+    fastq_dict = _subset_fastqs(imap, fastq_dict)
+
+    # -------------------------------------------
+    # vsearch w/in samples (derep/cluster)
     msg = "Joining/merging pairs, d" if is_paired else "D"
     msg = f"{msg}ereplicating and clustering"
     logger.info(msg)
@@ -260,6 +272,76 @@ def run_denovo(
     # -------------------------------------------
 
 
+def _subset_fastqs(imap: Path | None,
+    fastq_dict: Dict[str, Tuple[Path, Path | None]],
+    nsamples: int = 10,
+    seed: int | None = None):
+    """
+    """
+    if not seed:
+        seed = np.random.randint(0, 1e9)
+    rng = np.random.default_rng(np.random.SeedSequence(seed))
+
+    # -------------------------------------------
+    # Get imap/minmap for subsetting samples for building denovo reference
+    # parse_pops_file is responsible for validating that the minmap pops and
+    # imap pops are identical.
+    if imap is None:
+        imap = {'all': list(fastq_dict.keys())}
+        minmap = {'all': nsamples}
+    else:
+        if not imap.exists():
+            raise IPyradError(f"imap file does not exists: {imap}")
+        minmap = {}
+        try:
+            # Favor ipyrad style imap file including sample/pop mapping
+            # and trailing minmap line (# pop1:10 Pop2:5 ...)
+            imap, minmap = parse_pops_file(imap)
+        except IPyradError as e:
+            logger.warning(e)
+            logger.info("imap file doesn't include minmap info, parsing standard imap file format.")
+            imap = parse_imap(imap)
+        # Validate names in imap and fastq_dict agree
+        # raise error if any imap sample names not in database names
+        imapset = set(itertools.chain(*imap.values()))
+        badnames = imapset.difference(fastq_dict.keys())
+        if badnames:
+            raise IPyradError(
+                f"Samples {badnames} are not in fastqs list: {fastq_dict.keys()}")
+
+        # Enforce at least one sample per population
+        if not minmap:
+            if len(imap) > nsamples:
+                samples_per_pop = 1
+            else:
+                # If the # of pops is smaller than nsamples we do a little fudging
+                # to get the target number of samples per population, so the sum
+                # of samples_per_pop * len(imap) will sometimes be slightly higher
+                # or lower than the passed in (hopeful) nsamples value
+                samples_per_pop = round(nsamples/len(imap))
+
+            # Have to retain _at_ least the number of samples available, and at
+            # most the number determined by dividing nsamples by npops.
+            minmap = {pop:min(samples_per_pop, len(samps)) for pop, samps in imap.items()}
+    logger.warning(f"sample coverage minmap = {minmap}")
+    if sum(minmap.values()) > nsamples:
+        logger.error(f"imap file is selecting more than {nsamples} samples. Time to "
+            "construct the pseudo-reference increases with increasing numbers of samples.")
+
+    tmp_fastq_dict = {}
+    for pop, samps in imap.items():
+        # Constrain the number to be sampled from a given population when replace=False
+        max_samps = len(imap[pop])
+        samps = rng.choice(samps, min(minmap[pop], max_samps), replace=False)
+        # Grab the fastq Paths for retained samples
+        for samp in samps:
+            tmp_fastq_dict[str(samp)] = fastq_dict[samp]
+
+    logger.info("Subsetting populations for construction of pseudo-reference sequence.")
+    logger.info(f"Retaining samples: {list(tmp_fastq_dict.keys())}")
+    logger.debug(f"Retaining: {tmp_fastq_dict}")
+
+    return tmp_fastq_dict
 
 
 if __name__ == "__main__":
