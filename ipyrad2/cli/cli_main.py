@@ -178,6 +178,7 @@ def run_subcommand(args, _exit=True):
         run_denovo(
             fastqs=args.fastqs,
             outdir=args.out,
+            imap=args.imap,
             similarity_threshold_within=args.similarity_threshold_within,
             similarity_threshold_across=args.similarity_threshold_across,
             min_dereplication_size=args.min_dereplication_size,
