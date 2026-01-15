@@ -19,14 +19,13 @@ import numpy as np
 import pandas as pd
 import h5py
 from loguru import logger
-from packaging.version import parse
 from pathlib import Path
 from typing import Optional, Dict, List, Union, Tuple
 
 from ..utils.exceptions import IPyradError
 from ..utils.parallel import run_with_pool
 from ..utils.pops import parse_pops_file, parse_imap
-from .utils import subsample_snps, subsample_loci
+from .utils import subsample_snps, subsample_loci, parse_version_string
 
 # Value of missing data in the snps matrix
 _MISSING_GENO = 255
@@ -236,7 +235,7 @@ class SNPsExtracter:
         # this will raise an error msg if using an outdated version
         with h5py.File(self.data, 'r') as io5:
             try:
-                if parse(str(io5.attrs["version"])) < parse("2.0"):
+                if parse_version_string(str(io5.attrs["version"])) < parse_version_string("2.0"):
                     raise IPyradError()
             except (KeyError, IPyradError):
                 raise IPyradError("hdf5 database version must be >= 2.0")

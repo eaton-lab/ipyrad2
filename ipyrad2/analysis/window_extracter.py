@@ -40,7 +40,6 @@ outfile: alignment.phy
 """
 
 from collections import defaultdict
-from packaging.version import parse
 from typing import List, Dict, Tuple
 import sys
 from pathlib import Path
@@ -51,6 +50,7 @@ import h5py
 from loguru import logger
 # from ..utils.exceptions import IPyradError
 from ipyrad2.utils.exceptions import IPyradError
+from .utils import parse_version_string
 
 NEXHEADER = """#nexus
 begin data;
@@ -118,7 +118,7 @@ class WindowExtracter:
         """Store table with scaffold names and lengths in the order they are stored in H5."""
         with h5py.File(self.data, 'r') as io5:
             try:
-                if parse(str(io5.attrs["version"])) < parse("2.0"):
+                if parse_version_string(str(io5.attrs["version"])) < parse_version_string("2.0"):
                     raise IPyradError()
             except (KeyError, IPyradError):
                 raise IPyradError("hdf5 database version must be >= 2.0")
