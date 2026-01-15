@@ -103,13 +103,18 @@ def perfect_pairs(ndict: Dict[str, List[Path]], paths: List[Path]) -> bool:
     a = all(len(v) == 2 for v in ndict.values())
     # Number of fq files detected == number passed in
     b = sum(len(v) for v in ndict.values()) == len(paths)
+
     # Check that last letters of sample names are unique
-    try:
-        # Splitting pairs on '.' or '_' it can create ndict keys == "" so this
-        # also handles that case by raising on [-1] index of an empty string
-        c = len(set([i[-1] for i in ndict])) > 1
-    except Exception as e:
-        c = False
+    if len(ndict) == 1:
+        # In the case of raw undemuxed fastq data there will only be one PE pair
+        c = True
+    else:
+        try:
+            # Splitting pairs on '.' or '_' it can create ndict keys == "" so this
+            # also handles that case by raising on [-1] index of an empty string
+            c = len(set([i[-1] for i in ndict])) > 1
+        except Exception as e:
+            c = False
     return a & b & c
 
 
