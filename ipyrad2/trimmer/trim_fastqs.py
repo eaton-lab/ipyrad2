@@ -134,7 +134,9 @@ def trim_sample_with_fastp(
 
     # run the command in subprocess
     logger.debug(f"CMD: {' '.join(cmd)}")
-    run_pipeline([cmd])
+    # This command is run on multiple cores inside a run_with_pool call
+    # so silence the progress message
+    run_pipeline([cmd], quiet=True)
     logger.debug(f"finished trimming {sname}")
     return None
 

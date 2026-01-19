@@ -173,7 +173,8 @@ def vsearch_cluster_across(
         "--fasta_width", "0",
         "--threads", str(threads),
     ]
-    run_pipeline([cmd1])
+    msg = "All-by-all clustering"
+    run_pipeline([cmd1], msg=msg, quiet=False)
 
 
 def run_denovo(
@@ -254,6 +255,7 @@ def run_denovo(
         jobs[sname] = (vsearch_pairs, kwargs)
     run_with_pool(jobs, log_level, workers, msg=msg)
 
+    logger.success("Building summary tables")
     # write sample summary TSVs
     for sname in fastq_dict:
         build_sample_summary(sname, tmpdir)

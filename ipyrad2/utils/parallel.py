@@ -13,6 +13,7 @@ import queue
 import signal
 import tempfile
 import subprocess as sp
+import sys
 import time
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from pathlib import Path
@@ -85,6 +86,8 @@ def run_pipeline(
     outfile: Optional[Path] = None,
     stdin_text: Optional[str] = None,
     stdin_encoding: str = "utf-8",
+    msg: str = "Running...",
+    quiet: bool = True,
 ) -> Tuple[int, bytes, bytes]:
     """Run a shell-like pipeline of cmds; avoid stderr deadlocks via tempfiles.
 
@@ -147,20 +150,41 @@ def run_pipeline(
 
         last = procs[-1]
 
-        # Communicate with the last stage only (others stream to files/pipes)
-        if outfile is not None:
-            _out, last_err = last.communicate()
-            rc = last.returncode
-            # flush file output
-            if fout is not None:
-                try:
-                    fout.flush()
-                finally:
-                    fout.close()
-                    fout = None
-        else:
-            last_out, last_err = last.communicate()
-            rc = last.returncode
+        start = time.monotonic()
+
+        while True:
+
+            try:
+                # Communicate with the last stage only (others stream to files/pipes)
+                if outfile is not None:
+                    _out, last_err = last.communicate(timeout=1)
+                    rc = last.returncode
+                    # flush file output
+                    if fout is not None:
+                        try:
+                            fout.flush()
+                        finally:
+                            fout.close()
+                            fout = None
+                            break
+                else:
+                    last_out, last_err = last.communicate(timeout=1)
+                    rc = last.returncode
+                    break
+
+            except sp.TimeoutExpired:
+
+                if not quiet:
+                    elapsed = time.monotonic() - start
+                    sys.stderr.write(f"\r{msg} - {elapsed:.1f}s elapsed")
+                    sys.stderr.flush()
+                else:
+                    pass
+
+        if not quiet:
+            # Cleanly finalize the progress indicator
+            sys.stderr.write("\n")
+            sys.stderr.flush()
 
         # Stitch stderr: last stage first, then intermediates (in order spawned)
         err_all = bytearray()
