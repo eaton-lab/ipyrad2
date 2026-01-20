@@ -263,7 +263,7 @@ def run_denovo(
 
     #TODO: Add some logging messages here so people can see progress
     logger.info("Clustering consensus sequences across samples")
-    vsearch_cluster_across(tmpdir, similarity_threshold_across, threads)
+    vsearch_cluster_across(tmpdir, similarity_threshold_across, cores)
 
     logger.info("Splitting clusters and writing mapping table")
     mapping_tsv, summary_tsv = make_global_tables(tmpdir)
