@@ -113,6 +113,8 @@ def command_line():
 
 
 def run_subcommand(args, _exit=True):
+    logger.debug(args)
+
     # DEMUX: -------------------------------------------------------
     if args.subcommand == "demux":
         logger.info("---------------------------------------------------------")
@@ -133,6 +135,7 @@ def run_subcommand(args, _exit=True):
             cores=args.cores,
             max_reads=args.max_reads,
             log_level=args.log_level,
+            force=args.force,
         )
         if _exit: sys.exit(0)  # noqa: E701
 

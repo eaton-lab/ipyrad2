@@ -61,6 +61,9 @@ class Demux:
     max_reads: int
     """: subsample only the first N reads from each file (used for testing)."""
     log_level: str
+    """: log level for reporting progress."""
+    force: int
+    """: Whether to force overwriting existing fastq directory."""
 
     # attrs to be filled ----------------------------------------------
     _names_to_barcodes: Dict[str, Tuple[str, str]] = None
@@ -106,18 +109,21 @@ class Demux:
         if list(self._filenames_to_fastqs.values())[0][1] == None:
             self._pe = False
             logger.info("Found SE data")
+
     def _get_outdir(self) -> None:
         """Require an empty outdir to write to."""
         # get full path to the outdir
         self.outdir = Path(self.outdir).expanduser().resolve()
 
         # if the path exists, but is empty, that is OK.
-        if self.outdir.exists():
+        if self.outdir.exists() and self.force < 2:
             if any(self.outdir.iterdir()):
                 raise IPyradError(
                     f"outdir '{self.outdir}' exists and contains files. "
                     "To prevent overwriting or removing data you must "
-                    "manually rm this dir or change the outdir arg")
+                    "either manually rm this dir, change the outdir arg "
+                    "or use the double-force option `-f -f` to overwrite "
+                    "existing fastq files.")
         self.outdir.mkdir(exist_ok=True)
 
     def _get_barcodes_path(self) -> None:
@@ -534,10 +540,10 @@ def barmatch(fastq_tuple, demux_obj):
     else:
         # TODO: maybe support other options like 2BRAD here...
         if b"_" in list(demux_obj._barcodes_to_names)[0]:
-            logger.info("demultiplexing on R1+R2 inline barcodes")
+            logger.success("demultiplexing on R1+R2 inline barcodes")
             barmatcher = BarMatchingCombinatorialInline(**kwargs)
         else:
-            logger.info("demultiplexing on R1 inline barcodes")
+            logger.success("demultiplexing on R1 inline barcodes")
             barmatcher = BarMatchingSingleInline(**kwargs)
     try:
         barmatcher.run()

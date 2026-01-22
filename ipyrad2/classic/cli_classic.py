@@ -26,7 +26,7 @@ HEADER = f"""
 -------------------------------------------------------------
 ipyrad [v.{VERSION}]
 Interactive assembly and analysis of RAD-seq data
--------------------------------------------------------------\
+-------------------------------------------------------------
 """
 
 DESCRIPTION = "ipyrad2 classic command line tool."
@@ -63,7 +63,7 @@ def setup_parsers() -> argparse.ArgumentParser:
         "-L", "--log-file", metavar="Path", type=Path,
         help="Log file. Logging to stdout is also appended to this file. [default=None]."
     )
-    parser.add_argument("-f", "--force", action="store_true", help="force overwrite of existing data")
+    parser.add_argument("-f", "--force", action="count", default=0, help="force overwrite of existing data")
     parser.add_argument("-d", "--debug", action="store_true", help="Print debug information")
     parser.add_argument("-v", "--version", action='version', version=f"ipyrad {VERSION}")
     parser.add_argument('-h', '--help', action='help', help=argparse.SUPPRESS)
@@ -91,6 +91,8 @@ def main():
 def command_line():
     parser = setup_parsers()
     args = parser.parse_args()
+
+    print(HEADER)
 
     if args.new:
         _flagnew(args.new)

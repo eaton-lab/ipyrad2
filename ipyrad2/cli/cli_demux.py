@@ -98,10 +98,11 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
     #         "Logging info entered as one value for LOGLEVEL, or two values "
     #         "for LOGLEVEL LOGFILE; e.g., 'DEBUG' or 'DEBUG ipyrad.txt.'")
     # )
+
     # TOO RISKY perhaps, make the user remove existing dir themselves?
-    # tool.add_argument(
-    #     "--force", "-f", action="store_true",
-    #     help=(
-    #         "Force overwrite. Allows overwriting an existing directory of "
-    #         "demultiplexed fastq files. (Be careful).")
-    # )
+    tool.add_argument(
+        "--force", "-f", action="count", default=0,
+        help=(
+            "Force overwrite. Allows overwriting demultiplexed fastq files "
+            "in the output directory. (Be careful).")
+    )
