@@ -94,6 +94,7 @@ def get_overhang_from_kmers(fastqs: List[Path], max_len: int, max_reads: int, wo
 
     # FIX: guard when there is only one entry for best_k
     entries = top_counts[best_k]
+    logger.trace(f"{entries}")
     if not entries:
         return ""  # nothing counted at all
     if len(entries) == 1:
