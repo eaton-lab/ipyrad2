@@ -38,7 +38,12 @@ def get_kmer_counts(fastq: Path, kmer_size: int, max_len: int, max_reads: int):
     return counts
 
 
-def get_overhang_from_kmers(fastqs: List[Path], max_len: int, max_reads: int, workers: int, log_level: str):
+def get_overhang_from_kmers(fastqs: List[Path],
+    max_len: int,
+    max_reads: int,
+    workers: int,
+    log_level: str,
+    msg: str = ""):
     """..."""
     # get N kmer counts sampled evenly across files
     max_reads_per_file = int(max_reads / len(fastqs))
@@ -54,7 +59,7 @@ def get_overhang_from_kmers(fastqs: List[Path], max_len: int, max_reads: int, wo
             jobs[(kmer_size, fastq.name)] = (get_kmer_counts, kwargs)
 
     # fetch counters in parallel
-    kcounts = run_with_pool(jobs, log_level, workers, msg="Counting kmers")
+    kcounts = run_with_pool(jobs, log_level, workers, msg=f"Counting kmers {msg}")
 
     # combine results and store top 10 at each size
     top_counts = {}

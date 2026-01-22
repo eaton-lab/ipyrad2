@@ -262,9 +262,9 @@ def run_trimmer(
     # ------------------------------------------------------------
     # infer restriction overhangs by kmer analysis
     if not disable_infer_re_overhangs:
-        re1 = get_overhang_from_kmers([i[0] for i in fastq_dict.values()], 20, 100_000, cores, log_level)
+        re1 = get_overhang_from_kmers([i[0] for i in fastq_dict.values()], 20, 100_000, cores, log_level, msg="R1")
         try:
-            re2 = get_overhang_from_kmers([i[1] for i in fastq_dict.values()], 20, 100_000, cores, log_level)
+            re2 = get_overhang_from_kmers([i[1] for i in fastq_dict.values()], 20, 100_000, cores, log_level, msg="R2")
         except AttributeError:
             # For SE fastq_dict form is (fq1, None), so set re2 to a default
             re2 = ""

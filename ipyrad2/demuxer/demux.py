@@ -234,7 +234,7 @@ class Demux:
     def _check_restriction_overhangs(self) -> None:
         """Use kmer analysis to detect restriction overhangs in sequences."""
         read1s = [i[0] for i in self._filenames_to_fastqs.values()]
-        infer_cut1 = get_overhang_from_kmers(read1s, 20, 100_000, self.cores, self.log_level)
+        infer_cut1 = get_overhang_from_kmers(read1s, 20, 100_000, self.cores, self.log_level, msg="R1")
 
         if self.re1:
             if self.re1 != infer_cut1:
@@ -258,7 +258,7 @@ class Demux:
         # skip r2 infer for SE data
         read2s = [i[1] for i in self._filenames_to_fastqs.values()]
         if read2s[0] != None:
-            infer_cut2 = get_overhang_from_kmers(read2s, 20, 100_000, self.cores, self.log_level)
+            infer_cut2 = get_overhang_from_kmers(read2s, 20, 100_000, self.cores, self.log_level, msg="R2")
 
             if self.re2:
                 if self.re2 != infer_cut2:
