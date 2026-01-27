@@ -211,6 +211,8 @@ def make_global_tables(outdir: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
     logger.info(f"split {len(comps)} clusters into {len(refined_parts)} non-duplicated subclusters")
 
     # mapping rows ----------------------------------------------
+    logger.info(f"writing mapping table to {out_mapping_tsv}")
+
     mapping_rows = []
     for k, part in enumerate(refined_parts, start=1):
         # iterate over each consensus in the locus
@@ -230,9 +232,10 @@ def make_global_tables(outdir: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
             mapping_rows.append(row)
     mapping_df = pd.DataFrame(mapping_rows)
     mapping_df.to_csv(out_mapping_tsv, sep="\t", float_format="%12.6f", index=False)
-    logger.info(f"wrote locus stats to {out_mapping_tsv}")
 
     # depth wide table
+    logger.info(f"writing locus stats to {out_stats_tsv}")
+
     recs = []
     for locus, sub in mapping_df.groupby("locus"):
         rec = {
@@ -249,7 +252,6 @@ def make_global_tables(outdir: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
         recs.append(rec)
     stats = pd.DataFrame(recs).sort_values("locus").reset_index(drop=True)
     stats.to_csv(out_stats_tsv, sep="\t", float_format="%12.6f", index=False)
-    logger.info(f"wrote locus stats to {out_stats_tsv}")
     return mapping_df, stats
 
 

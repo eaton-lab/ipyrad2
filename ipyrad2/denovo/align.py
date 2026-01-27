@@ -13,6 +13,8 @@ import pandas as pd
 from loguru import logger
 from ipyrad2.utils.seqs import IUPAC
 from ipyrad2.utils.parallel import run_pipeline, run_with_pool_iter
+from ..utils.progress import ProgressBar
+
 
 
 BIN = Path(sys.prefix) / "bin"
@@ -219,12 +221,22 @@ def write_ordered_consensus_stream_to_file(
     summary_tsv = outdir / "tmpdir" / "concat.summary.tsv"
     out_fa = outdir / "denovo_reference.fa"
 
+    # Hack for getting the number of loci. Read in chunks and only parse the
+    # first column, makes it faster.
+    nloci = sum(len(chunk) for chunk in pd.read_csv(mapping_tsv, chunksize=10000, usecols=[0]))
+    prog = ProgressBar(nloci, 0, "Writing denovo reference sequence")
+    prog.finished = 0
+    prog.update()
+
     # open outfile and write loci
     with open(out_fa, "wt") as fh:
         for lid, records in iter_locus(mapping_tsv, summary_tsv, spacer_len=spacer_len):
             # Take the longest sequence in this cluster as the representative
             cons = max([x[1] for x in records], key=len)
             fh.write(f">locus_{lid}\n{cons}\n")
+        prog.finished += 1
+        prog.update()
+    print("")
     logger.info(f"wrote denovo reference to {out_fa}")
 
 
