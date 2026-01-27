@@ -222,7 +222,7 @@ def get_pairs_or_single_by_trim(
             return {i: tuple(sorted(j)) for i, j in names_to_paths.items()}
 
     # --------------------------------------------------------------
-    logger.info("failed to pair files, assuming data in single-end")
+    logger.info("failed to pair files, assuming data is single-end")
     # --------------------------------------------------------------
 
     # try to get unique SE names using delim args
