@@ -236,6 +236,8 @@ def write_ordered_consensus_stream_to_file(
             fh.write(f">locus_{lid}\n{cons}\n")
         prog.finished += 1
         prog.update()
+    prog.finished = nloci
+    prog.update()
     print("")
     logger.info(f"wrote denovo reference to {out_fa}")
 
