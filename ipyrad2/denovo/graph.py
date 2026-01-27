@@ -1,11 +1,13 @@
 
 
+import pandas as pd
 from typing import Dict, List, Tuple, Iterable, Set, Iterator
 from pathlib import Path
 from collections import Counter
 from itertools import combinations
 from loguru import logger
-import pandas as pd
+
+from ..utils.progress import ProgressBar
 
 
 def get_edges_dict(outdir) -> Dict[Tuple[str,str], Tuple[float,float]]:
@@ -192,10 +194,19 @@ def make_global_tables(outdir: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
     # refinement to split paralogs. Note that our goal here is to create
     # a denovo reference, so we want to include paralogs so ensure that
     # reads will later map to their respective separate copies.
+    prog = ProgressBar(len(comps), 0, "Splitting paralogs")
+    prog.finished = 0
+    prog.update()
+
     refined_parts = []
     for part in comps:
         for sub in iter_non_duplicated_subcomponent_by_ascending_pid(part, edict):
             refined_parts.append(sub)
+
+        prog.finished += 1
+        prog.update()
+    print("")
+
     # n_component_splits = len(refined_parts) - len(comps)
     logger.info(f"split {len(comps)} clusters into {len(refined_parts)} non-duplicated subclusters")
 
