@@ -11,6 +11,7 @@ PAIRED END
 """
 
 from typing import List, Dict, Tuple
+import json
 import numpy as np
 import itertools
 import sys
@@ -53,6 +54,12 @@ def vsearch_pairs(
     derep = outdir / f"{sname}.derep.sizesorted.fa"
     consensus = outdir / f"{sname}.consensus.fa"
     clusters = outdir / f"{sname}.clusters.tsv"
+
+    # If the clustering is already done for this sample don't redo it
+    # If you wish to redo it you must use the `-f -f` to rmtree the tmpdir
+    if consensus.exists() and clusters.exists():
+        logger.debug(f"Skipping cluster within: Consensus and clusters files exist for {sname}")
+        return
 
     if paired:
         cmd1 = [
@@ -202,15 +209,27 @@ def run_denovo(
     tmpdir = outdir / "tmpdir"
     logger.debug(tmpdir)
     fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx)
+    subset_fq_dict_file = tmpdir / ".fastq_dict.json"
     is_paired = list(fastq_dict.values())[0][1] is not None
     workers = max(1, cores // threads)
 
     # -------------------------------------------
     # Clean up stale files from previous denovo assembly
     if tmpdir.exists() or denovo_reference.exists():
-        if not force:
-            raise IPyradError("denovo reference results exist in outdir. Use --force to overwrite.")
-        else:
+        if force < 1:
+            raise IPyradError("denovo reference results exist in outdir. Use "
+                              "`-f` to resume after clustering, "
+                              "or use `-f -f` to start from scratch.")
+
+        elif force == 1:
+            # If only `-f` then we let the process proceed and will only rerun
+            # necessary steps
+            logger.warning("denovo reference results exist in outdir. Rerunning "
+                           "post-clustering assembly. Use `-f -f` to "
+                           "overwrite and start from scratch.")
+
+        elif force >= 2:
+            logger.warning("Cleaning up previous reference assembly and temporary files")
             # Clean up stale bwa-mem2 index files
             suffs = [".pac", ".ann", ".amb", ".0123", ".bwt.2bit.64", ".fai"]  # bwa-mem2
             # don't use Path.with_suffix here b/c '.fa.ann' double suffix is messy.
@@ -224,42 +243,61 @@ def run_denovo(
             shutil.rmtree(tmpdir)
     tmpdir.mkdir(exist_ok=True)
 
-    # -------------------------------------------
-    # Use imap for subsetting samples for building denovo reference
-    # Potentially return a subset of fastqs determined either by the contents
-    # of imap or by randomly selecting 10 samples total
-    fastq_dict = _subset_fastqs(imap, fastq_dict)
+    if force == 1:
+        # In this case we have already subset the samples for denovo assembly
+        # so we reload the fastq_dict of processed samples from the tmpfile
+        try:
+            with open(subset_fq_dict_file, 'r') as json_file:
+                fastq_dict = json.load(json_file, object_hook=_path_decoder)
+                logger.success(f"Reloading clustering results for: {list(fastq_dict.keys())}")
+        except FileNotFoundError:
+            raise IPyradError(f"Attempting `-f` but {subset_fq_dict_file} does not exist. "
+                               "To re-run this step you must use `-f -f` and start from scratch")
+        except Exception as e:
+            raise IPyradError(f"Error loading samples from {subset_fq_dict_file}: {e}")
+    else:
+        # If force == 0 or force == 2 then we redo everything.
+        # Use imap for subsetting samples for building denovo reference
+        # Potentially return a subset of fastqs determined either by the contents
+        # of imap or by randomly selecting 10 samples total
+        fastq_dict = _subset_fastqs(imap, fastq_dict)
 
-    # -------------------------------------------
-    # vsearch w/in samples (derep/cluster)
-    msg = "Joining/merging pairs, d" if is_paired else "D"
-    msg = f"{msg}ereplicating and clustering"
-    logger.info(msg)
-    jobs = {}
-    for sname, fastq_tuple in fastq_dict.items():
-        kwargs=dict(
-            sname=sname,
-            r1=fastq_tuple[0],
-            r2=fastq_tuple[1],
-            outdir=tmpdir,
-            min_dereplication_size=min_dereplication_size,
-            min_length=min_length,
-            min_merge_overlap=min_merge_overlap,
-            max_merge_diffs=max_merge_diffs,
-            strand_both=strand_both,
-            similarity_threshold_within=similarity_threshold_within,
-            by_length=True,
-            threads=threads,
-            paired=is_paired,
-        )
-        jobs[sname] = (vsearch_pairs, kwargs)
-    run_with_pool(jobs, log_level, workers, msg=msg)
+        # -------------------------------------------
+        # vsearch w/in samples (derep/cluster)
+        msg = "Joining/merging pairs, d" if is_paired else "D"
+        msg = f"{msg}ereplicating and clustering"
+        logger.info(msg)
+        jobs = {}
+        for sname, fastq_tuple in fastq_dict.items():
+            kwargs=dict(
+                sname=sname,
+                r1=fastq_tuple[0],
+                r2=fastq_tuple[1],
+                outdir=tmpdir,
+                min_dereplication_size=min_dereplication_size,
+                min_length=min_length,
+                min_merge_overlap=min_merge_overlap,
+                max_merge_diffs=max_merge_diffs,
+                strand_both=strand_both,
+                similarity_threshold_within=similarity_threshold_within,
+                by_length=True,
+                threads=threads,
+                paired=is_paired,
+            )
+            jobs[sname] = (vsearch_pairs, kwargs)
+        run_with_pool(jobs, log_level, workers, msg=msg)
 
-    logger.success("Building summary tables")
-    # write sample summary TSVs
-    for sname in fastq_dict:
-        build_sample_summary(sname, tmpdir)
-    concat_summaries(tmpdir)
+        logger.success("Building summary tables")
+        # write sample summary TSVs
+        for sname in fastq_dict:
+            build_sample_summary(sname, tmpdir)
+        concat_summaries(tmpdir)
+
+        # Store the fastq dict as json in the tmpfile in case we want to re-run with -f
+        # This is bootleg checkpointing for denovo assembly, bypassing cluster within
+        with open(subset_fq_dict_file, 'w') as json_file:
+            # Dump fastq dict with a custom encoder to handle pathlib.Path obj
+            json.dump(fastq_dict, json_file, indent=4, cls=_PathEncoder)
 
     #TODO: Add some logging messages here so people can see progress
     logger.info("Clustering consensus sequences across samples")
@@ -325,7 +363,7 @@ def _subset_fastqs(imap: Path | None,
             # Have to retain _at_ least the number of samples available, and at
             # most the number determined by dividing nsamples by npops.
             minmap = {pop:min(samples_per_pop, len(samps)) for pop, samps in imap.items()}
-    logger.warning(f"sample coverage minmap = {minmap}")
+    logger.success(f"# samples per population for denovo reference construction: {minmap}")
     if sum(minmap.values()) > nsamples:
         logger.error(f"imap file is selecting more than {nsamples} samples. Time to "
             "construct the pseudo-reference increases with increasing numbers of samples.")
@@ -339,11 +377,25 @@ def _subset_fastqs(imap: Path | None,
         for samp in samps:
             tmp_fastq_dict[str(samp)] = fastq_dict[samp]
 
-    logger.info("Subsetting populations for construction of pseudo-reference sequence.")
-    logger.info(f"Retaining samples: {list(tmp_fastq_dict.keys())}")
+    logger.success("Subsetting populations for construction of pseudo-reference sequence.")
+    logger.success(f"Retaining samples: {list(tmp_fastq_dict.keys())}")
     logger.debug(f"Retaining: {tmp_fastq_dict}")
 
     return tmp_fastq_dict
+
+
+# Helpers for reading/writing the stored fastq_dict json file
+class _PathEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Path):
+            return {"__type__": "pathlib.Path", "value": str(obj)}
+        # Standard JSON library converts tuples to lists automatically
+        return super().default(obj)
+
+def _path_decoder(obj):
+    if isinstance(obj, dict) and obj.get("__type__") == "pathlib.Path":
+        return Path(obj["value"])
+    return obj
 
 
 if __name__ == "__main__":

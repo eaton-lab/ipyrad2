@@ -75,7 +75,7 @@ def _setup_denovo_subparser(subparsers: argparse._SubParsersAction, header: str 
         help="Run c/t multi-threaded jobs concurrently. Larger -t reduces RAM and I/O. [default=3]",
     )
     tool.add_argument(
-        "-f", "--force", action="store_true",
+        "-f", "--force", action="count", default=0,
         help="Overwrite if out dir contains fastq file with identical name.",
     )
     tool.add_argument(
