@@ -234,11 +234,12 @@ def write_ordered_consensus_stream_to_file(
             # Take the longest sequence in this cluster as the representative
             cons = max([x[1] for x in records], key=len)
             fh.write(f">locus_{lid}\n{cons}\n")
-        prog.finished += 1
+
+            prog.finished += 1
+            prog.update()
+        prog.finished = nloci
         prog.update()
-    prog.finished = nloci
-    prog.update()
-    print("")
+        print("")
     logger.info(f"wrote denovo reference to {out_fa}")
 
 
