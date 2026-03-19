@@ -26,6 +26,15 @@ class TestRunPipeline(unittest.TestCase):
         self.assertEqual(out, b"HELLO")
         self.assertEqual(err, b"")
 
+    def test_basic(self) -> None:
+        # Stage1 prints "hello", Stage2 uppercases it.
+        s1 = ["echo", "hello world"]
+        s2 = ["cut", "-b", "1-100"]
+        rc, out, err = run_pipeline([s1, s2,])
+        self.assertEqual(rc, 0)
+        self.assertEqual(out, b"hello world\n")
+        self.assertEqual(err, b"")
+
     def test_stdin_text_roundtrip(self) -> None:
         payload = "XYZ-123\n"
         cat = _py("import sys; sys.stdout.write(sys.stdin.read())")
