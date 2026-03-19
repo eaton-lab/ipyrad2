@@ -24,6 +24,11 @@ from loguru import logger
 from .exceptions import IPyradError
 
 
+def expand_path(p: str | Path) -> Path:
+    """Returns an absolute path after expanding ~ and env variables"""
+    return Path(p).expanduser().absolute()
+
+
 def get_paths_list_from_fastq_str(fastq_paths: Union[Path, List[Path]]) -> List[Path]:
     """Expand fastq_paths str (e.g., 'data/*.gz') into List[Path].
     """
@@ -45,7 +50,7 @@ def get_paths_list_from_fastq_str(fastq_paths: Union[Path, List[Path]]) -> List[
     # for each Path in paths list expand into a list of Paths
     for path in paths:
         # expand to a full path
-        path = path.expanduser().absolute()
+        path = expand_path(path)
 
         # raise if path is a dir.
         if path.is_dir():
@@ -58,7 +63,7 @@ def get_paths_list_from_fastq_str(fastq_paths: Union[Path, List[Path]]) -> List[
             assert fastqs
         except (ValueError, AssertionError):
             raise IPyradError(f"No fastq data match input: {path}")
-        expanded.extend([Path(i).expanduser().resolve() for i in fastqs])
+        expanded.extend([expand_path(i) for i in fastqs])
     return list(set(expanded))
 
 
