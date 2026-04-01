@@ -1,6 +1,9 @@
-import datetime
 import sys
 import time
+
+from loguru import logger
+
+from .logger import is_log_level_enabled
 
 
 class ProgressBar(object):
@@ -12,25 +15,33 @@ class ProgressBar(object):
         self.start = (start if start else time.time())
         self.message = message
         self.finished = 0
+        self._visible = False
 
     @property
     def progress(self):
         return 100 * (self.finished / float(self.njobs))
 
-    @property
-    def elapsed(self):
-        return datetime.timedelta(seconds=int(time.time() - self.start))
-
-    def update(self):
-        # build the bar
+    def render(self) -> str:
+        """Return the current progress line without logger formatting."""
         hashes = '#' * int(self.progress / 5.)
         nohash = ' ' * int(20 - len(hashes))
-
-        # print to stderr
-        print("\r[{}] {:>3}% {} | {:<12} ".format(*[
+        return "[{}] {:>3}% | {:<12} ".format(*[
             hashes + nohash,
             int(self.progress),
-            self.elapsed,
             self.message,
-        ]), end="")
-        sys.stdout.flush()
+        ])
+
+    def update(self):
+        """Emit the current progress bar at INFO level with log-style prefix."""
+        if not is_log_level_enabled("INFO"):
+            return
+        self._visible = True
+        logger.bind(end="\r").opt(depth=1).info(self.render())
+
+    def close(self) -> None:
+        """Finish the transient progress bar line if it was visible."""
+        if not self._visible:
+            return
+        sys.stderr.write("\n")
+        sys.stderr.flush()
+        self._visible = False

@@ -2,17 +2,9 @@
 
 """Extract/subset sequences from HDF5 database and write to a supermatrix.
 
-Note that genome coordinates are 1-based, closed (inclusive): both
-start and end are included. This is a general standard in concordance
-with samtools. If a user requests scaff:100-250 the extracted region
-is 151 bp long. The wex tool handles this internally and will return
-the 151 bp region by slicing from the phymap using 0-based indices.
-
-Note that each row of the h5 phymap represent a delimited locus.
-
 Command
 -------
-$ ipyrad wex -d ... -w ... -o ... -m ... -f phy
+$ ipyrad2 analysis wex -d ... -w ... -o ... -O phy
 
 Output file example
 -------------------
@@ -25,7 +17,7 @@ D    CCAGGATCCGAAA...
 
 Stats file example
 ------------------
-CMD: ipyrad wex -d ... -o ... ...
+CMD: ipyrad2 analysis wex -d ... -o ... ...
 windows: Chr1:X-Y Chr1:A-B ...
 populations: A B C
 min_sample_coverage: A=1 B=2 C=3
@@ -39,8 +31,7 @@ nvariant_sites_in_windows_after_filtering: 20
 outfile: alignment.phy
 """
 
-from collections import defaultdict
-from typing import List, Dict, Tuple
+from typing import Dict, List, Tuple
 import sys
 from pathlib import Path
 import itertools
@@ -48,9 +39,13 @@ import numpy as np
 import pandas as pd
 import h5py
 from loguru import logger
-# from ..utils.exceptions import IPyradError
-from ipyrad2.utils.exceptions import IPyradError
-from .utils import parse_version_string
+
+from ...utils.exceptions import IPyradError
+from .sequence_common import build_sequence_imap_minmap
+from .sequence_common import load_sequence_scaffold_table
+from .sequence_common import normalize_sequence_population_inputs
+from .sequence_common import resolve_sequence_sample_subset
+
 
 NEXHEADER = """#nexus
 begin data;
@@ -58,9 +53,10 @@ begin data;
   format datatype=dna missing=N gap=- interleave=yes;
   matrix
 """
+REFERENCE_SAMPLE_NAME = "assembly_reference_sequence"
 
 
-class WindowExtracter:
+class WindowExtractor:
     """Tool to extract sequences from one or more loci and write to a
     concatenated sequence file in phylip or nexus format.
     """
@@ -73,22 +69,26 @@ class WindowExtracter:
         windows: str | List[str],
         min_sample_coverage: int | float,
         max_sample_missing: float,
-        exclude: List[str] | None,
-        imap: Dict[str, List[str]] | None,
-        minmap: Dict[str, int | float] | None,
-        stdout: bool,
-        force: bool,
+        exclude: List[str] | None = None,
+        include_reference: bool = False,
+        imap: Dict[str, List[str]] | None = None,
+        minmap: Dict[str, int | float] | None = None,
+        stdout: bool = False,
+        force: bool = False,
     ):
         # store params
+        imap, minmap = normalize_sequence_population_inputs(imap, minmap)
         self.data = data
         self.name = name
         self.outdir = Path(outdir).expanduser().absolute()
         self.out_format = out_format
         self.windows = [] if windows is None else [windows] if isinstance(windows, str) else list(windows)
         self.exclude = set(exclude if exclude else [])
+        self.include_reference = include_reference
         self.min_sample_coverage = min_sample_coverage
         self.max_sample_missing = min(1.0, max(0, max_sample_missing))
         self.stdout = stdout
+        self.force = force
 
         # data parsed from h5
         self.scaffold_table: pd.DataFrame = None
@@ -99,11 +99,22 @@ class WindowExtracter:
         self.phymap_windows: Dict[int, List[Tuple[int, int]]] = None
         self.imap: Dict[str, List[str]] = {}
         self.minmap: Dict[str, int] = {}
+        self.selected_windows: List[str] = []
 
         # fills: snames, sidxs, scaffold_table
-        self._get_scaffold_table()
-        self._get_snames_and_sidxs_subset(imap)
-        self._get_imap_minmap(imap, minmap)
+        self.scaffold_table = load_sequence_scaffold_table(self.data)
+        self.snames, self.sidxs, self.exclude = resolve_sequence_sample_subset(
+            self.data,
+            exclude=self.exclude,
+            include_reference=self.include_reference,
+            imap=imap,
+        )
+        self.imap, self.minmap = build_sequence_imap_minmap(
+            self.snames,
+            min_sample_coverage=self.min_sample_coverage,
+            imap=imap,
+            minmap=minmap,
+        )
 
         # run commands
     def _run(self):
@@ -116,103 +127,123 @@ class WindowExtracter:
 
     def _get_scaffold_table(self) -> None:
         """Store table with scaffold names and lengths in the order they are stored in H5."""
-        with h5py.File(self.data, 'r') as io5:
-            try:
-                if parse_version_string(str(io5.attrs["version"])) < parse_version_string("2.0"):
-                    raise IPyradError()
-            except (KeyError, IPyradError):
-                raise IPyradError("hdf5 database version must be >= 2.0")
-            scaff_names = io5.attrs["scaffold_names"]
-            scaff_lengths = io5.attrs["scaffold_lengths"]
-            self.scaffold_table = pd.DataFrame(
-                columns=["scaffold_name", "scaffold_length"],
-                data={"scaffold_name": scaff_names, "scaffold_length": scaff_lengths},
-            )
+        self.scaffold_table = load_sequence_scaffold_table(self.data)
 
     def _get_snames_and_sidxs_subset(self, imap) -> None:
-        with h5py.File(self.data, 'r') as io5:
-            # get sample names and get them as padded names
-            snames = io5.attrs["names"]
+        self.snames, self.sidxs, self.exclude = resolve_sequence_sample_subset(
+            self.data,
+            exclude=self.exclude,
+            include_reference=self.include_reference,
+            imap=imap,
+        )
 
-            # auto-update exclude from imap difference
-            if imap:  # is not None:
-                imapset = set(itertools.chain(*imap.values()))
-                self.exclude.update(set(snames).difference(imapset))
-                logger.debug(
-                    "dropping samples that are either not in the imap dict, "
-                    f"or are in the exclude list: {self.exclude}")
-
-            # filter to only the included samples, store their new indices (sidxs)
-            self.sidxs = [i for (i, j) in enumerate(snames) if j not in self.exclude]
-            self.snames = [j for (i, j) in enumerate(snames) if i in self.sidxs]
+    def _parse_imap_minmap_inputs(self, imap, minmap):
+        """Normalize imap/minmap inputs from dicts or files."""
+        return normalize_sequence_population_inputs(imap, minmap)
 
     def _get_imap_minmap(self, imap, minmap):
         """Set _imap and _minmap for seqarr filtering."""
-        # if no imap was entered then group all samples into one group
-        # and use the global mincov as the min coverage of that group.
-        if not imap:
-            self.imap = {'all': self.snames}
-            self.minmap = {'all': int(self.min_sample_coverage)}
-            logger.debug(f"sample coverage minmap = {self.minmap}")
+        self.imap, self.minmap = build_sequence_imap_minmap(
+            self.snames,
+            min_sample_coverage=self.min_sample_coverage,
+            imap=imap,
+            minmap=minmap,
+        )
 
-        # if imap was provided, then (1) check the names; (2) apply a
-        # min value to each group from minmap; or (3) raise errors.
-        else:
-            if minmap is None:
-                logger.info("No minmap provided. Assuming minimum one sample per population.")
-                minmap = {pop:1 for pop in imap.keys()}
-            if set(minmap) != set(imap):
-                raise IPyradError("imap and minmap keys must match.")
-            self.imap = imap.copy()
-            self.minmap = {}
-            for key in self.imap:
-                self.minmap[key] = minmap[key]
-            logger.debug(f"sample coverage minmap = {self.minmap}")
+    @staticmethod
+    def _windows_overlap(start1: int, end1: int, start2: int, end2: int) -> bool:
+        """Return True if 1-based inclusive windows overlap."""
+        return not (end1 < start2 or end2 < start1)
+
+    def _add_window(
+        self,
+        windows: Dict[str, List[Tuple[int, int]]],
+        selected_windows: List[str],
+        scaff: str,
+        start: int,
+        end: int,
+        source: str,
+    ) -> None:
+        """Validate and store a 1-based inclusive window."""
+        if start < 1 or end < start:
+            raise IPyradError(
+                f"Malformed window '{source}'. Windows must use valid positive coordinates."
+            )
+
+        existing = windows.setdefault(scaff, [])
+        for existing_start, existing_end in existing:
+            if self._windows_overlap(start, end, existing_start, existing_end):
+                raise IPyradError(
+                    f"windows cannot overlap. {source} overlaps "
+                    f"{scaff}:{existing_start}-{existing_end}"
+                )
+        existing.append((start, end))
+        selected_windows.append(f"{scaff}:{start}-{end}")
 
     def _get_phymap_windows(self) -> None:
         """Check each window for a matching scaffold name, and position within its bounds."""
-        windows: Dict[str, List[Tuple(int, int)]] = {}
+        windows: Dict[str, List[Tuple[int, int]]] = {}
+        selected_windows: List[str] = []
 
-        # rmincov must be float
+        # set names in index for easy fetching
+        t = self.scaffold_table.set_index("scaffold_name")
+
         if not self.windows:
-            raise IPyradError("must select one or more windows.")
+            logger.info(
+                "No windows specified; selecting the full length of all scaffolds. "
+                "Use -w to subset scaffold windows and -P to view scaffold names."
+            )
+            self.windows = [r".*"]
 
         # Load windows from bed file if they are passed in this way
         if len(self.windows) == 1:
             bedfile = Path(self.windows[0])
             if bedfile.exists():
                 logger.info(f"Loading windows from bed file: '{bedfile}'")
-                self.windows = self._get_windows_from_bed(bedfile)
-            else:
-                logger.debug(f"Loading windows from command line arguments")
+                for scaff, start, end in self._get_windows_from_bed(bedfile):
+                    if scaff not in t.index:
+                        raise IPyradError(
+                            f"'{scaff}' from {bedfile} does not match to any scaffold names. Check with '-P'."
+                        )
+                    self._add_window(
+                        windows,
+                        selected_windows,
+                        scaff,
+                        start,
+                        end,
+                        f"{scaff}:{start}-{end}",
+                    )
+                self.selected_windows = selected_windows
+                logger.debug(f"windows: {windows}")
+                nwindows = sum(len(i) for i in windows.values())
+                ws = 's' if nwindows > 1 else ''
+                ss = 's' if len(windows) > 1 else ''
+                logger.info(f"selected {nwindows} window{ws} from {len(windows)} scaffold{ss}")
+                scaff_names = t.index.tolist()
+                scaff_to_idx = {name: idx for idx, name in enumerate(scaff_names)}
+                self.phymap_windows = {scaff_to_idx[i]: j for i, j in windows.items()}
+                return
 
-        # set names in index for easy fetching
-        t = self.scaffold_table.set_index("scaffold_name")
+            logger.debug("Loading windows from command line arguments")
 
         # iterate over user-entered windows
         for window in self.windows:
 
             # sub-scaffold window
             if ":" in window:
-                scaff, region = window.split(":")
+                scaff, region = window.split(":", 1)
                 mask = t.index.str.fullmatch(pat=scaff, na=False)
-                scaff_hits = mask.sum()
-                if not scaff_hits:
-                    raise IPyradError(f"No scaffold names match '{window.split(':')[0]}'. Use -P to view scaffold names.")
-                if scaff_hits > 1:
+                scaffs = t.index[mask].tolist()
+                if not scaffs:
+                    raise IPyradError(
+                        f"No scaffold names match '{window.split(':')[0]}'. Use -P to view scaffold names."
+                    )
+                if len(scaffs) > 1:
                     raise IPyradError("Cannot use regex with ':'. List windows separately: -w Chr1:1-1000 Chr2:1-1000")
-                logger.debug(mask)
                 if region.count("-") != 1:
                     raise IPyradError(f"malformatted window '{window}'. Must be {{scaff}} or {{scaff}}:{{start}}-{{end}}")
                 start, end = [int(i) for i in region.split("-")]
-                if scaff not in windows:
-                    windows[scaff] = [(start, end)]
-                else:
-                    # check for overlap with other windows
-                    for (s, e) in windows[scaff]:#.items():
-                        if (start < e) & (end > start):
-                            raise IPyradError(f"windows cannot overlap. {window} & {windows}")
-                    windows[scaff].append((start, end))
+                self._add_window(windows, selected_windows, scaffs[0], start, end, window)
 
             # full scaffold window
             else:
@@ -223,11 +254,12 @@ class WindowExtracter:
                 for scaff in scaffs:
                     if scaff not in windows:
                         length = int(t.loc[scaff, "scaffold_length"])
-                        windows[scaff] = [(0, length)]
+                        self._add_window(windows, selected_windows, scaff, 1, length, window)
                     else:
                         raise IPyradError(f"windows cannot overlap. {window} & {windows}")
 
         # log to INFO and DEBUG
+        self.selected_windows = selected_windows
         logger.debug(f"windows: {windows}")
         nwindows = sum(len(i) for i in windows.values())
         ws = 's' if nwindows > 1 else ''
@@ -243,17 +275,27 @@ class WindowExtracter:
         }
 
 
-    def _get_windows_from_bed(self, bedfile: Path) -> Dict[str, Tuple[int, int]]:
-        """Read windows from bedfile for wex"""
-        windows = defaultdict(list)
-        with open(bedfile) as infile:
-            for line in infile:
+    def _get_windows_from_bed(self, bedfile: Path) -> List[Tuple[str, int, int]]:
+        """Read windows from a BED file.
+
+        BED uses 0-based, half-open coordinates. These are converted to the
+        extractor's 1-based inclusive region semantics.
+        """
+        windows: List[Tuple[str, int, int]] = []
+        with open(bedfile, "r", encoding="utf-8") as infile:
+            for lineno, line in enumerate(infile, start=1):
                 # Ignore comments and blank lines
                 if line.startswith("#") or line.strip() == "":
                     continue
 
                 chrom, start, end, *rest = line.rstrip("\t\n").split()
-                windows[chrom].append((start, end))
+                start0 = int(start)
+                end0 = int(end)
+                if start0 < 0 or end0 <= start0:
+                    raise IPyradError(
+                        f"Malformed BED window at line {lineno}: {bedfile}"
+                    )
+                windows.append((chrom, start0 + 1, end0))
         return windows
 
 
@@ -325,7 +367,7 @@ class WindowExtracter:
             pop_mincov = self.minmap[pop]
             pop_sidxs = [self.snames.index(i) for i in pop_snames]
             pop_arr = seqs[pop_sidxs, :]
-            mask += np.sum(pop_arr != 78, axis=0) <= pop_mincov
+            mask += np.sum(pop_arr != 78, axis=0) < pop_mincov
         seqs = seqs[:, np.invert(mask)]
         if not seqs.size:
             raise IPyradError("Selected windows contain zero data after filtering for coverage.")
@@ -339,16 +381,86 @@ class WindowExtracter:
         # todo: log.debug the dropped samples
         if not fnames:
             raise IPyradError("No samples passed max_sample_missing filter.")
-        return fnames, seqs
+        return fnames, seqs[mask, :]
+
+    def _get_output_path(self, suffix: str) -> Path:
+        return self.outdir / f"{self.name}.{suffix}"
+
+    def _get_stats_path(self) -> Path:
+        return self.outdir / f"{self.name}.stats.tsv"
+
+    def _prepare_output_paths(
+        self,
+        suffix: str | None,
+        *,
+        write_stats: bool,
+        return_locus: bool = False,
+    ) -> Path | str:
+        paths: List[Path] = []
+
+        if suffix and not self.stdout and not return_locus:
+            paths.append(self._get_output_path(suffix))
+        if write_stats:
+            paths.append(self._get_stats_path())
+
+        if paths:
+            self.outdir.mkdir(exist_ok=True)
+            if not self.force:
+                existing = next((path for path in paths if path.exists()), None)
+                if existing is not None:
+                    raise IPyradError(
+                        f"Output file already exists: {existing}. Use --force to overwrite."
+                    )
+
+        if self.stdout:
+            return "STDOUT"
+        if return_locus:
+            return "RETURN"
+        if suffix is None:
+            raise IPyradError("Internal error: missing output suffix.")
+        return self._get_output_path(suffix)
+
+    def _build_stats_dict(self, fnames, fseqarr, outfile):
+        """Build stats for the extracted windows without writing them."""
+        return {
+            "nsamples_before_filtering": len(self.snames),
+            "nsites_in_windows_before_filtering": self.seqarr.shape[1],
+            "nvariants_in_windows_before_filtering": count_snps(self.seqarr),
+            "nsamples_after_filtering": len(fnames),
+            "nsites_in_windows_after_filtering": fseqarr.shape[1],
+            "nvariants_in_windows_after_filtering": count_snps(fseqarr),
+            "infile": self.data,
+            "outfile": outfile,
+            "windows": self.selected_windows,
+            "imap": self.imap,
+            "min_sample_coverage_filter": self.minmap,
+            "max_sample_missing_filter": self.max_sample_missing,
+        }
+
+    def _write_stats_dict(self, stats_dict, stats_file: Path | None = None) -> None:
+        """Write a precomputed stats dictionary to disk."""
+        stats_path = self._get_stats_path() if stats_file is None else Path(stats_file)
+        self.outdir.mkdir(exist_ok=True)
+        with open(stats_path, "w", encoding="utf-8") as out:
+            for key, val in stats_dict.items():
+                out.write(f"{key}\t{val}\n")
+        logger.info(f"wrote stats/log to: {stats_path}")
 
     def _write_to_phy(self, 
                       write_stats: bool = True,
                       prefix: str = None,
                       bpp_format: bool = False,
-                      return_locus: bool = False) -> None:
+                      return_locus: bool = False,
+                      return_alignment: bool = False,
+                      return_stats: bool = False):
         """Writes the .seqarr matrix as a string to .outfile."""
         # get the filtered alignment
         fnames, fseqarr = self._run()
+        outfile = self._prepare_output_paths(
+            "phy",
+            write_stats=write_stats,
+            return_locus=return_locus,
+        )
 
         # get padded names
         longname = max(len(i) for i in fnames)
@@ -366,30 +478,45 @@ class WindowExtracter:
         nsites = fseqarr.shape[1]
 
         bpp_sep = "\n" if bpp_format else ""
+        alignment = f"{ntaxa} {nsites}\n{bpp_sep}{'\n'.join(phy)}\n"
+        stats_dict = self._build_stats_dict(fnames, fseqarr, outfile)
+
+        if return_alignment:
+            if return_stats:
+                return alignment, stats_dict
+            return alignment
+
         # write to stdout
-        if self.stdout:
+        if return_locus:
+            pass
+        elif self.stdout:
             logger.debug("wrote alignment to stdout")
-            sys.stdout.write(f"{ntaxa} {nsites}\n{bpp_sep}{'\n'.join(phy)}\n")
-            outfile = "STDOUT"
-        elif return_locus:
-            outfile = "/dev/null"
-            return f"{ntaxa} {nsites}\n{bpp_sep}{'\n'.join(phy)}\n"
+            sys.stdout.write(alignment)
         else:
-            self.outdir.mkdir(exist_ok=True)
-            outfile = self.outdir / f"{self.name}.phy"
-            with open(outfile, 'w') as out:
-                out.write(f"{ntaxa} {nsites}\n{bpp_sep}")
-                out.write("\n".join(phy))
+            with open(outfile, 'w', encoding="utf-8") as out:
+                out.write(alignment.rstrip("\n"))
             logger.info(f"wrote alignment ({ntaxa}, {nsites}) to: {outfile}")
 
         if write_stats:
-            self._write_stats(fnames, fseqarr, outfile)
+            self._write_stats_dict(stats_dict)
 
+        if return_locus and return_stats:
+            return alignment, stats_dict
+        if return_locus:
+            return alignment
+        if return_stats:
+            return stats_dict
 
-    def _write_to_nex(self) -> None:
+    def _write_to_nex(
+        self,
+        write_stats: bool = True,
+        return_alignment: bool = False,
+        return_stats: bool = False,
+    ):
         """Writes concatenated alignment to nex format..."""
         # get the filtered alignment
         fnames, fseqarr = self._run()
+        outfile = self._prepare_output_paths("nex", write_stats=write_stats)
 
         # get padded names
         longname = max(len(i) for i in fnames)
@@ -412,42 +539,57 @@ class WindowExtracter:
                 lines.append(f"  {name}{seq}\n")
             lines.append("\n")
         lines.append("  ;\nend;")
+        alignment = "".join(lines)
+        stats_dict = self._build_stats_dict(fnames, fseqarr, outfile)
+
+        if return_alignment:
+            if return_stats:
+                return alignment, stats_dict
+            return alignment
 
         # write to stdout
         if self.stdout:
             logger.debug("wrote alignment to stdout")
-            sys.stdout.write("".join(lines))
-            outfile = "STDOUT"
+            sys.stdout.write(alignment)
         else:
-            self.outdir.mkdir(exist_ok=True)
-            outfile = self.outdir / f"{self.name}.nex"
-            with open(outfile, 'w') as out:
-                out.write("".join(lines))
+            with open(outfile, 'w', encoding="utf-8") as out:
+                out.write(alignment)
             logger.info(f"wrote alignment ({ntaxa}, {nsites}) to: {outfile}")
-        # write stats
-        self._write_stats(fnames, fseqarr, outfile)
+        if write_stats:
+            self._write_stats_dict(stats_dict)
+        if return_stats:
+            return stats_dict
+
+    def _write_to_fa(self, write_stats: bool = True, return_stats: bool = False):
+        """Write the extracted alignment as FASTA."""
+        fnames, fseqarr = self._run()
+        outfile = self._prepare_output_paths("fa", write_stats=write_stats)
+
+        records = []
+        for idx, name in enumerate(fnames):
+            seq = fseqarr[idx].tobytes().decode("utf-8")
+            records.append(f">{name}\n{seq}")
+
+        contents = "\n".join(records) + "\n"
+        stats_dict = self._build_stats_dict(fnames, fseqarr, outfile)
+        if self.stdout:
+            logger.debug("wrote alignment to stdout")
+            sys.stdout.write(contents)
+        else:
+            with open(outfile, "w", encoding="utf-8") as out:
+                out.write(contents)
+            logger.info(
+                f"wrote alignment ({len(fnames)}, {fseqarr.shape[1]}) to: {outfile}"
+            )
+
+        if write_stats:
+            self._write_stats_dict(stats_dict)
+        if return_stats:
+            return stats_dict
 
     def _write_stats(self, fnames, fseqarr, outfile):
         """Write stats for the extracted windows."""
-        stats_file = self.outdir / f"{self.name}.stats.tsv"
-        stats_dict = {
-            "nsamples_before_filtering": len(self.snames),
-            "nsites_in_windows_before_filtering": self.seqarr.shape[1],
-            "nvariants_in_windows_before_filtering": count_snps(self.seqarr),
-            "nsamples_after_filtering": len(fnames),
-            "nsites_in_windows_after_filtering": fseqarr.shape[1],
-            "nvariants_in_windows_afater_filtering": count_snps(fseqarr),
-            "infile": self.data,
-            "outfile": outfile,
-            "windows": self.windows, #" ".join(self.windows),
-            "imap": self.imap,
-            "min_sample_coverage_filter": self.minmap,
-            "max_sample_missing_filter": self.max_sample_missing,
-        }
-        with open(stats_file, "w") as out:
-            for key, val in stats_dict.items():
-                out.write(f"{key}\t{val}\n")
-        logger.info(f"wrote stats/log to: {stats_file}")
+        self._write_stats_dict(self._build_stats_dict(fnames, fseqarr, outfile))
 
 
 def count_snps(arr):
@@ -457,7 +599,7 @@ def count_snps(arr):
     return int(np.sum(multi_cols))
 
 
-def run_window_extracter(**kwargs):
+def run_window_extractor(**kwargs):
     """command line wrapper for window-extracter.
 
     Parameters:
@@ -469,7 +611,7 @@ def run_window_extracter(**kwargs):
     outdir: Path | str
         Dir for output files. Created if it doesn't exist.
     out_format: str
-        Format to write the alignments phy (default) or nex
+        Format to write the alignments phy (default), nex, or fa.
     windows: str | List[str]:
         Subsample scaffold(s) by index number. If unsure, leave this
         empty when loading a file and then check the .scaffold_table
@@ -506,7 +648,7 @@ def run_window_extracter(**kwargs):
     """
     request_table = kwargs.pop("print_scaffold_table")
 
-    tool = WindowExtracter(**kwargs)
+    tool = WindowExtractor(**kwargs)
 
     if request_table:
         tool.scaffold_table.to_csv(sys.stdout, sep="\t")
@@ -516,8 +658,10 @@ def run_window_extracter(**kwargs):
         tool._write_to_phy()
     elif tool.out_format == "nex":
         tool._write_to_nex()
+    elif tool.out_format == "fa":
+        tool._write_to_fa()
     else:
-        logger.error(f"Unrecognized output format: {tool.out_format}")
+        raise IPyradError(f"Unrecognized output format: {tool.out_format}")
 
     sys.exit(0)
 
@@ -537,7 +681,7 @@ if __name__ == "__main__":
         # help(io5.create_dataset)
 
 
-    # tool = WindowExtracter(
+    # tool = WindowExtractor(
     #     data=h5,
     #     name='test',
     #     outdir=Path("/tmp/WEX"),
@@ -552,8 +696,9 @@ if __name__ == "__main__":
     # )
     # tool._write_to_phy()
 
+
+
     # print(tool.scaffold_table)
     # arr, stats = tool.run(return_data=True)
     # print(stats.T)
     # print(arr)
-

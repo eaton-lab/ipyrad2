@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 
-"""Write a SNPs database file.
+"""Write the SNP datasets into the final assemble HDF5 output.
 
 snpsmap
 -------
 description: The map of SNP positions on RAD loci and genome scaffolds.
 Loci, scaffolds, and positions are all stored 0-indexed.
-dtype: np.uint8
+dtype: adaptive uint32/uint64
 shape: (nsnps, 5)
 attrs["columns"]: ["loc", "loc_idx", "loc_pos", "scaff", "pos"]
 attrs["indexing"]: [0, 0, 0, 0, 0]
@@ -36,9 +36,12 @@ import h5py
 import pandas as pd
 import numpy as np
 from loguru import logger
+from .hdf5_utils import choose_hdf5_cache_settings
+from .hdf5_utils import choose_unsigned_int_dtype
+from .hdf5_utils import format_bytes
+from .hdf5_utils import get_fai_values
 
-
-# IUPAC ambiguity code for heterozygous SNPs (unordered pairs)
+# IUPAC ambiguity codes for heterozygous SNPs (unordered allele pairs).
 _IUPAC = {
     frozenset(("A", "G")): "R",
     frozenset(("C", "T")): "Y",
@@ -49,31 +52,16 @@ _IUPAC = {
 }
 
 
-def get_fai_values(reference: Path, key: str) -> np.ndarray:
-    """Returns the fai table from the reference as an array."""
-    fai = reference.with_suffix(reference.suffix + ".fai")
-    columns = ['scaffold', 'length', 'sumsize', 'a', 'b']
-    table = pd.read_csv(fai, names=columns, sep="\t")
-    return table[key].values
-
-
-# UPDATE THIS: CHATGPT MADE. CHUNKS SHOULD JUST USE TARGET MB. MAYBE 512MB
 def _choose_chunk_snps(
     nsamples: int,
     target_mb: int = 16,
-    # typical_window: int = 100_000,
-    # min_snps: int = 8_192,
-    # max_snps: int = 262_144,
+    min_snps: int = 4_096,
+    max_snps: int = 262_144,
 ) -> int:
-    """#SNPs per chunk so each genos chunk ≈ target_mb and aligns with your window."""
+    """Choose the SNP-axis chunk size for the read-optimized HDF5 datasets."""
     bytes_per_snp = max(1, nsamples * 3)             # uint8 * 3 planes
     by_size = int((target_mb * 1024 * 1024) // bytes_per_snp)
-    return by_size
-    # snps = min(max(by_size, min_snps), max_snps)
-    # # bias toward your window (don’t exceed it much)
-    # snps = min(snps, typical_window)
-    # # round to nice boundary
-    # return max(4096, (snps // 4096) * 4096)
+    return max(min_snps, min(by_size, max_snps))
 
 
 def write_snps_hdf5(
@@ -81,41 +69,54 @@ def write_snps_hdf5(
     outdir: Path,
     snames: List[str],
     reference: Path,
-):
+) -> int:
     """Stream VCF→HDF5 with read-optimized chunking."""
     # paths
     database = outdir / f"{name}.hdf5"
     vcf_path = outdir / f"{name}.vcf.gz"
     loci_bed = outdir / f"{name}.bed"
 
-    # sorted names
-    # TODO: add reference?
-    # snames = ["reference"] + sorted(snames)
+    # Keep only empirical samples here; the sequence HDF5 already stores the
+    # reference row separately in the `phy` alignment dataset.
     snames = sorted(snames)
     nsamples = len(snames)
 
     # pick chunk size along SNP axis (tuned for read-many)
-    chunk_snps = _choose_chunk_snps(nsamples, target_mb=256)#, typical_window=100_000)
+    chunk_snps = _choose_chunk_snps(nsamples, target_mb=128, max_snps=131_072)
+    bed_index, scaff2idx = load_bed_index_nonoverlap(loci_bed)
+    nloci = sum(len(starts) for starts, _ends, _idxs in bed_index.values())
+    max_locus_length = max(
+        (int((ends - starts).max()) for starts, ends, _idxs in bed_index.values() if len(starts)),
+        default=0,
+    )
+    map_dtype = choose_unsigned_int_dtype(
+        max(
+            nloci,
+            max_locus_length,
+            len(scaff2idx) - 1,
+            max((int(i) for i in get_fai_values(reference, "length")), default=0),
+        )
+    )
 
     # HDF5 file/open options
-    kwargs = dict(libver="latest", rdcc_nbytes=512*1024*1024, rdcc_nslots=2_000_003)
+    kwargs = choose_hdf5_cache_settings()
+    string_dtype = h5py.string_dtype(encoding="utf-8")
+    logger.debug(
+        "snps writer config: chunk_snps={}, cache={}, cache_slots={}, map_dtype={}, nloci={}",
+        chunk_snps,
+        format_bytes(int(kwargs["rdcc_nbytes"])),
+        kwargs["rdcc_nslots"],
+        map_dtype.name,
+        nloci,
+    )
     with h5py.File(database, "a", **kwargs) as io5:
-        # ---- metadata already stored by write_seq.py ----
-        # scaff_names = [str(i) for i in get_fai_values(reference, "scaffold")]
-        # scaff_lens  = [int(i) for i in get_fai_values(reference, "length")]
-        # io5.attrs["version"] = 2.0
-        # io5.attrs["names"] = snames
-        # io5.attrs["reference"] = str(reference)
-        # io5.attrs["scaffold_names"] = scaff_names
-        # io5.attrs["scaffold_lengths"] = scaff_lens
-
         # ---- datasets (extendable along SNP axis) ----
         # SNP map: (n_snps, 5)
         snpsmap = io5.create_dataset(
             "snpsmap",
             shape=(0, 5),
             maxshape=(None, 5),
-            dtype=np.uint64,
+            dtype=map_dtype,
             chunks=(chunk_snps, 5),
             compression="gzip", compression_opts=4, shuffle=True
         )
@@ -131,6 +132,7 @@ def write_snps_hdf5(
             chunks=(nsamples, chunk_snps, 3),
             compression="gzip", compression_opts=4, shuffle=True
         )
+        genos.attrs["names"] = np.array(snames, dtype=string_dtype)
 
         # Reference ord per SNP: (n_snps,)
         reference_ord = io5.create_dataset(
@@ -143,7 +145,7 @@ def write_snps_hdf5(
         )
 
         # --- Streaming buffers (one chunk per flush) ---
-        buf_map = np.empty((chunk_snps, 5), dtype=np.uint64)
+        buf_map = np.empty((chunk_snps, 5), dtype=map_dtype)
         buf_gen = np.empty((nsamples, chunk_snps, 3), dtype=np.uint8)
         buf_ref = np.empty((chunk_snps,), dtype=np.uint8)
         fill = 0
@@ -165,14 +167,20 @@ def write_snps_hdf5(
             total = new_total
 
         # drain generator
-        it = iter_vcf_filtered_snps_with_bed(vcf_path, loci_bed, snames)
+        it = iter_vcf_filtered_snps_with_bed(
+            vcf_path,
+            loci_bed,
+            snames,
+            bed_index=bed_index,
+            scaff2idx=scaff2idx,
+        )
         for bed_idx, var_idx_in_bed, offset_in_bed, scaff_idx, pos0, scaff_name, REF, ALT, QUAL, GT in it:
             # map row
-            buf_map[fill, 0] = np.uint64(bed_idx)
-            buf_map[fill, 1] = np.uint64(var_idx_in_bed)
-            buf_map[fill, 2] = np.uint64(offset_in_bed)
-            buf_map[fill, 3] = np.uint64(scaff_idx)
-            buf_map[fill, 4] = np.uint64(pos0)
+            buf_map[fill, 0] = bed_idx
+            buf_map[fill, 1] = var_idx_in_bed
+            buf_map[fill, 2] = offset_in_bed
+            buf_map[fill, 3] = scaff_idx
+            buf_map[fill, 4] = pos0
 
             # genotypes come as (nsamples,3) → place into current SNP column
             buf_gen[:, fill, :] = GT
@@ -186,7 +194,11 @@ def write_snps_hdf5(
                 fill = 0
         flush(fill)
         io5.attrs["nsnps"] = int(total)
-    logger.debug(f"wrote snps dataset to {database} (nsnps={total:,})")
+    if total == 0:
+        logger.info("no SNPs passed final filtering; wrote empty SNP datasets to {}", database)
+    else:
+        logger.debug(f"wrote snps dataset to {database} (nsnps={total:,})")
+    return int(total)
 
 
 def load_bed_index_nonoverlap(bed_path: Union[str, Path]) -> Tuple[Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]], Dict[str, int]]:
@@ -200,9 +212,6 @@ def load_bed_index_nonoverlap(bed_path: Union[str, Path]) -> Tuple[Dict[str, Tup
         na_filter=False,
     )
     df = df[[0, 1, 2]].rename(columns={0: "chrom", 1: "start", 2: "end"})
-
-    # unneccesary
-    # df = df[df["start"].notna() & df["end"].notna() & (df["start"] >= 0) & (df["end"] > df["start"])]
     df["bed_idx"] = df.index.to_numpy()
 
     # iterate over chroms filling bed_index and chrom_order dicts
@@ -289,6 +298,8 @@ def iter_vcf_filtered_snps_with_bed(
     vcf_path: Union[str, Path],
     bed_path: Union[str, Path],
     snames: List[str],
+    bed_index: Optional[Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]] = None,
+    scaff2idx: Optional[Dict[str, int]] = None,
 ) -> Iterator[Tuple[int, int, int, int, int, str, str, str, str, np.ndarray]]:
     """Iterate a VCF(.gz) and yield records with FILTER==PASS and NOT 'INDEL' in INFO.
 
@@ -307,7 +318,8 @@ def iter_vcf_filtered_snps_with_bed(
       - ValueError if any `snames` are absent from the VCF header
       - ValueError if a record lacks a GT field in FORMAT
     """
-    bed_index, scaff2idx = load_bed_index_nonoverlap(bed_path)
+    if bed_index is None or scaff2idx is None:
+        bed_index, scaff2idx = load_bed_index_nonoverlap(bed_path)
 
     # per-interval counters (for var_idx_in_bed)
     counters: Dict[str, np.ndarray] = {
@@ -408,32 +420,3 @@ def iter_vcf_filtered_snps_with_bed(
             offset_in_bed = int(pos0 - starts[i])
 
             yield int(bedix[i]), var_idx_in_bed, offset_in_bed, scaff_idx, pos0, scaff_name, REF, ALT, QUAL, GT
-
-
-if __name__ == "__main__":
-
-    from ipyrad2.utils.logger import set_log_level
-    set_log_level("DEBUG")
-    REF = Path("/home/deren/Documents/ipyrad-tests/examples/Atub-genome/AmaTu_v01_no00_renamed.fa")
-    VCF = Path("/home/deren/Documents/ipyrad-tests/Ama-out/assembly.vcf.gz")
-    BED = Path("/home/deren/Documents/ipyrad-tests/Ama-out/assembly.bed")
-    # bdict = load_bed_index_nonoverlap(BED)
-    # print(bdict["A_tuberculatus_Chr01"])
-    # ii = iter_vcf_with_bed(VCF, bdict, False)
-    snames = [
-        "SLH_AL_0072-contemp",
-        "SLH_AL_0077-contemp",
-        "SLH_AL_0078-contemp",
-        "SLH_AL_0079-contemp",
-        "SLH_AL_0080-contemp",
-        "SLH_AL_0084-contemp",
-        "SLH_AL_0086-contemp",
-    ]
-
-    # ii = iter_vcf_filtered_snps_with_bed(VCF, BED, snames)
-
-    # for i in range(10):
-    #     data = next(ii)
-    #     print(data)
-
-    write_snps_hdf5("TEST3", Path("/tmp"), snames, REF, VCF, BED, )

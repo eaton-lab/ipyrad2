@@ -6,7 +6,7 @@ from loguru import logger
 
 
 
-def test_func(a, b):
+def _test_func(a, b):
     # time.sleep(2)
     raise ValueError("x")
     return a + b
@@ -21,12 +21,14 @@ if __name__ == "__main__":
     res = run_with_pool(jobs, "INFO", 4)
     print(res)
 
+
+
     # jobs = {
     #     "A": {"a": 3, "b": 4},
     #     "B": {"a": 3, "b": 8},
     # }
     # try:
-    #     res = run_with_pool(test_func, jobs, 4)
+    #     res = run_with_pool(_test_func, jobs, 4)
     #     print(res)
     # except KeyboardInterrupt:
     #     print('stopped gracefully')

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"convert loci file to bpp format input files"
+"""BPP analysis helpers for writing input files, running jobs, and summarizing results."""
 
 import os
 import sys
@@ -9,18 +9,23 @@ import time
 import copy
 import tempfile
 import re
-import requests
 import itertools
+import platform
+import shutil
 import subprocess as sps
+import tarfile
+import zipfile
+from pathlib import Path
+import requests
 
 import numpy as np
 import pandas as pd
 
 from types import SimpleNamespace
-from ..analysis.locus_extracter import LocusExtracter
-from ..utils.exceptions import IPyradError
-from ..utils.parallel import run_with_pool
-from ..utils.progress import ProgressBar
+from ..extractors.locus_extractor import LocusExtractor
+from ...utils.exceptions import IPyradError
+from ...utils.parallel import run_with_pool
+from ...utils.progress import ProgressBar
 
 _MISSING_SCIPY = """
 You are missing required packages to use ipa.bpp().
@@ -49,15 +54,203 @@ except ImportError:
 
 
 DELIM = "___"
+BPP_DOCS_VERSION = "4.8.6"
+_BPP_BINARY_SPECS = {
+    ("linux", "x86_64"): ("4.8.6", "bpp-4.8.6-linux-x86_64.tar.gz", "bpp-4.8.6-linux-x86_64/bin/bpp"),
+    ("linux", "aarch64"): ("4.8.6", "bpp-4.8.6-linux-aarch64.tar.gz", "bpp-4.8.6-linux-aarch64/bin/bpp"),
+    ("darwin", "arm64"): ("4.8.6", "bpp-4.8.6-macos-aarch64.tar.gz", "bpp-4.8.6-macos-aarch64/bin/bpp"),
+    ("darwin", "x86_64"): ("4.8.4", "bpp-4.8.4-macos-x86_64.tar.gz", "bpp-4.8.4-macos-x86_64/bin/bpp"),
+    ("win32", "x86_64"): ("4.8.6", "bpp-4.8.6-win-x86_64.zip", "bpp-4.8.6-win-x86_64/bpp.exe"),
+}
+_THETA_TAU_PRIOR_FAMILIES = {"gamma", "invgamma"}
+_PHI_PRIOR_FAMILIES = {"beta"}
+
+
+def _normalize_machine(machine: str) -> str:
+    """Normalize architecture strings to the values used by bundled BPP binaries."""
+    machine = machine.lower()
+    aliases = {
+        "amd64": "x86_64",
+        "x64": "x86_64",
+        "arm64": "arm64",
+        "aarch64": "aarch64",
+    }
+    return aliases.get(machine, machine)
+
+
+def _bpp_target_key() -> tuple[str, str]:
+    """Return the `(platform, machine)` key used for bundled BPP binaries."""
+    plat = sys.platform
+    if plat.startswith("linux"):
+        plat = "linux"
+    elif plat == "darwin":
+        plat = "darwin"
+    elif plat.startswith("win"):
+        plat = "win32"
+    return plat, _normalize_machine(platform.machine())
+
+
+def _get_bpp_download_spec() -> SimpleNamespace:
+    """Return the bundled BPP binary download metadata for the current target."""
+    key = _bpp_target_key()
+    if key not in _BPP_BINARY_SPECS:
+        raise IPyradError(
+            "No bundled BPP binary is available for platform={} arch={}.".format(*key)
+        )
+    version, archive_name, binary_relpath = _BPP_BINARY_SPECS[key]
+    return SimpleNamespace(
+        version=version,
+        archive_name=archive_name,
+        binary_relpath=binary_relpath,
+        url=f"https://github.com/bpp/bpp/releases/download/v{version}/{archive_name}",
+        archive_path=Path(tempfile.gettempdir()) / archive_name,
+        extract_dir=Path(tempfile.gettempdir()),
+        binary_path=Path(tempfile.gettempdir()) / binary_relpath,
+    )
+
+
+def _coerce_positive_number(value, label: str) -> float:
+    """Parse one prior parameter as a positive float."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise IPyradError(f"{label} must be numeric.") from exc
+    if parsed <= 0:
+        raise IPyradError(f"{label} must be > 0.")
+    return parsed
+
+
+def _normalize_prior_spec(name: str, value) -> tuple[str, float, float]:
+    """Normalize legacy and explicit prior tuples to `(family, a, b)`."""
+    if not isinstance(value, tuple):
+        raise IPyradError(f"{name} must be provided as a tuple.")
+
+    if name in {"thetaprior", "tauprior"}:
+        valid_families = _THETA_TAU_PRIOR_FAMILIES
+        default_family = "invgamma"
+    elif name == "phiprior":
+        valid_families = _PHI_PRIOR_FAMILIES
+        default_family = "beta"
+    else:
+        raise IPyradError(f"Unknown prior name: {name}")
+
+    if len(value) == 2:
+        family = default_family
+        a, b = value
+    elif len(value) == 3 and isinstance(value[0], str):
+        family = value[0].lower()
+        a, b = value[1:]
+    else:
+        raise IPyradError(
+            f"{name} must be a 2-tuple `(a, b)` or a 3-tuple `(family, a, b)`."
+        )
+
+    if family not in valid_families:
+        valid = ", ".join(sorted(valid_families))
+        raise IPyradError(f"{name} prior family must be one of: {valid}")
+    return family, _coerce_positive_number(a, f"{name}[0]"), _coerce_positive_number(b, f"{name}[1]")
+
+
+def _format_prior_spec(prior: tuple[str, float, float], *, estimate_theta: bool = False) -> str:
+    """Render a normalized prior tuple for the BPP control file."""
+    family, a, b = prior
+    rendered = f"{family} {a:g} {b:g}"
+    if estimate_theta:
+        rendered = f"{rendered} E"
+    return rendered
+
+
+def _draw_gamma_from_range(min_value: float, max_value: float) -> tuple[float, float]:
+    """Approximate a bounded uncertainty range with a gamma(a, b-rate) prior."""
+    min_value = _coerce_positive_number(min_value, "minimum value")
+    max_value = _coerce_positive_number(max_value, "maximum value")
+    if max_value <= min_value:
+        raise IPyradError("maximum value must be greater than minimum value.")
+    mean = (max_value + min_value) / 2.0
+    var = ((max_value - min_value) ** 2) / 16.0
+    return mean ** 2 / var, mean / var
+
+
+def _sample_bpp_prior(prior: tuple[str, float, float], *, size: int, random_state) -> np.ndarray:
+    """Sample from a normalized BPP prior specification."""
+    family, a, b = prior
+    if family == "gamma":
+        return ss.gamma.rvs(a, scale=1 / b, size=size, random_state=random_state)
+    if family == "invgamma":
+        return ss.invgamma.rvs(a, scale=b, size=size, random_state=random_state)
+    if family == "beta":
+        return ss.beta.rvs(a, b, size=size, random_state=random_state)
+    raise IPyradError(f"Unsupported prior family: {family}")
+
+
+def _bpp_prior_pdf(prior: tuple[str, float, float], xvals: np.ndarray) -> np.ndarray:
+    """Evaluate the BPP prior density across x-values."""
+    family, a, b = prior
+    if family == "gamma":
+        return ss.gamma.pdf(xvals, a, scale=1 / b)
+    if family == "invgamma":
+        return ss.invgamma.pdf(xvals, a, scale=b)
+    if family == "beta":
+        return ss.beta.pdf(xvals, a, b)
+    raise IPyradError(f"Unsupported prior family: {family}")
+
+
+def _bpp_prior_xvals(prior: tuple[str, float, float], *, lower: float = 0.005, upper: float = 0.995, nvalues: int = 100) -> np.ndarray:
+    """Return plotting x-values for a normalized BPP prior."""
+    family, a, b = prior
+    if family == "gamma":
+        return np.linspace(ss.gamma.ppf(lower, a, scale=1 / b), ss.gamma.ppf(upper, a, scale=1 / b), nvalues)
+    if family == "invgamma":
+        return np.linspace(ss.invgamma.ppf(lower, a, scale=b), ss.invgamma.ppf(upper, a, scale=b), nvalues)
+    if family == "beta":
+        return np.linspace(ss.beta.ppf(lower, a, b), ss.beta.ppf(upper, a, b), nvalues)
+    raise IPyradError(f"Unsupported prior family: {family}")
+
+
+def _resolve_bpp_binary_version(binary: str) -> str | None:
+    """Return a best-effort version string for the resolved BPP binary."""
+    try:
+        proc = sps.run(
+            [binary, "--help"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, sps.SubprocessError):
+        return None
+    text = f"{proc.stdout}\n{proc.stderr}"
+    match = re.search(r"\bv?(\d+\.\d+\.\d+)\b", text)
+    return match.group(1) if match else None
+
+
+def _map_bpp_columns_to_node_ids(tree, columns) -> dict[str, int]:
+    """Map BPP parameter column names onto MRCA node indexes in the guide tree."""
+    mapped = {}
+    for col in columns:
+        tips = col.split(DELIM)[1:]
+        if not tips:
+            raise IPyradError(f"Cannot map BPP parameter without tip labels: {col}")
+        mapped[col] = tree.get_mrca_node(*tips).idx
+    return mapped
+
+
+def _assign_tree_distances_from_divergence_row(tree, divergence_row: pd.Series) -> None:
+    """Set branch lengths on a tree from absolute divergence times at each node."""
+    for node in tree.treenode.traverse("postorder"):
+        if node.is_leaf():
+            # toytree nodes expose `.dist` as read-only; update the private
+            # branch-length field on the copied tree we are annotating.
+            node._dist = float(divergence_row.loc[node.up.idx])
+        elif node.up:
+            parent_time = float(divergence_row.loc[node.up.idx])
+            node_time = float(divergence_row.loc[node.idx])
+            node._dist = max(0.0, parent_time - node_time)
 
 
 class Bpp(object):
     """
-    BPP analysis utility function for creating input files, setting parameters, 
-    and submitting bpp jobs to run on a parallel cluster. Converts loci 
-    file format data to bpp file format, i.e., concatenated phylip-like
-    format, and produces imap and ctl input files for bpp. The main 
-    functions are 'write_bpp_files()' and 'run()'.
+    Prepare BPP inputs, run replicate jobs, and summarize BPP outputs.
 
     Parameters:
     -----------
@@ -131,10 +324,13 @@ class Bpp(object):
     sampfreq:
         How often to sample from the mcmc chain.
     thetaprior:
-        Prior on theta (4Neu), gamma distributed. mean = a/b. e.g., (5, 5)
+        Prior on theta (4Neu). Legacy `(a, b)` tuples are treated as inverse-gamma;
+        explicit tuples like `("invgamma", a, b)` and `("gamma", a, b)` are also
+        accepted.
     tauprior
-        Prior on root tau, gamma distributed mean = a/b. Last number is dirichlet
-        prior for other taus. e.g., (4, 2, 1)
+        Prior on root tau. Legacy `(a, b)` tuples are treated as inverse-gamma;
+        explicit tuples like `("invgamma", a, b)` and `("gamma", a, b)` are also
+        accepted.
     usedata:
         If false inference proceeds without sequence data (can be used to test
         the effect of priors on the tree distributions).
@@ -202,21 +398,21 @@ class Bpp(object):
             "burnin": 10000,
             "nsample": 100000,
             "sampfreq": 2,
-            "thetaprior": (3, 0.002),
-            "tauprior": (3, 0.002),
-            "phiprior": (1, 1),
+            "thetaprior": ("invgamma", 3, 0.002),
+            "tauprior": ("invgamma", 3, 0.002),
+            "phiprior": ("beta", 1, 1),
             "usedata": 1,
             "cleandata": 0,
             "finetune": 1,
             "copied": False,
         }
 
-        # binary is needed for running or loading and combining results
-        self._check_binary()
-
         # can set prior for visual plotting and/or for real analysis
         self._check_kwargs(kwargs)
         self.kwargs.update(kwargs)
+
+        # binary is needed for running or loading and combining results
+        self._check_binary()
 
         # update and check kwargs if data else do nothing which allows 
         # loading dummy objects for summarizing existing results.
@@ -225,82 +421,80 @@ class Bpp(object):
 
 
     def _check_binary(self):
-        """
-        Check for required software. If BPP is not present then a precompiled
-        binary is downloaded into the tmpdir.
-        """
-        # check that toytree is installed
+        """Resolve the BPP binary from kwargs, PATH, or the bundled fallback."""
         if not sys.modules.get("toytree"):
             raise ImportError(_MISSING_TOYTREE)
+        binary = self.kwargs.get("binary")
+        if binary:
+            resolved = os.path.realpath(os.path.expanduser(str(binary)))
+            if not os.path.isfile(resolved):
+                raise IPyradError(f"BPP binary does not exist: {resolved}")
+            if not os.access(resolved, os.X_OK):
+                raise IPyradError(f"BPP binary is not executable: {resolved}")
+            self.kwargs["binary"] = resolved
+            return
 
-        # platform specific bpp binaries
-        platform = "linux"
-        if sys.platform != "linux":
-            platform = "macos"
-        dirname = "bpp-4.8.7-{}-x86_64".format(platform)
+        found = shutil.which("bpp")
+        if found:
+            self.kwargs["binary"] = os.path.realpath(found)
+            return
 
-        # look for existing binary in tmpdir
-        self.kwargs["binary"] = os.path.join(
-            tempfile.gettempdir(), dirname, "bin", "bpp"
-        )
+        spec = _get_bpp_download_spec()
+        try:
+            response = requests.get(spec.url, allow_redirects=True, stream=True, timeout=60)
+            response.raise_for_status()
+            with open(spec.archive_path, "wb") as archive:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        archive.write(chunk)
+        except requests.RequestException as exc:
+            raise IPyradError(
+                f"Failed to download bundled BPP binary from {spec.url}: {exc}"
+            ) from exc
 
-        # check that bpp is installed and in path            
-        cmd = ['which', self.kwargs["binary"]]
-        proc = sps.Popen(cmd, stderr=sps.PIPE, stdout=sps.PIPE)
-        comm = proc.communicate()[0]
-        if comm:
-            return 
+        try:
+            if str(spec.archive_path).endswith(".tar.gz"):
+                with tarfile.open(spec.archive_path, "r:gz") as archive:
+                    archive.extractall(spec.extract_dir)
+            elif str(spec.archive_path).endswith(".zip"):
+                with zipfile.ZipFile(spec.archive_path, "r") as archive:
+                    archive.extractall(spec.extract_dir)
+            else:
+                raise IPyradError(f"Unsupported BPP archive format: {spec.archive_name}")
+        except (tarfile.TarError, zipfile.BadZipFile, OSError) as exc:
+            raise IPyradError(f"Failed to extract bundled BPP archive: {spec.archive_name}") from exc
 
-        # bpp not found in /tmp, download it.        
-        tarname = dirname + ".tar.gz"
-        url = "https://github.com/bpp/bpp/releases/download/v4.8.7/" + tarname
-        res = requests.get(url, allow_redirects=True)
-        tmptar = os.path.join(tempfile.gettempdir(), tarname)
-        with open(tmptar, 'wb') as tz:
-            tz.write(res.content)
-
-        # decompress tar file 
-        cmd = ["tar", "zxvf", tmptar, "-C", tempfile.gettempdir()]
-        proc = sps.Popen(cmd, stderr=sps.PIPE, stdout=sps.PIPE)
-        comm = proc.communicate()
-        if proc.returncode:
-            print(comm[0], comm[1])
-
-        # check that binary now can be found
-        cmd = ['which', self.kwargs["binary"]]
-        proc = sps.Popen(cmd, stderr=sps.PIPE, stdout=sps.PIPE)
-        comm = proc.communicate()[0]
-        if comm:
-            return 
-        raise IPyradError("bpp binary not found.")
+        if not spec.binary_path.exists():
+            raise IPyradError(
+                f"Bundled BPP binary was not found after extraction: {spec.binary_path}"
+            )
+        self.kwargs["binary"] = os.path.realpath(spec.binary_path)
 
 
     def _check_kwargs(self, kwargs):
-        # support for legacy args
-        for kwarg in kwargs:
+        """Validate and normalize user-supplied kwargs for the BPP runner."""
+        for kwarg in list(kwargs):
             if kwarg not in self.kwargs:
-                print(
-                    "argument {} is either incorrect or no longer supported "
-                    "please check the latest documentation".format(kwarg))
+                raise IPyradError(
+                    "argument {} is either incorrect or no longer supported; "
+                    "please check the latest documentation".format(kwarg)
+                )
 
-            # check type
-            if kwarg in ['nloci', 'burnin', 'sampfreq', 'nsample']:
+            if kwarg in ["nloci", "burnin", "sampfreq", "nsample", "seed"]:
                 kwargs[kwarg] = int(kwargs[kwarg])
 
-            if kwarg in ['thetaprior', 'tauprior']:
-                if not isinstance(kwargs[kwarg], tuple):
-                    raise IPyradError("prior must be a tuple")
-                kwargs[kwarg] = kwargs[kwarg]
+            if kwarg in ["thetaprior", "tauprior", "phiprior"]:
+                kwargs[kwarg] = _normalize_prior_spec(kwarg, kwargs[kwarg])
 
 
     def _check_args(self):
-        """
-        Check that data is a SEQS HDF5.
-        """
+        """Validate the HDF5 input, guide tree, IMAP mapping, and working directory."""
         # expand path to data
         self.data = os.path.realpath(os.path.expanduser(self.data))
 
         # check for data input
+        if not os.path.exists(self.data):
+            raise IPyradError(f"data file does not exist: {self.data}")
         if '.hdf5' not in self.data:
             raise IPyradError(
                 "'data' argument must be an ipyrad2 .hdf5 file.")
@@ -339,10 +533,13 @@ class Bpp(object):
         # ...
 
         # checks
-        assert isinstance(self.imap, dict), "you must enter an IMAP dictionary"
-        assert set(self.imap.keys()) == set(self.tree.get_tip_labels()), (
-            "IMAP keys must match guidetree names: \n{}\n{}"
-            .format(self.imap.keys(), self.tree.get_tip_labels()))
+        if not isinstance(self.imap, dict):
+            raise IPyradError("you must enter an IMAP dictionary")
+        if set(self.imap.keys()) != set(self.tree.get_tip_labels()):
+            raise IPyradError(
+                "IMAP keys must match guidetree names: \n{}\n{}"
+                .format(self.imap.keys(), self.tree.get_tip_labels())
+            )
 
 
     def _load_existing_results(self, name, workdir, quiet=False):
@@ -351,7 +548,7 @@ class Bpp(object):
         This does NOT reload the parameter settings for the object...
         """
         # get mcmcs
-        path = os.path.realpath(os.path.join(self.workdir, self.name))
+        path = os.path.realpath(os.path.join(workdir, name))
         mcmcs = sorted(glob.glob("{}_r*.mcmc.txt".format(path)))
         # bpp outfile needs to be weeded out from the other *.txt files it creates
         outs = sorted(glob.glob("{}_r*.txt".format(path)))
@@ -387,7 +584,7 @@ class Bpp(object):
 
 
     def _run(self, force, nreps, dry_run):
-        "Distribute bpp jobs in parallel."
+        """Distribute BPP replicate jobs in parallel."""
 
         # clear out pre-existing files for this object
         self.files.mcmcfiles = []
@@ -396,7 +593,7 @@ class Bpp(object):
         self.asyncs = []
 
         # apply locus extracter filtering
-        self.lex = LocusExtracter(
+        self.lex = LocusExtractor(
             data=self.data, 
             name=self.name,
             outdir=self.workdir,
@@ -404,7 +601,7 @@ class Bpp(object):
             out_format="bpp",
             nloci=self.nloci,
             windows=self.windows,
-            length=self.length,
+            min_length=self.length,
             minmap=self.minmap,
             min_sample_coverage=len(self.imap),  # ENFORCE at least 1 per spp.
             max_sample_missing=self.max_sample_missing,
@@ -414,8 +611,11 @@ class Bpp(object):
         )
         self.lex._DELIM = "^" + DELIM
 
-        # print BPP header
-        print("[ipa bpp] bpp v4.8.7")
+        version = _resolve_bpp_binary_version(self.kwargs["binary"])
+        if version:
+            print(f"[ipa bpp] bpp v{version} ({self.kwargs['binary']})")
+        else:
+            print(f"[ipa bpp] bpp ({self.kwargs['binary']})")
 
         # initiate random seed 
         np.random.seed(self.kwargs["seed"])
@@ -441,6 +641,7 @@ class Bpp(object):
             if (not force) and (os.path.exists(ctlhandle)):
                 print("Named ctl file already exists. Use force=True to"
                       " overwrite\nFilename:{}".format(ctlhandle))
+                continue
 
             # submit job to run
             else:
@@ -451,7 +652,6 @@ class Bpp(object):
                 self._seed = np.random.randint(0, 1e9)
                 ctlfile = self._write_ctlfile()
 
-                # submit to engines
             kwargs = dict(binary=self.kwargs["binary"],
                           ctlfile=ctlfile,
                           alg=self._algorithm)
@@ -460,7 +660,8 @@ class Bpp(object):
         if not dry_run:
             print("\n[ipa.bpp] distributing {} bpp jobs (name={}, nloci={})"
                   .format(nreps, self.name, self.nloci))
-            run_with_pool(jobs, self.log_level, self.cores, msg="Running bpp")
+            if jobs:
+                run_with_pool(jobs, self.log_level, self.cores, msg="Running bpp")
 
         else:
             # report on the files written
@@ -539,10 +740,12 @@ class Bpp(object):
             "spnewick": tmptre.write(dist_formatter=None),
             "speciesmodelprior": self.kwargs["speciesmodelprior"],
 
-            "thetaprior": " ".join([str(i) for i in self.kwargs["thetaprior"]]),
-            "tauprior": " ".join([str(i) for i in self.kwargs["tauprior"]]),
-            "phiprior": " ".join([str(i) for i in self.kwargs["phiprior"]]),
-            "estimate_theta": ("E" if self._algorithm == "00" else ""),
+            "thetaprior": _format_prior_spec(
+                self.kwargs["thetaprior"],
+                estimate_theta=self._algorithm == "00",
+            ),
+            "tauprior": _format_prior_spec(self.kwargs["tauprior"]),
+            "phiprior": _format_prior_spec(self.kwargs["phiprior"]),
 
             "seed": self._seed,
             "finetune": self.kwargs["finetune"],
@@ -596,7 +799,8 @@ class Bpp(object):
         """
         # reports number of results found
         self._load_existing_results(self.name, self.workdir, quiet)
-        assert algorithm in ["00", "01", "10", "11"]
+        if algorithm not in ["00", "01", "10", "11"]:
+            raise IPyradError(f"Unsupported BPP algorithm: {algorithm}")
         if not quiet:
             print(
                 "[ipa.bpp] summarizing algorithm '{}' results"
@@ -609,6 +813,7 @@ class Bpp(object):
             return self._summarize_10(individual_results)
         if algorithm == "01":
             return self._summarize_01(individual_results)
+        raise IPyradError("Summary support for algorithm '11' is not yet implemented.")
 
 
 
@@ -619,32 +824,34 @@ class Bpp(object):
         will compute a new posterior table...
         """
 
+        if not self.files.mcmcfiles:
+            raise IPyradError("No result files found.")
+
         # load mcmc tables of posteriors
         dfs = [
-            pd.read_csv(i, sep='\t', index_col=0) 
+            pd.read_csv(i, sep='\t', index_col=0)
             for i in self.files.mcmcfiles
         ]
 
         # return a list of parsed CSV results
         if individual_results:
             # load out tables of summarized posteriors
+            if not self.files.outfiles:
+                raise IPyradError("No BPP summary output files were found.")
             try:
                 tables = []
                 for ofile in self.files.outfiles:
                     tables.append(self._parse_A00_out(ofile))
-            except IndexError:
+            except (IndexError, FileNotFoundError, OSError, ValueError) as exc:
                 raise IPyradError(
-                    "BPP job cannot be summarized because it did not finish.")
+                    "BPP job cannot be summarized because it did not finish."
+                ) from exc
 
             return tables, dfs
 
         # concatenate each CSV and then get stats w/ describe
         else:
             print('[ipa.bpp] combining mcmc files')
-
-            # return angrily if no files present
-            if not len(self.files.mcmcfiles):
-                raise IPyradError("No result files found.")
 
             # new file handles
             handle = self.files.mcmcfiles[0].rsplit("_", 1)[0] + "_concat"
@@ -657,23 +864,25 @@ class Bpp(object):
             newctl = os.path.join(self.workdir, self.name + "_tmp.ctl.txt")
 
             # write a concatenated mcmc file
-            concat = pd.concat(dfs, ignore_index=True)
+            concat_mcmc = pd.concat(dfs, ignore_index=True)
             # bpp expects the index col to be labeled 'Gen' and `ignore_index`
             # wipes that out here, so reset it
-            concat.index.name = "Gen"
-            concat.to_csv(cf, sep="\t", float_format="%.6f")
+            concat_mcmc.index.name = "Gen"
+            concat_mcmc.to_csv(cf, sep="\t", float_format="%.6f")
 
             # write a concatenated a1b1 file
-            cdfs = [
-                pd.read_csv(i.replace("mcmc", "conditional_a1b1"), sep='\t', index_col=0)
-                for i in self.files.mcmcfiles
-            ]
+            cdfs = []
+            for mcmcfile in self.files.mcmcfiles:
+                conditional = mcmcfile.replace("mcmc", "conditional_a1b1")
+                if not os.path.exists(conditional):
+                    raise IPyradError(f"Missing BPP conditional_a1b1 file: {conditional}")
+                cdfs.append(pd.read_csv(conditional, sep='\t', index_col=0))
             # write a concatenated mcmc file
-            concat = pd.concat(cdfs, ignore_index=True)
+            concat_conditional = pd.concat(cdfs, ignore_index=True)
             # bpp expects the index col to be labeled 'Gen' and `ignore_index`
             # wipes that out here, so reset it
-            concat.index.name = "Gen"
-            concat.to_csv(af, sep="\t", float_format="%.6f")
+            concat_conditional.index.name = "Gen"
+            concat_conditional.to_csv(af, sep="\t", float_format="%.6f")
 
             # write a tmp ctl file with print=-1 and mcmcfile=cf
             with open(ctlfile, 'r') as infile:
@@ -694,7 +903,7 @@ class Bpp(object):
 
             # load the new table
             table = self._parse_A00_out(of)
-            return table, concat
+            return table, concat_mcmc
 
 
     def _parse_A00_out(self, ofile):
@@ -724,6 +933,8 @@ class Bpp(object):
                     in_table = False
                 elif in_table:
                     rows.append(line)
+            if len(rows) < 4 or not nodes:
+                raise IPyradError(f"Failed to parse BPP A00 output: {ofile}")
             # remove blank line and '---' separator
             rows.pop(1)
             rows.pop(-2)
@@ -790,8 +1001,11 @@ class Bpp(object):
             with open(treefile, 'r') as infile:
 
                 # jump to end of file to get besttree
+                line = None
                 for line in infile:
                     pass
+                if line is None:
+                    raise IPyradError(f"BPP tree summary file was empty: {treefile}")
                 newick = line.split(";")[0] + ";"
 
                 # get majority-rule tree
@@ -829,13 +1043,10 @@ class Bpp(object):
 
 
     def draw_priors(self, gentime_min, gentime_max, mutrate_min, mutrate_max, invgamma=True, seed=123):
-        """
-        For BPP 4.0+ the priors are described using an invgamma dist. and 
-        so we expect that for the (a, b) input for thetaprior and tauprior
-        that the b value will be very small, since the inverse of it describes
-        the variance. 
-        """
+        """Draw the configured priors and their derived Ne/divergence distributions."""
         import toyplot
+        del invgamma
+        rng = np.random.default_rng(seed)
 
         # setup canvas
         canvas0 = toyplot.Canvas(width=800, height=250)
@@ -857,21 +1068,17 @@ class Bpp(object):
         ax0.y.label.text = "density"
 
         # distribution of mutation_rates ---------------------------------
-        mean = (mutrate_max + mutrate_min) / 2.
-        var = ((mutrate_max - mutrate_min) ** 2) / 16
-        a = mean ** 2 / var
-        b = mean / var
-        muts_rvs = ss.gamma.rvs(
-            a, **{"scale": 1 / b, 'random_state': 123, "size": 1000})
+        a, b = _draw_gamma_from_range(mutrate_min, mutrate_max)
+        muts_rvs = ss.gamma.rvs(a, scale=1 / b, random_state=rng, size=1000)
 
         # draw dist
         for cix in (0.99, 0.95, 0.5):
             edge = (1 - cix) / 2.
             x = np.linspace(
-                ss.gamma.ppf(edge, a, **{"scale": 1 / b}),
-                ss.gamma.ppf(1 - edge, a, **{"scale": 1 / b}),
+                ss.gamma.ppf(edge, a, scale=1 / b),
+                ss.gamma.ppf(1 - edge, a, scale=1 / b),
                 100)
-            y = ss.gamma.pdf(x, a, **{"scale": 1 / b})
+            y = ss.gamma.pdf(x, a, scale=1 / b)
             ax0.fill(x * 1e8, y, opacity=0.33, color=toyplot.color.Palette()[0])
 
             if cix == 0.95:
@@ -881,28 +1088,14 @@ class Bpp(object):
 
 
         # distribution of prior on theta ---------------------------------
-        # invgamma_a = self.kwargs["thetaprior"][0]
-        # invgamma_b = self.kwargs["thetaprior"][1]
-        # mean = invgamma_b / (invgamma_a - 1.)
-        # var = (invgamma_b ** 2) / (((invgamma_a - 1) ** 2) * (invgamma_a - 2))
-        # a = mean ** 2 / var
-        # b = mean / var
-        a = self.kwargs["thetaprior"][0]
-        b = self.kwargs["thetaprior"][1]
-        if invgamma:
-            b = 1 / b
-
-        theta_rvs = ss.gamma.rvs(
-            a, **{"scale": 1 / b, 'random_state': 123, "size": 1000})
+        theta_prior = self.kwargs["thetaprior"]
+        theta_rvs = _sample_bpp_prior(theta_prior, size=1000, random_state=rng)
 
         # draw dist
         for cix in (0.99, 0.95, 0.5):
             edge = (1 - cix) / 2.
-            x = np.linspace(
-                ss.gamma.ppf(edge, a, **{"scale": 1 / b}),
-                ss.gamma.ppf(1 - edge, a, **{"scale": 1 / b}),
-                100)
-            y = ss.gamma.pdf(x, a, **{"scale": 1 / b})
+            x = _bpp_prior_xvals(theta_prior, lower=edge, upper=1 - edge)
+            y = _bpp_prior_pdf(theta_prior, x)
             ax1.fill(x, y, opacity=0.25, color=toyplot.color.Palette()[1])
 
             if cix == 0.95:
@@ -953,21 +1146,17 @@ class Bpp(object):
         ax3.y.label.text = "density"
 
         # distribution of generation times -------------------------------
-        mean = (gentime_max + gentime_min) / 2.
-        var = ((gentime_max - gentime_min) ** 2) / 16
-        a = mean ** 2 / var
-        b = mean / var
-        gens_rvs = ss.gamma.rvs(
-            a, **{"scale": 1 / b, 'random_state': 123, "size": 1000})
+        a, b = _draw_gamma_from_range(gentime_min, gentime_max)
+        gens_rvs = ss.gamma.rvs(a, scale=1 / b, random_state=rng, size=1000)
 
         # draw dist
         for cix in (0.99, 0.95, 0.5):
             edge = (1 - cix) / 2.
             x = np.linspace(
-                ss.gamma.ppf(edge, a, **{"scale": 1 / b}),
-                ss.gamma.ppf(1 - edge, a, **{"scale": 1 / b}),
+                ss.gamma.ppf(edge, a, scale=1 / b),
+                ss.gamma.ppf(1 - edge, a, scale=1 / b),
                 100)
-            y = ss.gamma.pdf(x, a, **{"scale": 1 / b})
+            y = ss.gamma.pdf(x, a, scale=1 / b)
             ax3.fill(x, y, opacity=0.25, color=toyplot.color.Palette()[0])
 
             if cix == 0.95:
@@ -977,21 +1166,14 @@ class Bpp(object):
 
 
         # distribution of prior on tau ----------------------------------
-        a = self.kwargs["tauprior"][0]
-        b = self.kwargs["tauprior"][1]        
-        if invgamma:
-            b = 1 / b
-        tau_rvs = ss.gamma.rvs(
-            a, **{"scale": 1 / b, 'random_state': 123, "size": 1000})
+        tau_prior = self.kwargs["tauprior"]
+        tau_rvs = _sample_bpp_prior(tau_prior, size=1000, random_state=rng)
 
         # draw dist
         for cix in (0.99, 0.95, 0.5):
             edge = (1 - cix) / 2.
-            x = np.linspace(
-                ss.gamma.ppf(edge, a, **{"scale": 1 / b}),
-                ss.gamma.ppf(1 - edge, a, **{"scale": 1 / b}),
-                100)
-            y = ss.gamma.pdf(x, a, **{"scale": 1 / b})
+            x = _bpp_prior_xvals(tau_prior, lower=edge, upper=1 - edge)
+            y = _bpp_prior_pdf(tau_prior, x)
             ax4.fill(x, y, opacity=0.25, color=toyplot.color.Palette()[1])
 
             if cix == 0.95:
@@ -1028,8 +1210,7 @@ class Bpp(object):
 
     def get_transformed_values(self, mcmc, param, gentime_min, gentime_max, mutrate_min, mutrate_max):
         """
-        Transforms a single posterior column from mcmc array using assumed 
-        gamma distributed values from min max assumptions.
+        Transform one posterior column into real units using empirical samples.
         """
         # init transformer tool
         tx = Transformer(mcmc, gentime_min, gentime_max, mutrate_min, mutrate_max)
@@ -1039,21 +1220,12 @@ class Bpp(object):
 
     def transform(self, mcmc, gentime_min, gentime_max, mutrate_min, mutrate_max, nsamp=1000):
         """
-        Transform the theta and tau parameter posterior estimates using a distribution of
-        assumed values for the generation times and mutation rates. The min and max values
-        will be used by Transformer class tool to describe gamma distributed values. Values
-        are then randomly sampled from these distributions to transform the parameters.
-        The returned table converts column names to node idxs and return a tree with the values
-        mapped to the nodes.
+        Transform posterior theta/tau samples into Ne and divergence-time units.
 
-        Parameters
-        ==========
-
-
-        Returns
-        ========
-        (Ne_dataframe, Div_dataframe, toytree, multitree)
-
+        The BPP posterior samples are transformed directly rather than being
+        re-fit to another parametric distribution first. Returned dataframes are
+        keyed by guide-tree node index, and the returned trees use transformed
+        divergence times as branch lengths.
         """
         # check that use supplied a tree to the bpp object
         if not hasattr(self, 'tree'):
@@ -1062,108 +1234,68 @@ class Bpp(object):
             else:
                 self.tree = toytree.tree(self.guidetree)
 
-        # table, mcmc = self.summarize("00", individual_results=False)
         tx = Transformer(mcmc, gentime_min, gentime_max, mutrate_min, mutrate_max)
-        df = pd.DataFrame(
-            index=["mean", "median", "std", "min", "max", "2.5%", "97.5%"], #, "ESS*", "Eff*"],
+        summary = pd.DataFrame(
+            index=["mean", "median", "std", "min", "max", "2.5%", "97.5%"],
             columns=mcmc.columns,
+            dtype=float,
         )
-
-        # fill values for lnL, ESS and Eff
-        # df.iloc[:, -1] = mcmc.iloc[:, -1]
-        # df.iloc[-2:, :] = mcmc.iloc[-2:, :]
-
-        # fill transformed data
+        transformed = {}
         for col in mcmc.columns:
             if col == "lnL":
-                pass
-                # df.loc[:, "lnL"] = 
-            else:
-                cvals = tx.transform(col)
-                m, v, s = ss.bayes_mvs(cvals)
-                df.loc["mean", col] = m.statistic
-                df.loc["median", col] = np.median(cvals)
-                df.loc["std", col] = s.statistic
-                df.loc["min", col] = cvals.min()
-                df.loc["max", col] = cvals.max()
+                continue
+            values = tx.transform(col)
+            transformed[col] = values
+            summary.loc["mean", col] = float(np.mean(values))
+            summary.loc["median", col] = float(np.median(values))
+            summary.loc["std", col] = float(np.std(values, ddof=1)) if values.size > 1 else 0.0
+            summary.loc["min", col] = float(np.min(values))
+            summary.loc["max", col] = float(np.max(values))
+            pc0, pc1 = np.percentile(values, [2.5, 97.5])
+            summary.loc["2.5%", col] = float(pc0)
+            summary.loc["97.5%", col] = float(pc1)
 
-                pc0, pc1 = np.percentile(cvals, [2.5, 97.5])
-                df.loc["2.5%", col] = pc0
-                df.loc["97.5%", col] = pc1
+        tau_cols = [col for col in transformed if col.startswith("tau_")]
+        theta_cols = [col for col in transformed if col.startswith("theta_")]
+        tau_map = _map_bpp_columns_to_node_ids(self.tree, tau_cols)
+        theta_map = _map_bpp_columns_to_node_ids(self.tree, theta_cols)
 
-        # split out the tau estimates columns and relabel with node idxs 
-        divs = df.loc[:, [i for i in df.columns if "tau_" in i]].copy()
-        newcolumns = {}
-        for col in divs.columns.tolist():
-            tips = col.split(DELIM)[1:]
-            nidx = self.tree.get_mrca_idx_from_tip_labels(tips)
-            newcolumns[col] = nidx
-        divs.columns = [newcolumns[i] for i in divs.columns]
+        divs = summary.loc[:, tau_cols].copy()
+        divs.columns = [tau_map[col] for col in tau_cols]
         divs = divs.reindex(sorted(divs.columns), axis=1)
 
-        # split out the theta estimates and relabel columns with node idxs
-        popsize = df.loc[:, [i for i in df.columns if "theta_" in i]].copy()
-        newcolumns = {}
-        for col in popsize.columns.tolist():
-            tips = col.split(DELIM)[1:]
-            nidx = self.tree.get_mrca_idx_from_tip_labels(tips)
-            newcolumns[col] = nidx
-        popsize.columns = [newcolumns[i] for i in popsize.columns]
+        popsize = summary.loc[:, theta_cols].copy()
+        popsize.columns = [theta_map[col] for col in theta_cols]
         popsize = popsize.reindex(sorted(popsize.columns), axis=1)
 
-        # get new ultrametric tree with root height set
         newtree = self.tree.copy()
-       
-        # set mean Ne and dist values on tree
         for node in newtree.treenode.traverse("postorder"):
+            node.Ne = popsize.loc["median", node.idx] if node.idx in popsize.columns else 10000
+        _assign_tree_distances_from_divergence_row(newtree, divs.loc["median"])
 
-            # set Ne
-            if node.idx in popsize.columns:
-                node.Ne = popsize.loc["median", node.idx]
-            else:
-                node.Ne = 10000
-
-            # set dists
-            if node.is_leaf():
-                node.dist = divs.loc["median", node.up.idx]
-            else:
-                if node.up:
-                    node.dist = (divs.loc["median", node.up.idx] - divs.loc["median", node.idx])
-        #newtree = newtree.mod.make_ultrametric()
-
-        # sample 1000 topologies for a multitree
-        mtree = toytree.mtree([newtree.write(tree_format=9)] * nsamp)
-        taus = mcmc.sample(nsamp).loc[:, [i for i in mcmc.columns if "tau_" in i]]
-
-        # relabel columns and indices
-        columns = taus.columns.tolist().copy()
-        newcolumns = {}
-        for col in columns:
-            tips = col.split(DELIM)[1:]
-            nidx = self.tree.get_mrca_idx_from_tip_labels(tips)
-            newcolumns[col] = nidx
-        taus.columns = [newcolumns[i] for i in taus.columns]
-        taus = taus.reset_index()
-
-        # set node heights
+        mtree = toytree.mtree([newtree.write()] * nsamp)
+        tau_frame = pd.DataFrame({tau_map[col]: transformed[col] for col in tau_cols})
+        tau_frame = tau_frame.reindex(sorted(tau_frame.columns), axis=1)
+        if tau_frame.shape[0] >= nsamp:
+            sampled_tau = tau_frame.iloc[:nsamp].reset_index(drop=True)
+        else:
+            sampled_tau = tau_frame.sample(
+                n=nsamp,
+                replace=True,
+                random_state=tx.seed,
+            ).reset_index(drop=True)
         for tidx, tree in enumerate(mtree.treelist):
-            for node in tree.treenode.traverse("postorder"):            
-                # set dists
-                if node.is_leaf():
-                    node.dist = taus.loc[tidx, node.up.idx]
-                else:
-                    if node.up:
-                        node.dist = (taus.loc[tidx, node.up.idx] - taus.loc[tidx, node.idx])
-        #mtree.treelist = [i.mod.make_ultrametric() for i in mtree.treelist]
+            _assign_tree_distances_from_divergence_row(tree, sampled_tau.loc[tidx])
         return divs, popsize, newtree, mtree
 
 
 
     def draw_posteriors(self, mcmc, gentime_min, gentime_max, mutrate_min, mutrate_max, invgamma=True, seed=123):
-        """
-        Draws posterior distribution on top of priors with transform.
-        """
+        """Draw posterior densities on top of the configured priors."""
         import toyplot
+        del invgamma
+        rng = np.random.default_rng(seed)
+        tx = Transformer(mcmc, gentime_min, gentime_max, mutrate_min, mutrate_max, seed=seed)
 
         # setup canvas
         canvas0 = toyplot.Canvas(width=800, height=250)
@@ -1185,21 +1317,17 @@ class Bpp(object):
         ax0.y.label.text = "density"
 
         # distribution of mutation_rates ---------------------------------
-        mean = (mutrate_max + mutrate_min) / 2.
-        var = ((mutrate_max - mutrate_min) ** 2) / 16
-        a = mean ** 2 / var
-        b = mean / var
-        muts_rvs = ss.gamma.rvs(
-            a, **{"scale": 1 / b, 'random_state': 123, "size": 10000})
+        a, b = _draw_gamma_from_range(mutrate_min, mutrate_max)
+        muts_rvs = ss.gamma.rvs(a, scale=1 / b, random_state=rng, size=10000)
 
         # draw dist
         for cix in (0.99, 0.95, 0.5):
             edge = (1 - cix) / 2.
             x = np.linspace(
-                ss.gamma.ppf(edge, a, **{"scale": 1 / b}),
-                ss.gamma.ppf(1 - edge, a, **{"scale": 1 / b}),
+                ss.gamma.ppf(edge, a, scale=1 / b),
+                ss.gamma.ppf(1 - edge, a, scale=1 / b),
                 100)
-            y = ss.gamma.pdf(x, a, **{"scale": 1 / b})
+            y = ss.gamma.pdf(x, a, scale=1 / b)
             ax0.fill(x * 1e8, y, opacity=0.33, color=toyplot.color.Palette()[0])
 
             if cix == 0.95:
@@ -1209,28 +1337,14 @@ class Bpp(object):
 
 
         # distribution of prior on theta ---------------------------------
-        # invgamma_a = self.kwargs["thetaprior"][0]
-        # invgamma_b = self.kwargs["thetaprior"][1]
-        # mean = invgamma_b / (invgamma_a - 1.)
-        # var = (invgamma_b ** 2) / (((invgamma_a - 1) ** 2) * (invgamma_a - 2))
-        # a = mean ** 2 / var
-        # b = mean / var
-        a = self.kwargs["thetaprior"][0]
-        b = self.kwargs["thetaprior"][1]
-        if invgamma:
-            b = 1 / b
-
-        theta_rvs = ss.gamma.rvs(
-            a, **{"scale": 1 / b, 'random_state': 123, "size": 10000})
+        theta_prior = self.kwargs["thetaprior"]
+        theta_rvs = _sample_bpp_prior(theta_prior, size=10000, random_state=rng)
 
         # draw dist
         for cix in (0.99, 0.95, 0.5):
             edge = (1 - cix) / 2.
-            x = np.linspace(
-                ss.gamma.ppf(edge, a, **{"scale": 1 / b}),
-                ss.gamma.ppf(1 - edge, a, **{"scale": 1 / b}),
-                100)
-            y = ss.gamma.pdf(x, a, **{"scale": 1 / b})
+            x = _bpp_prior_xvals(theta_prior, lower=edge, upper=1 - edge)
+            y = _bpp_prior_pdf(theta_prior, x)
             ax1.fill(x, y, opacity=0.25, color=toyplot.color.Palette()[1])
 
             if cix == 0.95:
@@ -1273,7 +1387,12 @@ class Bpp(object):
             )
             
             ax1.plot(edges[:-1][mags>0], mags[mags>0], color='black', opacity=0.5);
-            nes = (theta.sample(10000) / (muts_rvs * 4))
+            ne_vals = tx.transform(col)
+            nes = pd.Series(ne_vals).sample(
+                min(ne_vals.size, 10000),
+                replace=ne_vals.size < 10000,
+                random_state=seed,
+            )
             mags, edges = np.histogram(
                 nes,
                 bins=100, 
@@ -1303,21 +1422,17 @@ class Bpp(object):
         ax3.y.label.text = "density"
 
         # distribution of generation times -------------------------------
-        mean = (gentime_max + gentime_min) / 2.
-        var = ((gentime_max - gentime_min) ** 2) / 16
-        a = mean ** 2 / var
-        b = mean / var
-        gens_rvs = ss.gamma.rvs(
-            a, **{"scale": 1 / b, 'random_state': 123, "size": 10000})
+        a, b = _draw_gamma_from_range(gentime_min, gentime_max)
+        gens_rvs = ss.gamma.rvs(a, scale=1 / b, random_state=rng, size=10000)
 
         # draw dist
         for cix in (0.99, 0.95, 0.5):
             edge = (1 - cix) / 2.
             x = np.linspace(
-                ss.gamma.ppf(edge, a, **{"scale": 1 / b}),
-                ss.gamma.ppf(1 - edge, a, **{"scale": 1 / b}),
+                ss.gamma.ppf(edge, a, scale=1 / b),
+                ss.gamma.ppf(1 - edge, a, scale=1 / b),
                 100)
-            y = ss.gamma.pdf(x, a, **{"scale": 1 / b})
+            y = ss.gamma.pdf(x, a, scale=1 / b)
             ax3.fill(x, y, opacity=0.25, color=toyplot.color.Palette()[0])
 
             if cix == 0.95:
@@ -1327,21 +1442,14 @@ class Bpp(object):
 
 
         # distribution of prior on tau ----------------------------------
-        a = self.kwargs["tauprior"][0]
-        b = self.kwargs["tauprior"][1]        
-        if invgamma:
-            b = 1 / b
-        tau_rvs = ss.gamma.rvs(
-            a, **{"scale": 1 / b, 'random_state': 123, "size": 10000})
+        tau_prior = self.kwargs["tauprior"]
+        tau_rvs = _sample_bpp_prior(tau_prior, size=10000, random_state=rng)
 
         # draw dist
         for cix in (0.99, 0.95, 0.5):
             edge = (1 - cix) / 2.
-            x = np.linspace(
-                ss.gamma.ppf(edge, a, **{"scale": 1 / b}),
-                ss.gamma.ppf(1 - edge, a, **{"scale": 1 / b}),
-                100)
-            y = ss.gamma.pdf(x, a, **{"scale": 1 / b})
+            x = _bpp_prior_xvals(tau_prior, lower=edge, upper=1 - edge)
+            y = _bpp_prior_pdf(tau_prior, x)
             ax4.fill(x, y, opacity=0.25, color=toyplot.color.Palette()[1])
 
             if cix == 0.95:
@@ -1383,8 +1491,12 @@ class Bpp(object):
         mags, edges = np.histogram(taus, bins=100, density=True)
 
         ax4.plot(edges[:-1][mags>0], mags[mags>0], color='black', opacity=0.5);
-        divs = (gens_rvs * taus.sample(10000)) / muts_rvs
-        divs /= 1e6
+        div_vals = tx.transform(taus.name) / 1e6
+        divs = pd.Series(div_vals).sample(
+            min(div_vals.size, 10000),
+            replace=div_vals.size < 10000,
+            random_state=seed,
+        )
 
         # had range(0, 75) as an arg, removed on 2020-11-25
         mags, edges = np.histogram(divs.to_list(), bins=100, density=True)
@@ -1617,70 +1729,45 @@ class Bpp(object):
 
 
 class Transformer(object):
-    """
-    When calling the "00" algorithm ipa.bpp always enforces that the results
-    should be returned as a GAMMA dist, not INVGAMMA. 
-    """
+    """Transform posterior theta/tau samples into Ne and divergence-time units."""
     def __init__(self, df, gentime_min, gentime_max, mutrate_min, mutrate_max, seed=123):
 
         self.df = df
-        self.seed = seed
+        if self.df is None or self.df.empty:
+            raise IPyradError("Cannot transform an empty BPP posterior table.")
 
-        self.gentime_min = gentime_min
-        self.gentime_max = gentime_max
-        self.mutrate_min = mutrate_min
-        self.mutrate_max = mutrate_max
-
-        self.gentime_mean = (gentime_max + gentime_min) / 2.
-        self.gentime_var = ((gentime_max - gentime_min) ** 2) / 16
-        self.gentime_a = self.gentime_mean ** 2 / self.gentime_var
-        self.gentime_b = self.gentime_mean / self.gentime_var
-
-        self.mutrate_mean = (mutrate_max + mutrate_min) / 2.
-        self.mutrate_var = ((mutrate_max - mutrate_min) ** 2) / 16
-        self.mutrate_a = self.mutrate_mean ** 2 / self.mutrate_var
-        self.mutrate_b = self.mutrate_mean / self.mutrate_var
-
+        self.seed = int(seed)
+        self._rng = np.random.default_rng(self.seed)
+        self.gentime_a, self.gentime_b = _draw_gamma_from_range(gentime_min, gentime_max)
+        self.mutrate_a, self.mutrate_b = _draw_gamma_from_range(mutrate_min, mutrate_max)
         self._sample_gentime_rvs()
         self._sample_mutrate_rvs()
 
 
     def _sample_gentime_rvs(self):
-        """
-        Samples a distribution of generation times as a random variate to the
-        same size as the data by drawing from a GAMMA with mean,var based on
-        a range provided by the user.
-        """
+        """Sample generation times from the user-provided uncertainty range."""
         self.gentime_rvs = ss.gamma.rvs(
-            self.gentime_a, 
-            **{
-                "scale": 1 / self.gentime_b, 
-                "random_state": self.seed, 
-                "size": self.df.shape[0],
-            }
+            self.gentime_a,
+            scale=1 / self.gentime_b,
+            random_state=self._rng,
+            size=self.df.shape[0],
         )
 
 
     def _sample_mutrate_rvs(self):
-        """
-        Samples a distribution of mutation rates as a random variate to the
-        same size as the data by drawing from a GAMMA with mean,var based on
-        a range provided by the user.
-        """
+        """Sample mutation rates from the user-provided uncertainty range."""
         self.mutrate_rvs = ss.gamma.rvs(
-            self.mutrate_a, 
-            **{
-                "scale": 1 / self.mutrate_b, 
-                "random_state": self.seed, 
-                "size": self.df.shape[0],
-            }
+            self.mutrate_a,
+            scale=1 / self.mutrate_b,
+            random_state=self._rng,
+            size=self.df.shape[0],
         )
 
 
     def _get_gentime_x(self, nvalues=100):
         xvals = np.linspace(
-            ss.gamma.ppf(0.0001, self.gentime_a, **{"scale": 1 / self.gentime_b}),
-            ss.gamma.ppf(0.9999, self.gentime_a, **{"scale": 1 / self.gentime_b}),
+            ss.gamma.ppf(0.0001, self.gentime_a, scale=1 / self.gentime_b),
+            ss.gamma.ppf(0.9999, self.gentime_a, scale=1 / self.gentime_b),
             nvalues,
         )
         return xvals
@@ -1688,88 +1775,33 @@ class Transformer(object):
 
     def _get_mutrate_x(self, nvalues=100):
         xvals = np.linspace(
-            ss.gamma.ppf(0.0001, self.mutrate_a, **{"scale": 1 / self.mutrate_b}),
-            ss.gamma.ppf(0.9999, self.mutrate_a, **{"scale": 1 / self.mutrate_b}),
+            ss.gamma.ppf(0.0001, self.mutrate_a, scale=1 / self.mutrate_b),
+            ss.gamma.ppf(0.9999, self.mutrate_a, scale=1 / self.mutrate_b),
             nvalues,
         )
         return xvals
 
 
-    def _sample_tau(self, colname):
-        # check that it is a tau column
-        if "tau" not in colname:
-            raise IPyradError("not a tau value: {}".format(colname))
-
-        # get mean, var, std
-        mvs = ss.bayes_mvs(self.df[colname])
-        a = mvs[0].statistic ** 2 / mvs[1].statistic
-        b = mvs[0].statistic / mvs[1].statistic
-
-        # sampled taus
-        self.tau_rvs = ss.gamma.rvs(
-            a, 
-            **{
-                'scale': 1 / b, 
-                "random_state": self.seed, 
-                "size": self.df.shape[0],
-            }
-        )
-
-
-    def _sample_theta(self, colname):
-        # check that it is a theta column
-        if "theta" not in colname:
-            raise IPyradError("not a theta value: {}".format(colname))
-
-        # get mean, var, std
-        mvs = ss.bayes_mvs(self.df[colname])
-        a = mvs[0].statistic ** 2 / mvs[1].statistic
-        b = mvs[0].statistic / mvs[1].statistic
-
-        # sampled taus
-        self.theta_rvs = ss.gamma.rvs(
-            a, 
-            **{
-                'scale': 1 / b, 
-                "random_state": self.seed, 
-                "size": self.df.shape[0],
-            }
-        )
-
-
-    def _transform_tau(self, colname):
-
-        # sampled taus for this column parameter
-        self._sample_tau(colname)
-
-        # get div time as (tau * gentime) / mutrate
-        # i.e., (gens * (time/gen)) / (muts/site/gen)
-        self.div_rvs = (self.tau_rvs * self.gentime_rvs) / self.mutrate_rvs
-
-
-    def _transform_theta(self, colname):
-
-        # sampled taus for this column parameter
-        self._sample_theta(colname)
-
-        # get Ne as (theta / 4*u)
-        self.ne_rvs = self.theta_rvs / (self.mutrate_rvs * 4)
+    def _get_parameter_values(self, colname):
+        """Return one posterior parameter column plus the aligned uncertainty draws."""
+        if colname not in self.df.columns:
+            raise IPyradError(f"posterior column not found: {colname}")
+        series = pd.to_numeric(self.df[colname], errors="coerce")
+        valid = series.notna().to_numpy()
+        if not np.any(valid):
+            raise IPyradError(f"posterior column has no numeric values: {colname}")
+        values = series.to_numpy(dtype=float, na_value=np.nan)[valid]
+        return values, self.gentime_rvs[valid], self.mutrate_rvs[valid]
 
 
     def transform(self, colname):
-        """
-        Get posterior from BPP results table and transform it using the input 
-        distributions for mutrate and gentime. Prints the transformed mean 
-        and 95% CI, and returns a posterior distribution plot as (c, a, m)
-        unless an axes argument was provided. 
-        """
+        """Transform one posterior column to divergence-time or Ne units."""
+        values, gentime, mutrate = self._get_parameter_values(colname)
         if "tau" in colname:
-            self._transform_tau(colname)
-            return self.div_rvs
-
+            return (values * gentime) / mutrate
         if "theta" in colname:
-            self._transform_theta(colname)
-            return self.ne_rvs
+            return values / (mutrate * 4)
+        raise IPyradError(f"Unsupported BPP posterior parameter: {colname}")
 
 
     # def transform_plot(self, axes=None, **kwargs):
@@ -1880,26 +1912,33 @@ def draw_dists(mcmcs, **kwargs):
 
 
 def _call_bpp(binary, ctlfile, alg):
-    """
-    Remote function call of BPP binary
-    """
-    # call the command and block until job finishes
+    """Run one BPP job inside the control file directory and surface errors."""
+    ctlpath = Path(ctlfile)
+    workdir = ctlpath.parent
     cmd = [binary, "--cfile", ctlfile]
-    proc = sps.Popen(cmd, stderr=sps.STDOUT, stdout=sps.PIPE)
-    comm = proc.communicate()
+    proc = sps.run(
+        cmd,
+        cwd=workdir,
+        stdout=sps.PIPE,
+        stderr=sps.STDOUT,
+        check=False,
+    )
     if proc.returncode:
-        raise IPyradError(comm[0])
+        message = proc.stdout.decode("utf-8", errors="replace")
+        raise IPyradError(f"BPP failed with exit code {proc.returncode}:\n{message}")
 
-    # bpp writes a Figtree.tre result to CWD of the ipyparallel engine (ugh.)
-    # so we need to catch it quickly and move it somewhere relevant. 
+    # BPP writes side-effect files next to the working directory rather than to
+    # the configured jobname path, so keep the subprocess cwd local to the
+    # control file and then rename the tree artifact into the normal prefix.
     if alg == "00":
-        figfile = "FigTree.tre"
-        newfigpath = ctlfile.replace(".ctl.txt", ".figtree.nex")
-        if os.path.exists(figfile):
-            os.rename(figfile, newfigpath)
+        figfile = workdir / "FigTree.tre"
+        newfigpath = ctlpath.with_suffix("").with_suffix(".figtree.nex")
+        if figfile.exists():
+            os.replace(figfile, newfigpath)
 
-    if os.path.exists("./SeedUsed"):
-        os.remove("./SeedUsed")
+    seed_used = workdir / "SeedUsed"
+    if seed_used.exists():
+        seed_used.unlink()
 
 
 def draw_dist(mean, var, xlabel=None, axes=None, **kwargs):
@@ -1949,16 +1988,6 @@ def draw_dist(mean, var, xlabel=None, axes=None, **kwargs):
     return canvas, axes, mark
 
 
-def build_00_tree(tree, mcmc):
-    """
-    Convert theta and tau estimates into Ne and Div times respectively and 
-    set values to nodes of the toytree object.
-    """
-
-
-    tree = tree.mod.make_ultrametric().mod.node_scale_root_height(crown_mean)
-
-
 CTLFILE = """
 * I/O 
 seqfile = {seqfile}
@@ -1979,15 +2008,16 @@ species&tree = {nsp} {spnames}
                {spnewick}
 
 * PRIORS
-thetaprior = {thetaprior} {estimate_theta}
+thetaprior = {thetaprior}
 tauprior = {tauprior}
 phiprior = {phiprior}
 
 * MCMC PARAMS
 seed = {seed}
 finetune = {finetune}
-print = 1 0 0 0
+print = 1 0 0 0 0
 burnin = {burnin}
 sampfreq = {sampfreq}
 nsample = {nsample}
 """
+

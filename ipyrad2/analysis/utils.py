@@ -16,10 +16,6 @@ from loguru import logger
 from ..utils.exceptions import IPyradError
 
 
-def parse_version_string(version):
-    return tuple(map(int, version.split('.')))
-
-
 def subsample_snps(snpsmap, seed):
     "Subsample snps, one per locus, using snpsmap"
     rng = np.random.default_rng(np.random.SeedSequence(seed))

@@ -103,25 +103,33 @@ def _spawn_and_sigint(
 
 # --------------------------------- tests ---------------------------------- #
 
+
+def _assert_interrupted_exit(testcase: unittest.TestCase, code: int) -> None:
+    testcase.assertTrue(
+        code == -signal.SIGINT or code >= 128,
+        f"unexpected exit code: {code}",
+    )
+
+
 @unittest.skipUnless(os.name == "posix", "Ctrl-C/PGID tests require POSIX")
 class TestCtrlCShutdown(unittest.TestCase):
     def test_fast_shutdown_with_pool(self):
         code = _spawn_and_sigint(
             _run_pool_until_interrupted, "with_pool", 50, 5.0, "WARNING", grace=2.0
         )
-        self.assertGreaterEqual(code, 128, f"unexpected exit code: {code}")
+        _assert_interrupted_exit(self, code)
 
     def test_fast_shutdown_with_pool_iter(self):
         code = _spawn_and_sigint(
             _run_pool_until_interrupted, "with_pool_iter", 200, 3.0, "WARNING", grace=2.0
         )
-        self.assertGreaterEqual(code, 128, f"unexpected exit code: {code}")
+        _assert_interrupted_exit(self, code)
 
     def test_fast_shutdown_pipeline_children(self):
         code = _spawn_and_sigint(
             _run_pool_until_interrupted, "pipeline", 20, 10.0, "WARNING", grace=2.0
         )
-        self.assertGreaterEqual(code, 128, f"unexpected exit code: {code}")
+        _assert_interrupted_exit(self, code)
 
     def test_normal_completion_returns_results(self):
         jobs = {f"ok-{i}": (_sleep_worker, {"seconds": 0.05}) for i in range(8)}

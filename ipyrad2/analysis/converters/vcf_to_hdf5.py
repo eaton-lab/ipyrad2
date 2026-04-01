@@ -10,21 +10,29 @@ dtype: np.uint8
 shape: (nsnps, 5)
 attrs["columns"]: ["loc", "loc_idx", "loc_pos", "scaff", "pos"]
 attrs["indexing"]: [0, 0, 0, 0, 0]
+
+reference
+---------
+description: The ordered REF allele at every SNP position.
+dtype: np.uint8
+shape: (nsnps,)
 """
 
 import os
 import tempfile
+from pathlib import Path
 
 import h5py
 import numpy as np
 import pandas as pd
 
-from ..utils.progress import ProgressBar
-from ..utils.exceptions import IPyradError
-from .snps_extracter import _MISSING_GENO
-from ipyrad2 import __version__ as __ip2version__
+from loguru import logger
 
-class VCFtoHDF5(object):
+from ...utils.progress import ProgressBar
+from ...utils.exceptions import IPyradError
+from ..extractors.snp_extractor import _MISSING_GENO
+
+class VCFToHDF5(object):
     """
     Creates a temporary snps.hdf5 file conversion of the VCF file.
     For ipyrad assembled RAD seq data this will use RAD loci as the
@@ -55,7 +63,8 @@ class VCFtoHDF5(object):
 
         # check for data file
         self.database = os.path.join(self.workdir, self.name + ".hdf5")
-        assert os.path.exists(self.data), "file {} not found".format(self.data)
+        if not os.path.exists(self.data):
+            raise IPyradError(f"VCF file not found: {self.data}")
         if not os.path.exists(self.workdir):
             os.makedirs(self.workdir)
 
@@ -73,8 +82,9 @@ class VCFtoHDF5(object):
         self._print("Indexing VCF to HDF5 database file")
 
         if os.path.exists(self.database) and not force:
-            self._print("hdf5 file exists. Use `force=True` to overwrite.")
-            return
+            raise IPyradError(
+                f"HDF5 file already exists: {self.database}. Use --force to overwrite."
+            )
         else:
             pass
 
@@ -110,7 +120,7 @@ class VCFtoHDF5(object):
 
     def _print(self, msg):
         if not self.quiet:
-            print(msg)
+            logger.info(msg)
 
 
     def get_meta(self):
@@ -118,7 +128,7 @@ class VCFtoHDF5(object):
         Skip and count ## lines, and get names from first # line in VCF.
         """
         # store a list of chrom names
-        self.chroms = set()
+        chroms = set()
 
         if self.data.endswith(".gz"):
             import gzip
@@ -152,14 +162,13 @@ class VCFtoHDF5(object):
             # meta snps data
             else:
                 self.nsnps += 1
-                self.chroms.add(data[0])
+                chroms.add(data[0])
 
         # close file handle
         infile.close()
 
-        # Convert to list and sort chroms
-        self.chroms = sorted(list(self.chroms))
-        self._print("VCF: {} SNPs; {} scaffolds".format(self.nsnps, len(self.chroms)))
+        # convert chroms into a factorized list
+        self._print("VCF: {} SNPs; {} scaffolds".format(self.nsnps, len(chroms)))        
 
 
     def init_database(self):
@@ -168,22 +177,20 @@ class VCFtoHDF5(object):
         """
         # init the database file
         with h5py.File(self.database, 'w') as io5:
+            io5.attrs["version"] = 2.0
+            io5.attrs["names"] = np.array(self.names, dtype=h5py.string_dtype(encoding="utf-8"))
+            io5.attrs["nsnps"] = int(self.nsnps)
 
             # core data sets (should SNPs be S1?)
             io5.create_dataset("genos", (self.nsnps, self.nsamples, 3), np.uint8)
             io5.create_dataset("snps", (self.nsamples, self.nsnps), np.uint8)
             io5.create_dataset("snpsmap", (self.nsnps, 5), np.uint32)
+            io5.create_dataset("reference", (self.nsnps,), np.uint8)
             io5["snps"].attrs["names"] = [i.encode() for i in self.names]
             io5["genos"].attrs["names"] = [i.encode() for i in self.names]
             io5["snpsmap"].attrs["columns"] = [
                 b"loc", b"loc_idx", b"loc_pos", b"scaff", b"pos",
             ]
-            io5.attrs["names"] = np.array(self.names, dtype="object")
-            io5.attrs["nsnps"] = np.int64(self.nsnps)
-            io5.attrs["reference"] = self.reference
-            io5.attrs["scaffold_lengths"] = np.array([-1])
-            io5.attrs["scaffold_names"] = np.array(self.chroms, dtype="object")
-            io5.attrs["version"] =str(__ip2version__)
 
 
     def _finalize_database(self):
@@ -198,15 +205,14 @@ class VCFtoHDF5(object):
         with h5py.File(self.database, 'a') as io5:
             io5.create_dataset("genos", (self.nsamples, self.nsnps, 3), np.uint8)
             io5["genos"][:] = np.ascontiguousarray(io5["tmp"][:].transpose(1, 0, 2))
+            io5.attrs["nsnps"] = int(self.nsnps)
+            io5.attrs["names"] = np.array(self.names, dtype=h5py.string_dtype(encoding="utf-8"))
             del io5["tmp"]
 
 
     def build_chunked_matrix(self):
         """
         Fill HDF5 database with VCF data in chunks at a time.
-
-        This would be tricky to parallelize because you need to pass some
-        values from one snpsmap to the next chunk for bookkeeping.
         """
 
         # chunk retriever
@@ -223,46 +229,48 @@ class VCFtoHDF5(object):
             prog = ProgressBar(self.nsnps, 0, "converting VCF to HDF5")
             prog.finished = 0
             prog.update()
+            try:
+                # iterate over chunks of the file
+                xx = 0
+                lastchrom = "NULL"
+                e0 = -1  # 0-indexed new-locus index, will advance in get_snps/lastchrom
+                e1 = 0  # 0-indexed snps-per-loc index
+                e2 = 0  # 0-indexed snps-per-loc position
+                e3 = 0  # 0-indexed original-locus index, TODO, advancer
+                e4 = 0  # 0-indexed global snps counter
+                for chunkdf in self.df:
 
-            # iterate over chunks of the file
-            xx = 0
-            lastchrom = "NULL"
-            e0 = -1  # 0-indexed new-locus index, will advance in get_snps/lastchrom
-            e1 = 0  # 0-indexed snps-per-loc index
-            e2 = 0  # 0-indexed snps-per-loc position
-            e3 = 0  # 0-indexed original-locus index, TODO, advancer
-            e4 = 0  # 0-indexed global snps counter
-            for chunkdf in self.df:
+                    # get sub arrays
+                    genos, snps, reference = chunk_to_arrs(chunkdf, self.nsamples)
 
-                # get sub arrays
-                genos, snps = chunk_to_arrs(chunkdf, self.nsamples)
+                    # get sub snpsmap
+                    snpsmap, lastchrom = self.get_snpsmap(
+                        chunkdf, lastchrom=lastchrom, e0=e0, e1=e1, e2=e2, e4=e4)
 
-                # get sub snpsmap
-                snpsmap, lastchrom = self.get_snpsmap(
-                    chunkdf, lastchrom=lastchrom, e0=e0, e1=e1, e2=e2, e4=e4)
+                    # store sub arrays
+                    e0 = snpsmap[-1, 0].astype(int)
+                    e1 = snpsmap[-1, 1].astype(int) + 1
+                    e2 = snpsmap[-1, 2].astype(int) + 1
+                    e4 = snpsmap[-1, 4].astype(int) + 1
 
-                # store sub arrays
-                e0 = snpsmap[-1, 0].astype(int)
-                e1 = snpsmap[-1, 1].astype(int) + 1
-                e2 = snpsmap[-1, 2].astype(int) + 1
-                e4 = snpsmap[-1, 4].astype(int) + 1
+                    # write to HDF5
+                    io5['snps'][:, xx:xx + chunkdf.shape[0]] = snps.T
+                    io5['genos'][xx:xx + chunkdf.shape[0], :, :2] = genos
+                    io5['snpsmap'][xx:xx + chunkdf.shape[0], :] = snpsmap
+                    io5['reference'][xx:xx + chunkdf.shape[0]] = reference
+                    xx += chunkdf.shape[0]
 
-                # write to HDF5
-                io5['snps'][:, xx:xx + chunkdf.shape[0]] = snps.T
-                io5['genos'][xx:xx + chunkdf.shape[0], :, :2] = genos
-                io5['snpsmap'][xx:xx + chunkdf.shape[0], :] = snpsmap
-                xx += chunkdf.shape[0]
+                    # print progress
+                    prog.finished = xx
+                    prog.update()
 
-                # print progress
-                prog.finished = xx
-                prog.update()
-
-            # return with last chunk
-            self.df = chunkdf
+                # return with last chunk
+                self.df = chunkdf
+            finally:
+                prog.close()
 
             # close h5 handle
             self._print("")
-
 
     def get_snpsmap(self, chunkdf, lastchrom, e0, e1, e2, e4):
 
@@ -373,15 +381,32 @@ class VCFtoHDF5(object):
                 [range(i[1].shape[0]) for i in chunkdf.groupby("BLOCK")])
             # add ldx counter from last chunk
             snpsmap[snpsmap[:, 0] == snpsmap[:, 0].min(), 1] += e1
-            # Constructing a snpsmap from a vcf file does not give us information
-            # about locus position of each snp, so here we implement an incrementing
-            # integer index for this column. It doesn't do anything.
-            snpsmap[:, 2] = range(e4, chunkdf.shape[0] + e4)
+            snpsmap[:, 2] = chunkdf.POS
             snpsmap[:, 3] = chunkdf["#CHROM"].factorize()[0] + original_e0
-            # POS comes directly from the vcf, and is 1-based, so subtract 1
-            # here to put it in 0-index
-            snpsmap[:, 4] = chunkdf.POS - 1
+            snpsmap[:, 4] = range(e4, chunkdf.shape[0] + e4)
         return snpsmap, currchrom
+
+
+def run_vcf_to_hdf5(
+    *,
+    data: Path | str,
+    name: str,
+    outdir: Path | str,
+    ld_block_size: int,
+    force: bool = False,
+) -> Path:
+    outdir = Path(outdir).expanduser().absolute()
+    outdir.mkdir(parents=True, exist_ok=True)
+    tool = VCFToHDF5(
+        data=str(Path(data).expanduser().absolute()),
+        name=name,
+        workdir=str(outdir),
+        ld_block_size=ld_block_size,
+        quiet=False,
+    )
+    tool.run(force=force)
+    logger.info("wrote SNP HDF5 database to {}", tool.database)
+    return Path(tool.database)
 
 
 def get_genos(gstr):
@@ -442,11 +467,12 @@ def chunk_to_arrs(chunkdf, nsamples):
     genos[:, :, 0] = g0
     genos[:, :, 1] = g1
 
-    snps = fill_snps(nsnps, nsamples, ref, g0, g1, alts1, alts2, alts3)
-    return genos, snps
+    # numba func to fill
+    snps = jfill_snps(nsnps, nsamples, ref, g0, g1, alts1, alts2, alts3)
+    return genos, snps, ref
 
 
-def fill_snps(nsnps, nsamples, ref, g0, g1, alts1, alts2, alts3):
+def jfill_snps(nsnps, nsamples, ref, g0, g1, alts1, alts2, alts3):
 
     # fill snps
     snps = np.zeros((nsnps, nsamples), dtype=np.uint8)
@@ -537,7 +563,8 @@ TRANSFULL = {
     ('C', 'G'): "S",
     ('T', 'G'): "K",
     ('A', 'G'): "R",
-    }
+}
+
 
 # used in baba.py / write_outfiles..py
 ## with N and - masked to 255

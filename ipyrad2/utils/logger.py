@@ -35,6 +35,9 @@ from pathlib import Path
 from loguru import logger
 
 
+_CURRENT_LOG_LEVEL = "INFO"
+
+
 def formatter(record):
     """Custom formatter that allows for progress bar."""
     end = record["extra"].get("end", "\n")
@@ -71,18 +74,27 @@ def normalize_log_level(level: str) -> str:
     return level
 
 
+def is_log_level_enabled(level: str) -> bool:
+    """Return True when the configured stderr sink includes this level."""
+    current_no = logger.level(_CURRENT_LOG_LEVEL).no
+    requested_no = logger.level(normalize_log_level(level)).no
+    return requested_no >= current_no
+
+
 def set_log_level(log_level: str = "DEBUG", log_file: Optional[Path] = None):
     """Add logger for ipyrad to stderr and optionally to file.
 
     logger.info("...")
     logger.bind(to_file=True).info("...")
     """
+    global _CURRENT_LOG_LEVEL
+    _CURRENT_LOG_LEVEL = normalize_log_level(log_level)
     logger.remove()
 
     # always log to stderr
     logger.add(
         sink=sys.stderr,
-        level=normalize_log_level(log_level),
+        level=_CURRENT_LOG_LEVEL,
         colorize=color_support(),
         format=formatter,
         enqueue=False,
@@ -95,7 +107,7 @@ def set_log_level(log_level: str = "DEBUG", log_file: Optional[Path] = None):
         log_file.touch(exist_ok=True)
         logger.add(
             sink=str(log_file),
-            level=normalize_log_level(log_level),
+            level=_CURRENT_LOG_LEVEL,
             colorize=False,
             format=formatter,
             enqueue=True,
@@ -109,10 +121,12 @@ def setup_loguru_worker(log_level: str) -> None:
     from loguru import logger
     import sys
 
+    global _CURRENT_LOG_LEVEL
+    _CURRENT_LOG_LEVEL = normalize_log_level(log_level)
     logger.remove()
     logger.add(
         sys.stderr,
-        level=normalize_log_level(log_level),
+        level=_CURRENT_LOG_LEVEL,
         colorize=color_support(),
         format=formatter,
         enqueue=True,
