@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 
-"""
-"""
+"""Demux command-line parser."""
 
 import argparse
+from argparse import ArgumentParser, Namespace
 from pathlib import Path
-from .make_wide import make_wide, intlike
+from .common import RAW_HELP_FORMATTER, intlike
 
 
 EPILOG = """\
@@ -18,18 +18,42 @@ $ ipyrad2 demux -d RUN1/*.fastq.gz RUN2/*.fastq.gz -b BARCODES.tsv -M
 """
 
 
+def _parser_error_if(parser: ArgumentParser, condition: bool, message: str) -> None:
+    """Raise an argparse error when a demux CLI constraint is violated."""
+    if condition:
+        parser.error(message)
+
+
+def validate_demux_args(args: Namespace, parser: ArgumentParser) -> None:
+    """Validate demux CLI arguments after parsing."""
+    _parser_error_if(parser, args.cores < 1, "--cores must be >= 1")
+    _parser_error_if(parser, args.chunksize < 1, "--chunksize must be >= 1")
+    _parser_error_if(
+        parser,
+        args.max_reads is not None and args.max_reads < 1,
+        "--max-reads must be >= 1 when set",
+    )
+    _parser_error_if(parser, args.max_reads_kmer < 1, "--max-reads-kmer must be >= 1")
+    _parser_error_if(
+        parser,
+        not 0 <= args.max_mismatch <= 2,
+        "--max-mismatch must be between 0 and 2",
+    )
+
+
 def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str = None) -> None:
-    """parser for `ipyrad demux` cmd."""
+    """Add `ipyrad2 demux` subcommand parser."""
     tool = subparsers.add_parser(
         "demux",
         description=header,
         help="Demultiplex pooled data to samples by index or barcode.",
         epilog=EPILOG,
-        formatter_class=make_wide(argparse.RawDescriptionHelpFormatter, max_help_position=60, width=140),
+        formatter_class=RAW_HELP_FORMATTER,
+        add_help=False,
     )
     core = tool.add_argument_group("Core inputs")
     mode = tool.add_argument_group("Demultiplexing mode")
-    overhangs = tool.add_argument_group("Restriction overhangs")
+    cutsites = tool.add_argument_group("Cutsite motifs")
     performance = tool.add_argument_group("Performance and sampling")
     logging = tool.add_argument_group("Logging")
 
@@ -45,6 +69,10 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
         "-o", "--out", metavar="Path", type=Path, default="./DEMUX",
         help="Output directory for demultiplexed FASTQs. Created if needed. [default=%(default)s]",
     )
+    core.add_argument(
+        "-f", "--force", action="store_true",
+        help="Overwrite demux outputs from this run.",
+    )
 
     mode.add_argument(
         "--i7", action="store_true",
@@ -59,17 +87,17 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
         help="Merge technical replicates that share a sample name.",
     )
 
-    overhangs.add_argument(
-        "-re1", "--restriction-overhang-1", metavar="str", type=str,
-        help="Restriction overhang on R1. Overrides kmer inference.",
+    cutsites.add_argument(
+        "-e1", "--cutsite-1", metavar="str", type=str,
+        help="5' restriction-site remnant / cutsite motif at the start of R1. Use commas for multiple motifs; overrides inference.",
     )
-    overhangs.add_argument(
-        "-re2", "--restriction-overhang-2", metavar="str", type=str,
-        help="Restriction overhang on R2. Overrides kmer inference.",
+    cutsites.add_argument(
+        "-e2", "--cutsite-2", metavar="str", type=str,
+        help="5' restriction-site remnant / cutsite motif at the start of R2. Use commas for multiple motifs; overrides inference.",
     )
-    overhangs.add_argument(
-        "-R", "--disable-infer-re-overhangs", action="store_true",
-        help="Skip kmer inference; use with explicit restriction overhangs.",
+    cutsites.add_argument(
+        "-E", "--disable-infer-cutsite-motifs", action="store_true",
+        help="Skip cutsite motif inference; use with explicit cutsite motifs.",
     )
 
     performance.add_argument(
@@ -84,30 +112,26 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
         "-x", "--max_reads", metavar="int", type=intlike,
         help="Read up to N reads per file for testing.",
     )
-    # performance.add_argument(
-    #     "-k", "--max-reads-kmer", metavar="int", type=intlike, default=500_000,
-    #     help="Maximum number of reads sampled across files to infer REs from kmers. [default=5e5]",
-    # )
+    performance.add_argument(
+        "--max-reads-kmer", metavar="int", type=intlike, default=100_000,
+        help="Total reads sampled across files for cutsite motif inference. [default=%(default)s]",
+    )
+    performance.add_argument(
+        "--pigz", action="store_true",
+        help="Use pigz for final demux FASTQ compression.",
+    )
 
     logging.add_argument(
         "-l", "--log-level", metavar="str", type=str, default="INFO",
         help="Logging verbosity. [default=%(default)s]",
     )
     logging.add_argument(
-        "-L", "--log-file", metavar="Path", type=Path,
-        help="Append logs to this file as well as stdout.",
+        "-h", "--help", action="help",
+        help="Show this help message and exit.",
     )
     # tool.add_argument(
     #     "--logger", type=str, nargs="*", default=("INFO", None),
     #     help=(
     #         "Logging info entered as one value for LOGLEVEL, or two values "
-    #         "for LOGLEVEL LOGFILE; e.g., 'DEBUG' or 'DEBUG ipyrad.txt.'")
+    #         "for LOGLEVEL LOGFILE; e.g., 'DEBUG' or 'DEBUG ipyrad2.txt.'")
     # )
-
-    # TOO RISKY perhaps, make the user remove existing dir themselves?
-    tool.add_argument(
-        "--force", "-f", action="count", default=0,
-        help=(
-            "Force overwrite. Allows overwriting demultiplexed fastq files "
-            "in the output directory. (Be careful).")
-    )
