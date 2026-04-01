@@ -1,0 +1,34 @@
+extra_css = ["css/notebook-markdown.css"]
+
+[project]
+site_name = "ipyrad2 Documentation"
+nav = [
+  {"Home" = "index.md"},
+  {"Getting Started" = [
+    "getting-started/what-is-ipyrad.md",
+    "getting-started/ethos.md",
+    "getting-started/installation.md",
+    "getting-started/files-and-data-types.md",
+  ]},
+  {"Assembly" = [
+    {"Quick Guide" = "assembly/index.md"},
+    "assembly/demux.md",
+    "assembly/trim.md",
+    {"denovo" = "assembly/denovo.md"},
+    "assembly/map.md",
+    "assembly/assemble.md",
+  ]},
+  {"Writing Outputs" = [
+    "writing-outputs/index.md",
+    "writing-outputs/wex.md",
+    "writing-outputs/lex.md",
+    "writing-outputs/snpex.md",
+  ]},
+  {"Recipes" = [
+    "recipes/index.md",
+    "recipes/sample-name-parsing.md",
+  ]},
+  {"Analysis Guide" = [
+    "analyses/index.md",
+  ]},
+]
