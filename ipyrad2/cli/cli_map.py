@@ -1,90 +1,91 @@
 #!/usr/bin/env python
 
+"""Map command-line parser."""
 
 import argparse
 from pathlib import Path
-from .make_wide import make_wide
+from .common import RAW_HELP_FORMATTER
 
 
 EPILOG = """\
 Examples
 --------
-$ ipyrad map --fastqs DATA/*.fastq.gz --ref REF --out OUT/
+$ ipyrad2 map -d DATA/*.fastq.gz -r REF.fa -o BAMS
+$ ipyrad2 map -d DATA/*.fastq.gz -r REF.fa -o BAMS -i IMAP.tsv
+$ ipyrad2 map -d DATA/*.fastq.gz -r REF.fa -o BAMS -m
+$ ipyrad2 map -d DATA/*.fastq.gz -r REF.fa -o BAMS -u
 """
 
 
 def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = None) -> None:
-    """Add `ipyrad assemble` subcommand parser.
-
-    """
+    """Add `ipyrad2 map` subcommand parser."""
     tool = subparsers.add_parser(
         "map",
         description=header,
-        help="Map, filter, and sort reads with 'bwa-mem2' and 'samtools'.",
+        help="Map reads with 'bwa-mem2' and 'samtools' and write coordinate-sorted BAMs.",
         epilog=EPILOG,
-        formatter_class=make_wide(argparse.RawDescriptionHelpFormatter, max_help_position=60, width=140),
+        formatter_class=RAW_HELP_FORMATTER,
+        add_help=False,
     )
-    tool.add_argument(
+    core = tool.add_argument_group("Core inputs")
+    duplicates = tool.add_argument_group("Duplicate removal")
+    naming = tool.add_argument_group("Sample naming and grouping")
+    performance = tool.add_argument_group("Performance and overwrite")
+    logging = tool.add_argument_group("Logging")
+
+    core.add_argument(
         "-d", "--fastqs", metavar="Path", type=Path, required=True, nargs="*",
-        help="One or more paths to fastq data files (or glob patterns; e.g., './data/*.fastq.gz')",
+        help="Input FASTQ files or glob patterns.",
     )
-    tool.add_argument(
+    core.add_argument(
         "-r", "--reference", metavar="Path", type=Path, required=True,
-        help="Path to the reference genome fasta.",
+        help="Reference FASTA to index and map against.",
     )
-    tool.add_argument(
+    core.add_argument(
         "-o", "--out", metavar="Path", type=Path, default="./MAPPED",
-        help="Directory to write trimmed read files. Will be created if it doesn't exist. [default=MAPPED]",
+        help="Output directory for coordinate-sorted BAMs and map stats. Created if needed. [default=%(default)s]",
     )
-    tool.add_argument(
-        "-i", "--imap", metavar="Path", type=Path,
-        help=r"Imap file with sample\tpop on each line to rename or combine samples to pop name",
-    )
-    tool.add_argument(
-        "-q", "--min-map-q", metavar="int", type=int, default=10,
-        help="Min read alignment score (MAPQ). [default=10]",
-    )
-    tool.add_argument(
-        "-e", "--max-edit-dist", metavar="int", type=int, default=50,
-        help="Max differences between a read and the reference (NM). [default=50]",
-    )
-    tool.add_argument(
-        "-s", "--max-soft-clip", metavar="int", type=int, default=25,
-        help="Max soft-clipped bases in a mapped read. [default=25]",
-    )
-    tool.add_argument(
+
+    duplicates.add_argument(
         "-m", "--mark-dups-by-coords", action="store_true",
-        help="Mark PCR duplicates by coordinates. Only use for WGS data.",
+        help="Remove PCR duplicates by coordinates; intended for WGS data.",
     )
-    tool.add_argument(
+    duplicates.add_argument(
         "-u", "--mark-dups-by-umis", action="store_true",
-        help="Mark PCR duplicates by UMIs. Only use with i5 tags (see ipyrad trim -u).",
+        help="Remove PCR duplicates by UMI tags from `ipyrad2 trim -U`.",
     )
-    tool.add_argument(
-        "-c", "--cores", metavar="int", type=int, default=6,
-        help="Max number of cores to use. [default=6]",
+
+    naming.add_argument(
+        "-i", "--imap", metavar="Path", type=Path,
+        help=r"Sample-to-group table with sample\tgroup lines for subsetting, renaming, or merging samples.",
     )
-    tool.add_argument(
-        "-t", "--threads", metavar="int", type=int, default=3,
-        help="Run c/t multi-threaded jobs concurrently. Larger -t reduces RAM and I/O. [default=3]",
-    )
-    tool.add_argument(
-        "-f", "--force", action="store_true",
-        help="Overwrite if out dir contains fastq file with identical name.",
-    )
-    tool.add_argument(
+    naming.add_argument(
         "-dx", "--delim-str", metavar="str", type=str, default=None,
-        help="Set delim substring 'dx' to override name parsing from files. [default=None]"
+        help="Delimiter substring used to parse sample names from filenames.",
     )
-    tool.add_argument(
+    naming.add_argument(
         "-di", "--delim-idx", metavar="int", type=int, default=1,
-        help="Set delim index. Extracts substring left of the 'di'-th 'dx' in filename. [default=1]",
+        help="Keep text left of the Nth delimiter when parsing sample names. [default=%(default)s]",
     )
-    tool.add_argument(
+
+    performance.add_argument(
+        "-c", "--cores", metavar="int", type=int, default=6,
+        help="Maximum total cores to use. [default=%(default)s]",
+    )
+    performance.add_argument(
+        "-t", "--threads", metavar="int", type=int, default=3,
+        help="Threads per mapping job; larger values trade concurrency for lower I/O overhead. [default=%(default)s]",
+    )
+    performance.add_argument(
+        "-f", "--force", action="store_true",
+        help="Overwrite existing BAM outputs for matching sample names.",
+    )
+
+    logging.add_argument(
         "-l", "--log-level", metavar="str", type=str, default="INFO",
-        help="Log level (DEBUG, INFO, WARN, ERROR) [default=INFO]",
+        help="Logging verbosity. [default=%(default)s]",
     )
-    tool.add_argument(
-        "-L", "--log-file", metavar="Path", type=Path,
-        help="Log file. Logging to stdout is also appended to this file. [default=None]."
+    logging.add_argument(
+        "-h", "--help", action="help",
+        help="Show this help message and exit.",
     )
