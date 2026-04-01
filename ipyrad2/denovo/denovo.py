@@ -1,79 +1,311 @@
 #!/usr/bin/env python
 
-"""Dereplicate reads for denovo clustering.
+"""Build a denovo reference library by clustering reads and locus consensuses."""
 
-PAIRED END
-----------
-1. merge or join pairs, concat, dereplicate, sort
-2. cluster within
-3.
+from __future__ import annotations
 
-"""
-
-from typing import List, Dict, Tuple
-import json
-import numpy as np
-import itertools
-import sys
+import os
 import shutil
-# import tempfile
+import sys
+import csv
 from pathlib import Path
+from typing import Any
+
 from loguru import logger
+
+from .align import AlignmentRunSummary, write_ordered_consensus_stream_to_file
 from .cluster import build_sample_summary, concat_summaries
 from .graph import make_global_tables
-from .align import write_ordered_consensus_stream_to_file
-# from .dereplicate import join_pairs_and_merge_derep
 from ..utils.exceptions import IPyradError
 from ..utils.names import get_name_to_fastq_dict
 from ..utils.parallel import run_pipeline, run_with_pool
-from ..utils.pops import parse_pops_file, parse_imap
 
-BIN = Path(sys.prefix) / "bin"
-BIN_VSEARCH = str(BIN / "vsearch")
+
+WORKDIR_NAME = "_denovo_work"
+
+
+def _validate_runtime_args(
+    within_similarity: float,
+    across_similarity: float,
+    min_derep_size: int,
+    min_length: int,
+    min_merge_overlap: int,
+    max_merge_diffs: int,
+    cores: int,
+    threads: int,
+    delim_idx: int,
+) -> None:
+    """Validate runner arguments for direct library use."""
+    if not 0 < within_similarity <= 1:
+        raise IPyradError("within_similarity must be > 0 and <= 1")
+    if not 0 < across_similarity <= 1:
+        raise IPyradError("across_similarity must be > 0 and <= 1")
+    if min_derep_size < 1:
+        raise IPyradError("min_derep_size must be >= 1")
+    if min_length < 1:
+        raise IPyradError("min_length must be >= 1")
+    if min_merge_overlap < 1:
+        raise IPyradError("min_merge_overlap must be >= 1")
+    if max_merge_diffs < 0:
+        raise IPyradError("max_merge_diffs must be >= 0")
+    if cores < 1:
+        raise IPyradError("cores must be >= 1")
+    if threads < 1:
+        raise IPyradError("threads must be >= 1")
+    if threads > cores:
+        raise IPyradError("threads cannot exceed cores")
+    if delim_idx < 1:
+        raise IPyradError("delim_idx must be >= 1")
+
+
+def _is_executable(path: Path) -> bool:
+    """Return True if a path exists and is executable."""
+    return path.exists() and path.is_file() and os.access(path, os.X_OK)
+
+
+def _resolve_binary(binary: Path | None, name: str) -> str:
+    """Resolve a tool binary from an explicit path, the active env, or PATH."""
+    if binary is not None:
+        candidate = binary.expanduser().absolute()
+        if not _is_executable(candidate):
+            raise IPyradError(f"{name} binary is not executable: {candidate}")
+        return str(candidate)
+
+    env_candidate = Path(sys.prefix) / "bin" / name
+    if _is_executable(env_candidate):
+        return str(env_candidate)
+
+    resolved = shutil.which(name)
+    if resolved:
+        return resolved
+
+    raise IPyradError(
+        f"Cannot find the '{name}' executable. Set --{name}-binary explicitly "
+        "or install it into the active environment or PATH."
+    )
+
+
+def _validate_fastq_layout(
+    fastq_dict: dict[str, tuple[Path, Path | None]],
+) -> bool:
+    """Validate parsed FASTQ layout and return whether the run is paired-end."""
+    if not fastq_dict:
+        raise IPyradError("No FASTQ inputs were parsed for denovo.")
+
+    paired_states = {paths[1] is not None for paths in fastq_dict.values()}
+    if len(paired_states) > 1:
+        raise IPyradError(
+            "denovo requires all inputs to be consistently single-end or paired-end; "
+            "mixed input layouts were detected."
+        )
+    return paired_states.pop()
+
+
+def _iter_denovo_outputs(outdir: Path) -> list[Path]:
+    """Return the curated denovo output paths for one output directory."""
+    return [
+        outdir / "denovo_reference.fa",
+        outdir / "loci.mapping.tsv",
+        outdir / "loci.stats.tsv",
+        outdir / "denovo.stats.txt",
+        outdir / "denovo.audit",
+    ]
+
+
+def _prepare_output_paths(
+    outdir: Path,
+    force: bool,
+) -> tuple[Path, dict[str, Path]]:
+    """Prepare curated denovo outputs and the internal working directory."""
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    outputs = {
+        "reference": outdir / "denovo_reference.fa",
+        "mapping": outdir / "loci.mapping.tsv",
+        "loci_stats": outdir / "loci.stats.tsv",
+        "run_stats": outdir / "denovo.stats.txt",
+        "audit_dir": outdir / "denovo.audit",
+        "workdir": outdir / WORKDIR_NAME,
+    }
+    existing = [path for path in outputs.values() if path.exists()]
+    if existing and not force:
+        joined = ", ".join(path.name for path in existing)
+        raise IPyradError(
+            f"denovo outputs already exist in {outdir}. Use --force to overwrite: {joined}"
+        )
+
+    if force:
+        for path in _iter_denovo_outputs(outdir):
+            if path.exists():
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+        if outputs["workdir"].exists():
+            shutil.rmtree(outputs["workdir"])
+
+    outputs["workdir"].mkdir(parents=True, exist_ok=True)
+    return outputs["workdir"], outputs
+
+
+def _write_denovo_stats(
+    outpath: Path,
+    *,
+    fastq_dict: dict[str, tuple[Path, Path | None]],
+    paired: bool,
+    within_similarity: float,
+    across_similarity: float,
+    min_derep_size: int,
+    min_length: int,
+    min_merge_overlap: int,
+    max_merge_diffs: int,
+    allow_reverse_complement: bool,
+    cores: int,
+    threads: int,
+    workers: int,
+    graph_splitter: str,
+    alignment_summary: AlignmentRunSummary,
+    vsearch_binary: str,
+    mafft_binary: str,
+    keep_intermediates: bool,
+    workdir: Path,
+    mapping_df: Any,
+    stats_df: Any,
+    outputs: dict[str, Path],
+) -> None:
+    """Write a human-readable summary of the denovo run."""
+    nloci = int(stats_df.shape[0]) if stats_df is not None else 0
+    ncores = int(mapping_df.shape[0]) if mapping_df is not None else 0
+    if stats_df is not None and not getattr(stats_df, "empty", False):
+        duplicated_components_seen = (
+            int(stats_df.loc[stats_df["duplicated_component"], "component_id"].nunique())
+            if "duplicated_component" in stats_df.columns
+            else 0
+        )
+        duplicated_components_aligned = (
+            int(stats_df.loc[stats_df["aligned_for_reconciliation"], "component_id"].nunique())
+            if "aligned_for_reconciliation" in stats_df.columns
+            else 0
+        )
+        components_reconciled = (
+            int(stats_df.loc[stats_df["used_reconciliation"], "component_id"].nunique())
+            if "used_reconciliation" in stats_df.columns
+            else 0
+        )
+        joined_only_reconciled_loci = int(
+            (stats_df["reconcile_mode"] == "joined_only").sum()
+        ) if "reconcile_mode" in stats_df.columns else 0
+        mixed_reconciled_loci = int(
+            (stats_df["reconcile_mode"] == "mixed").sum()
+        ) if "reconcile_mode" in stats_df.columns else 0
+        mixed_reconciled_groups = int(stats_df["n_reconciled_groups"].sum()) if "n_reconciled_groups" in stats_df.columns else 0
+    else:
+        duplicated_components_seen = 0
+        duplicated_components_aligned = 0
+        components_reconciled = 0
+        joined_only_reconciled_loci = 0
+        mixed_reconciled_loci = 0
+        mixed_reconciled_groups = 0
+    lines = [
+        "Inputs",
+        f"  fastq_count: {sum(2 if paths[1] else 1 for paths in fastq_dict.values())}",
+        f"  sample_count: {len(fastq_dict)}",
+        f"  paired_mode: {'paired-end' if paired else 'single-end'}",
+        f"  sample_names: {', '.join(sorted(fastq_dict))}",
+        "",
+        "Clustering",
+        f"  within_similarity: {within_similarity}",
+        f"  across_similarity: {across_similarity}",
+        f"  min_derep_size: {min_derep_size}",
+        f"  min_length: {min_length}",
+        f"  min_merge_overlap: {min_merge_overlap}",
+        f"  max_merge_diffs: {max_merge_diffs}",
+        f"  allow_reverse_complement: {allow_reverse_complement}",
+        "",
+        "Runtime",
+        f"  cores: {cores}",
+        f"  vsearch_threads_per_job: {threads}",
+        f"  vsearch_worker_processes: {workers}",
+        f"  graph_splitter: {graph_splitter}",
+        f"  mafft_threads_per_job: {alignment_summary.mafft_threads_per_job}",
+        f"  mafft_worker_processes: {alignment_summary.mafft_worker_processes}",
+        f"  alignment_mode: {alignment_summary.alignment_mode}",
+        f"  mafft_timeout_seconds: {alignment_summary.mafft_timeout_seconds}",
+        "  duplicated_component_reconciliation: aligned",
+        f"  cluster_spacer_mode: stripped",
+        f"  output_spacer_length: {alignment_summary.output_spacer_length}",
+        f"  vsearch_binary: {vsearch_binary}",
+        f"  mafft_binary: {mafft_binary}",
+        f"  keep_intermediates: {keep_intermediates}",
+        f"  workdir: {workdir}",
+        "",
+        "Results",
+        f"  consensus_records: {ncores}",
+        f"  loci_written: {nloci}",
+        f"  single_sequence_loci: {alignment_summary.single_sequence_loci}",
+        f"  identical_sequence_loci: {alignment_summary.identical_sequence_loci}",
+        f"  mafft_required_loci: {alignment_summary.mafft_required_loci}",
+        f"  joined_spacer_loci: {alignment_summary.joined_spacer_loci}",
+        f"  mixed_reconciled_spacer_loci: {alignment_summary.mixed_reconciled_spacer_loci}",
+        f"  stripped_output_loci: {alignment_summary.stripped_output_loci}",
+        f"  duplicated_components_seen: {duplicated_components_seen}",
+        f"  duplicated_components_aligned: {duplicated_components_aligned}",
+        f"  components_reconciled: {components_reconciled}",
+        f"  joined_only_reconciled_loci: {joined_only_reconciled_loci}",
+        f"  mixed_reconciled_loci: {mixed_reconciled_loci}",
+        f"  mixed_reconciled_groups: {mixed_reconciled_groups}",
+        "",
+        "Outputs",
+        f"  reference: {outputs['reference']}",
+        f"  mapping: {outputs['mapping']}",
+        f"  loci_stats: {outputs['loci_stats']}",
+        f"  run_stats: {outputs['run_stats']}",
+        f"  audit_dir: {outputs['audit_dir']}",
+    ]
+    if not keep_intermediates:
+        lines.append("  intermediates: cleaned on success")
+    outpath.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    logger.info(f"wrote denovo run stats to {outpath}")
 
 
 def vsearch_pairs(
     sname: str,
     r1: Path,
-    r2: Path,
+    r2: Path | None,
     outdir: Path,
-    min_dereplication_size: int,
+    vsearch_binary: str,
+    min_derep_size: int,
     min_merge_overlap: int,
     min_length: int,
     max_merge_diffs: int,
-    strand_both: bool,
-    similarity_threshold_within: float,
+    allow_reverse_complement: bool,
+    within_similarity: float,
     by_length: bool,
     threads: int,
     paired: bool = False,
-):
-    unmerged_R1 = outdir / f"{sname}.unmerged_R1.fq"
-    unmerged_R2 = outdir / f"{sname}.unmerged_R2.fq"
+) -> None:
+    """Run the within-sample vsearch workflow for one sample."""
+    unmerged_r1 = outdir / f"{sname}.unmerged_R1.fq"
+    unmerged_r2 = outdir / f"{sname}.unmerged_R2.fq"
     merged = outdir / f"{sname}.merged.fa"
     joined = outdir / f"{sname}.joined.fa"
     derep = outdir / f"{sname}.derep.sizesorted.fa"
     consensus = outdir / f"{sname}.consensus.fa"
     clusters = outdir / f"{sname}.clusters.tsv"
 
-    # If the clustering is already done for this sample don't redo it
-    # If you wish to redo it you must use the `-f -f` to rmtree the tmpdir
-    if consensus.exists() and clusters.exists():
-        logger.debug(f"Skipping cluster within: Consensus and clusters files exist for {sname}")
-        return
-
     if paired:
+        if r2 is None:
+            raise IPyradError(f"Missing R2 FASTQ for paired sample: {sname}")
         cmd1 = [
-            BIN_VSEARCH,
-            "--fastq_mergepairs", str(r1),
+            vsearch_binary, "--fastq_mergepairs", str(r1),
             "--reverse", str(r2),
             "--fastq_minovlen", str(min_merge_overlap),
             "--fastq_maxdiffs", str(max_merge_diffs),
             "--fastq_minlen", str(min_length),
             "--fastq_allowmergestagger",
             "--fasta_width", "0",
-            "--fastqout_notmerged_fwd", str(unmerged_R1),
-            "--fastqout_notmerged_rev", str(unmerged_R2),
-            "--fasta_width", "0",
+            "--fastqout_notmerged_fwd", str(unmerged_r1),
+            "--fastqout_notmerged_rev", str(unmerged_r2),
             "--relabel", f"{sname};M",
             "--fastaout", str(merged),
         ]
@@ -81,9 +313,8 @@ def vsearch_pairs(
         run_pipeline([cmd1])
 
         cmd1 = [
-            BIN_VSEARCH,
-            "--fastq_join", str(unmerged_R1),
-            "--reverse", str(unmerged_R2),
+            vsearch_binary, "--fastq_join", str(unmerged_r1),
+            "--reverse", str(unmerged_r2),
             "--join_padgap", "N" * 24,
             "--join_padgapq", "I" * 24,
             "--fasta_width", "0",
@@ -95,33 +326,27 @@ def vsearch_pairs(
 
         cmd1 = ["cat", str(joined), str(merged)]
     else:
-        # Relabel the R1 data for agreement with PE format in relabeling the reads
         cmd1 = [
-            BIN_VSEARCH,
-            "--fastx_subsample", str(r1),
+            vsearch_binary, "--fastx_subsample", str(r1),
             "--sample_pct", "100",
             "--relabel", f"{sname};S",
             "--fastaout", str(joined),
         ]
         logger.debug(" ".join(cmd1))
         run_pipeline([cmd1])
-
         cmd1 = ["cat", str(joined)]
 
     cmd2 = [
-        BIN_VSEARCH,
-        "--fastx_uniques", "-",
-        "--minuniquesize", str(min_dereplication_size),
-        "--strand", "both" if strand_both else "plus",
+        vsearch_binary, "--fastx_uniques", "-",
+        "--minuniquesize", str(min_derep_size),
+        "--strand", "both" if allow_reverse_complement else "plus",
         "--fasta_width", "0",
         "--sizeout",
         "--relabel_keep",
         "--fastaout", "-",
     ]
     cmd3 = [
-        BIN_VSEARCH,
-        "--sortbylength" if by_length else "--sortbysize",
-        "-",
+        vsearch_binary, "--sortbylength" if by_length else "--sortbysize", "-",
         "--sizein",
         "--sizeout",
         "--fasta_width", "0",
@@ -131,13 +356,11 @@ def vsearch_pairs(
     run_pipeline([cmd1, cmd2, cmd3])
 
     cmd1 = [
-        BIN_VSEARCH,
-        "--cluster_fast" if by_length else "--cluster_size", str(derep),
-        "--id", str(similarity_threshold_within),
-        "--strand", "both" if strand_both else "plus",
+        vsearch_binary, "--cluster_fast" if by_length else "--cluster_size", str(derep),
+        "--id", str(within_similarity),
+        "--strand", "both" if allow_reverse_complement else "plus",
         "--maxaccepts", "1",
         "--maxrejects", "0",
-        # "--minsl", "0.75",
         "--query_cov", "0.75",
         "--fasta_width", "0",
         "--qmask", "none",
@@ -149,26 +372,43 @@ def vsearch_pairs(
     run_pipeline([cmd1])
 
 
+def _write_cluster_sequence_fasta(
+    summary_tsv: Path,
+    out_fasta: Path,
+) -> Path:
+    """Write a clustering FASTA from spacer-stripped summary sequences."""
+    with open(summary_tsv, "rt", encoding="utf-8", newline="") as infile, open(
+        out_fasta,
+        "wt",
+        encoding="utf-8",
+    ) as outfile:
+        reader = csv.DictReader(infile, delimiter="\t")
+        if reader.fieldnames is None or "seed" not in reader.fieldnames:
+            raise RuntimeError("concat.summary.tsv is missing required column: seed")
+        seq_field = "cluster_sequence" if "cluster_sequence" in reader.fieldnames else "consensus"
+        for row in reader:
+            seed = str(row["seed"])
+            seq = str(row[seq_field]).upper()
+            outfile.write(f">{seed}\n{seq}\n")
+    return out_fasta
+
+
 def vsearch_cluster_across(
     outdir: Path,
-    similarity_threshold_across: float,
+    summary_tsv: Path,
+    across_similarity: float,
     threads: int,
-):
+    vsearch_binary: str,
+) -> None:
+    """Cluster all sample-level consensus sequences across samples."""
     cluster_table = outdir / "global_hits.uc.tsv"
     consensus_concat = outdir / "consensus.concat.fa"
+    _write_cluster_sequence_fasta(summary_tsv, consensus_concat)
 
-    # create concat.consensus
-    cmd1 = ["cat"] + sorted(outdir.glob("*.consensus.fa"))
-    run_pipeline([cmd1], consensus_concat)
-
-    # all-vs-all search
-    # (keeps edges; cheaper than full clustering if you want graph control)
-    # NB: cannot pipe concat into this.
     cmd1 = [
-        BIN_VSEARCH,
-        "--usearch_global", str(consensus_concat),
+        vsearch_binary, "--usearch_global", str(consensus_concat),
         "--db", str(consensus_concat),
-        "--id", str(similarity_threshold_across),
+        "--id", str(across_similarity),
         "--userout", str(cluster_table),
         "--userfields", "query+target+id+qstrand+qcov+ql+tl",
         "--maxaccepts", "0",
@@ -180,222 +420,143 @@ def vsearch_cluster_across(
         "--fasta_width", "0",
         "--threads", str(threads),
     ]
-    msg = "All-by-all clustering"
-    run_pipeline([cmd1], msg=msg, quiet=False)
+    run_pipeline([cmd1])
 
 
 def run_denovo(
-    fastqs: List[Path],
+    fastqs: list[Path],
     outdir: Path,
-    imap: Path | None,
-    similarity_threshold_within: float,
-    similarity_threshold_across: float,
-    min_dereplication_size: int,
+    within_similarity: float,
+    across_similarity: float,
+    min_derep_size: int,
     min_length: int,
     min_merge_overlap: int,
     max_merge_diffs: int,
     delim_str: str | None,
     delim_idx: int,
-    strand_both: bool,
+    allow_reverse_complement: bool,
     cores: int,
     threads: int,
+    graph_splitter: str,
+    no_alignment: bool,
     force: bool,
+    keep_intermediates: bool,
+    vsearch_binary: Path | None,
+    mafft_binary: Path | None,
     log_level: str,
-):
-    """..."""
+) -> None:
+    """Run the denovo reference construction workflow."""
+    _validate_runtime_args(
+        within_similarity=within_similarity,
+        across_similarity=across_similarity,
+        min_derep_size=min_derep_size,
+        min_length=min_length,
+        min_merge_overlap=min_merge_overlap,
+        max_merge_diffs=max_merge_diffs,
+        cores=cores,
+        threads=threads,
+        delim_idx=delim_idx,
+    )
+
     outdir = outdir.expanduser().absolute()
-    outdir.mkdir(exist_ok=True)
-    denovo_reference = outdir / "denovo_reference.fa"
-    tmpdir = outdir / "tmpdir"
-    logger.debug(tmpdir)
+    workdir, outputs = _prepare_output_paths(outdir, force=force)
+    vsearch_path = _resolve_binary(vsearch_binary, "vsearch")
+    mafft_path = _resolve_binary(mafft_binary, "mafft")
     fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx)
-    subset_fq_dict_file = tmpdir / ".fastq_dict.json"
-    is_paired = list(fastq_dict.values())[0][1] is not None
+    is_paired = _validate_fastq_layout(fastq_dict)
     workers = max(1, cores // threads)
 
-    # -------------------------------------------
-    # Clean up stale files from previous denovo assembly
-    if tmpdir.exists() or denovo_reference.exists():
-        if force < 1:
-            raise IPyradError("denovo reference results exist in outdir. Use "
-                              "`-f` to resume after clustering, "
-                              "or use `-f -f` to start from scratch.")
+    logger.info(f"paired mode: {'paired-end' if is_paired else 'single-end'}")
+    logger.info(f"using vsearch binary: {vsearch_path}")
+    logger.info(f"using mafft binary: {mafft_path}")
 
-        elif force == 1:
-            # If only `-f` then we let the process proceed and will only rerun
-            # necessary steps
-            logger.warning("denovo reference results exist in outdir. Rerunning "
-                           "post-clustering assembly. Use `-f -f` to "
-                           "overwrite and start from scratch.")
+    msg = "Joining/merging pairs, dereplicating, and clustering" if is_paired else "Dereplicating and clustering"
+    jobs: dict[str, tuple[Any, dict[str, Any]]] = {}
+    for sname, fastq_tuple in fastq_dict.items():
+        kwargs = dict(
+            sname=sname,
+            r1=fastq_tuple[0],
+            r2=fastq_tuple[1],
+            outdir=workdir,
+            vsearch_binary=vsearch_path,
+            min_derep_size=min_derep_size,
+            min_length=min_length,
+            min_merge_overlap=min_merge_overlap,
+            max_merge_diffs=max_merge_diffs,
+            allow_reverse_complement=allow_reverse_complement,
+            within_similarity=within_similarity,
+            by_length=True,
+            threads=threads,
+            paired=is_paired,
+        )
+        jobs[sname] = (vsearch_pairs, kwargs)
 
-        elif force >= 2:
-            logger.warning("Cleaning up previous reference assembly and temporary files")
-            # Clean up stale bwa-mem2 index files
-            suffs = [".pac", ".ann", ".amb", ".0123", ".bwt.2bit.64", ".fai"]  # bwa-mem2
-            # don't use Path.with_suffix here b/c '.fa.ann' double suffix is messy.
-            paths = [denovo_reference.with_suffix(denovo_reference.suffix + i) for i in suffs]
-            for i in paths:
-                try:
-                    i.unlink()
-                except FileNotFoundError:
-                    pass
-            # Clean up the tmpdir
-            shutil.rmtree(tmpdir)
-    tmpdir.mkdir(exist_ok=True)
+    run_with_pool(jobs, log_level, workers, msg=msg)
 
-    if force == 1:
-        # In this case we have already subset the samples for denovo assembly
-        # so we reload the fastq_dict of processed samples from the tmpfile
-        try:
-            with open(subset_fq_dict_file, 'r') as json_file:
-                fastq_dict = json.load(json_file, object_hook=_path_decoder)
-                logger.success(f"Reloading clustering results for: {list(fastq_dict.keys())}")
-        except FileNotFoundError:
-            raise IPyradError(f"Attempting `-f` but {subset_fq_dict_file} does not exist. "
-                               "To re-run this step you must use `-f -f` and start from scratch")
-        except Exception as e:
-            raise IPyradError(f"Error loading samples from {subset_fq_dict_file}: {e}")
-    else:
-        # If force == 0 or force == 2 then we redo everything.
-        # Use imap for subsetting samples for building denovo reference
-        # Potentially return a subset of fastqs determined either by the contents
-        # of imap or by randomly selecting 10 samples total
-        fastq_dict = _subset_fastqs(imap, fastq_dict)
+    for sname in fastq_dict:
+        build_sample_summary(sname, workdir)
+    concat_summaries(workdir)
 
-        # -------------------------------------------
-        # vsearch w/in samples (derep/cluster)
-        msg = "Joining/merging pairs, d" if is_paired else "D"
-        msg = f"{msg}ereplicating and clustering"
-        logger.info(msg)
-        jobs = {}
-        for sname, fastq_tuple in fastq_dict.items():
-            kwargs=dict(
-                sname=sname,
-                r1=fastq_tuple[0],
-                r2=fastq_tuple[1],
-                outdir=tmpdir,
-                min_dereplication_size=min_dereplication_size,
-                min_length=min_length,
-                min_merge_overlap=min_merge_overlap,
-                max_merge_diffs=max_merge_diffs,
-                strand_both=strand_both,
-                similarity_threshold_within=similarity_threshold_within,
-                by_length=True,
-                threads=threads,
-                paired=is_paired,
-            )
-            jobs[sname] = (vsearch_pairs, kwargs)
-        run_with_pool(jobs, log_level, workers, msg=msg)
-
-        logger.success("Building summary tables")
-        # write sample summary TSVs
-        for sname in fastq_dict:
-            build_sample_summary(sname, tmpdir)
-        concat_summaries(tmpdir)
-
-        # Store the fastq dict as json in the tmpfile in case we want to re-run with -f
-        # This is bootleg checkpointing for denovo assembly, bypassing cluster within
-        with open(subset_fq_dict_file, 'w') as json_file:
-            # Dump fastq dict with a custom encoder to handle pathlib.Path obj
-            json.dump(fastq_dict, json_file, indent=4, cls=_PathEncoder)
-
-    #TODO: Add some logging messages here so people can see progress
     logger.info("Clustering consensus sequences across samples")
-    vsearch_cluster_across(tmpdir, similarity_threshold_across, cores)
+    vsearch_cluster_across(
+        outdir=workdir,
+        summary_tsv=workdir / "concat.summary.tsv",
+        across_similarity=across_similarity,
+        threads=threads,
+        vsearch_binary=vsearch_path,
+    )
 
-    logger.info("Splitting clusters and writing mapping table")
-    mapping_tsv, summary_tsv = make_global_tables(tmpdir)
+    logger.info("Splitting global clusters and writing locus tables")
+    mapping_df, stats_df = make_global_tables(
+        workdir,
+        graph_splitter=graph_splitter,
+        cores=cores,
+        log_level=log_level,
+        across_similarity=across_similarity,
+        mafft_binary=mafft_path,
+    )
 
-    logger.info("Aligning and writing denovo consensus reference")
-    write_ordered_consensus_stream_to_file(outdir, log_level)
-
-    # -------------------------------------------
-
-
-def _subset_fastqs(imap: Path | None,
-    fastq_dict: Dict[str, Tuple[Path, Path | None]],
-    nsamples: int = 10,
-    seed: int | None = None):
-    """
-    """
-    if not seed:
-        seed = np.random.randint(0, 1e9)
-    rng = np.random.default_rng(np.random.SeedSequence(seed))
-
-    # -------------------------------------------
-    # Get imap/minmap for subsetting samples for building denovo reference
-    # parse_pops_file is responsible for validating that the minmap pops and
-    # imap pops are identical.
-    if imap is None:
-        imap = {'all': list(fastq_dict.keys())}
-        minmap = {'all': nsamples}
+    if no_alignment:
+        logger.info("Selecting longest locus representatives and writing denovo reference")
     else:
-        if not imap.exists():
-            raise IPyradError(f"imap file does not exists: {imap}")
-        minmap = {}
-        try:
-            # Favor ipyrad style imap file including sample/pop mapping
-            # and trailing minmap line (# pop1:10 Pop2:5 ...)
-            imap, minmap = parse_pops_file(imap)
-        except IPyradError as e:
-            logger.warning(e)
-            logger.info("imap file doesn't include minmap info, parsing standard imap file format.")
-            imap = parse_imap(imap)
-        # Validate names in imap and fastq_dict agree
-        # raise error if any imap sample names not in database names
-        imapset = set(itertools.chain(*imap.values()))
-        badnames = imapset.difference(fastq_dict.keys())
-        if badnames:
-            raise IPyradError(
-                f"Samples {badnames} are not in fastqs list: {fastq_dict.keys()}")
+        logger.info("Aligning locus consensuses and writing denovo reference")
+    alignment_summary = write_ordered_consensus_stream_to_file(
+        mapping_tsv=outputs["mapping"],
+        summary_tsv=workdir / "concat.summary.tsv",
+        out_fa=outputs["reference"],
+        mafft_binary=mafft_path,
+        log_level=log_level,
+        cores=cores,
+        alignment_mode="none" if no_alignment else "mafft",
+    )
 
-        # Enforce at least one sample per population
-        if not minmap:
-            if len(imap) > nsamples:
-                samples_per_pop = 1
-            else:
-                # If the # of pops is smaller than nsamples we do a little fudging
-                # to get the target number of samples per population, so the sum
-                # of samples_per_pop * len(imap) will sometimes be slightly higher
-                # or lower than the passed in (hopeful) nsamples value
-                samples_per_pop = round(nsamples/len(imap))
+    _write_denovo_stats(
+        outputs["run_stats"],
+        fastq_dict=fastq_dict,
+        paired=is_paired,
+        within_similarity=within_similarity,
+        across_similarity=across_similarity,
+        min_derep_size=min_derep_size,
+        min_length=min_length,
+        min_merge_overlap=min_merge_overlap,
+        max_merge_diffs=max_merge_diffs,
+        allow_reverse_complement=allow_reverse_complement,
+        cores=cores,
+        threads=threads,
+        workers=workers,
+        graph_splitter=graph_splitter,
+        alignment_summary=alignment_summary,
+        vsearch_binary=vsearch_path,
+        mafft_binary=mafft_path,
+        keep_intermediates=keep_intermediates,
+        workdir=workdir,
+        mapping_df=mapping_df,
+        stats_df=stats_df,
+        outputs=outputs,
+    )
 
-            # Have to retain _at_ least the number of samples available, and at
-            # most the number determined by dividing nsamples by npops.
-            minmap = {pop:min(samples_per_pop, len(samps)) for pop, samps in imap.items()}
-    logger.success(f"# samples per population for denovo reference construction: {minmap}")
-    if sum(minmap.values()) > nsamples:
-        logger.error(f"imap file is selecting more than {nsamples} samples. Time to "
-            "construct the pseudo-reference increases with increasing numbers of samples.")
-
-    tmp_fastq_dict = {}
-    for pop, samps in imap.items():
-        # Constrain the number to be sampled from a given population when replace=False
-        max_samps = len(imap[pop])
-        samps = rng.choice(samps, min(minmap[pop], max_samps), replace=False)
-        # Grab the fastq Paths for retained samples
-        for samp in samps:
-            tmp_fastq_dict[str(samp)] = fastq_dict[samp]
-
-    logger.success("Subsetting populations for construction of pseudo-reference sequence.")
-    logger.success(f"Retaining samples: {list(tmp_fastq_dict.keys())}")
-    logger.debug(f"Retaining: {tmp_fastq_dict}")
-
-    return tmp_fastq_dict
-
-
-# Helpers for reading/writing the stored fastq_dict json file
-class _PathEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, Path):
-            return {"__type__": "pathlib.Path", "value": str(obj)}
-        # Standard JSON library converts tuples to lists automatically
-        return super().default(obj)
-
-def _path_decoder(obj):
-    if isinstance(obj, dict) and obj.get("__type__") == "pathlib.Path":
-        return Path(obj["value"])
-    return obj
+    if not keep_intermediates:
+        shutil.rmtree(workdir)
 
 
 if __name__ == "__main__":

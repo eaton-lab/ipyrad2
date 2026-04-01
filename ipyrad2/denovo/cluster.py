@@ -1,23 +1,24 @@
 #!/usr/bin/env python
 
-"""Convert within-sample cluster results to summary tables.
-"""
+"""Convert within-sample cluster results to summary tables."""
 
 from pathlib import Path
 import pandas as pd
 from loguru import logger
 from typing import Dict
 
+from .common import CLUSTER_JOINED_SPACER_LEN, infer_record_type, split_joined_sequence
+
 
 def get_header_to_seq_dict(consensus_fa: Path) -> Dict[str, str]:
-    """Return dict mapping core name to (sequence, mj)."""
+    """Return dict mapping core name to its raw consensus sequence."""
     seqs = {}
     with open(consensus_fa, "rt") as fh:
         for line in fh:
             if line[0] == ">":
                 # >centroid=1A_0;J16321;size=25;seqs=1
                 prefix, mjid, _, _ = line.strip().rsplit(";", 3)
-                core = f"{prefix.split("=", 1)[-1]};{mjid}"
+                core = f"{prefix.split('=', 1)[-1]};{mjid}"
             else:
                 seqs[core] = line.strip().upper()
     return seqs
@@ -41,10 +42,27 @@ def parse_uc_data(uc_path: Path) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["type", "cluster", "core", "size", "merged"])
 
 
-def build_sample_summary(sname: str, outdir: Path, joined_spacer: int = 24) -> pd.DataFrame:
-    """Summarize within-sample clusters from vsearch.
-    """
-    columns = ["sample", "cluster_id", "seed", "length", "n_unique", "n_reads", "merged", "consensus"]
+def build_sample_summary(
+    sname: str,
+    outdir: Path,
+    joined_spacer: int = CLUSTER_JOINED_SPACER_LEN,
+) -> pd.DataFrame:
+    """Summarize within-sample clusters from vsearch."""
+    columns = [
+        "sample",
+        "cluster_id",
+        "seed",
+        "length",
+        "cluster_length",
+        "n_unique",
+        "n_reads",
+        "merged",
+        "record_type",
+        "consensus",
+        "cluster_sequence",
+        "left_arm",
+        "right_arm",
+    ]
 
     # paths
     consensus_path = outdir / f"{sname}.consensus.fa"
@@ -66,20 +84,29 @@ def build_sample_summary(sname: str, outdir: Path, joined_spacer: int = 24) -> p
     out_rows = []
     grp = uc.groupby("cluster")
     for i, j in grp:
-        # logger.warning(f"entering {sname} cluster {i}")
         nu = len(j['core'].unique())
         nr = sum(j['size'])
         seed = j.loc[j['type'] == "S", 'core'].item()
         consensus = seed_to_seq[seed]
+        cluster_sequence, left_arm, right_arm, _joined = split_joined_sequence(
+            consensus,
+            spacer_len=joined_spacer,
+        )
+        record_type = infer_record_type(seed)
         out_rows.append({
             "sample": sname,
             "cluster_id": str(i),
             "seed": seed,
             "length": len(consensus),
+            "cluster_length": len(cluster_sequence),
             "n_unique": int(nu),
             "n_reads": int(nr),
             "merged": seed.rsplit(";", 1)[1][0] == "M",
+            "record_type": record_type,
             "consensus": consensus,
+            "cluster_sequence": cluster_sequence,
+            "left_arm": left_arm,
+            "right_arm": right_arm,
         })
     df = pd.DataFrame(out_rows, columns=columns)
     out_path = outdir / f"{sname}.summary.tsv"
@@ -89,8 +116,7 @@ def build_sample_summary(sname: str, outdir: Path, joined_spacer: int = 24) -> p
 
 
 def concat_summaries(outdir: Path) -> pd.DataFrame:
-    """Concatenate per-sample summary TSVs into one DataFrame.
-    """
+    """Concatenate per-sample summary TSVs into one DataFrame."""
     out_tsv = outdir / "concat.summary.tsv"
     tsvs = sorted(outdir.glob("*.summary.tsv"))
     dfs = []
@@ -99,11 +125,16 @@ def concat_summaries(outdir: Path) -> pd.DataFrame:
             "sample": "string",
             "cluster_id": "string",
             "length": "Int64",
+            "cluster_length": "Int64",
             "seed": "string",
             "n_unique": "Int64",
             "n_reads": "Int64",
             "merged": "boolean",
+            "record_type": "string",
             "consensus": "string",
+            "cluster_sequence": "string",
+            "left_arm": "string",
+            "right_arm": "string",
         })
         dfs.append(df)
     all_df = pd.concat(dfs, ignore_index=True)
