@@ -1,145 +1,195 @@
 #!/usr/bin/env python
 
+"""Assemble command-line parser."""
 
 import argparse
 from pathlib import Path
-from .make_wide import make_wide
+from .common import RAW_HELP_FORMATTER
 
 
 EPILOG = """\
 Examples
 --------
-$ ipyrad assemble -d BAMs/r*.bam --ref REF --out OUT -m 4 -s 5 -q 20
-$ ipyrad assemble -d BAMs/r*.bam -w BAMS/w*.bam --ref REF --out OUT -m 4 -s 5 -q 20
-$ ipyrad assemble -w BAMS/w*.bam --ref REF -b loci.bed --out OUT -m 4 -q 20
+$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -o OUT -m 4 -qm 20
+$ ipyrad2 assemble -d BAMS/RAD/*.bam -w BAMS/WGS/*.bam -r REF.fa -o OUT -m 4 -qm 20
+$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -b loci.bed -o OUT --max-tlen 2000
+$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -p pops.tsv -o OUT
+$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa --rename-bams rename.tsv -o OUT
 """
 
 
 def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: str = None) -> None:
-    """Add `ipyrad assemble` subcommand parser.
-
-    """
+    """Add `ipyrad2 assemble` subcommand parser."""
     tool = subparsers.add_parser(
         "assemble",
         description=header,
-        help="Assemble loci and call variants using 'bedtools' and 'bcftools'.",
+        help="Delimit loci, call variants, and write assembled outputs.",
         epilog=EPILOG,
-        formatter_class=make_wide(argparse.RawDescriptionHelpFormatter, max_help_position=60, width=140),
+        formatter_class=RAW_HELP_FORMATTER,
+        add_help=False,
     )
-    tool.add_argument(
-        "-d", "--rad-bams", metavar="Path", type=Path, required=True, nargs="*",
-        help="Bam files from RAD-type samples. (glob supported; e.g., './bam/{a,b}*.bam'). "
-             "These data are used to delimit loci regions (unless overruled by -b), and assembled",
+    core = tool.add_argument_group("Core inputs")
+    mapped = tool.add_argument_group("Mapped-read filters")
+    bed = tool.add_argument_group("Locus BED delimiting")
+    locus = tool.add_argument_group("Locus and variant filters")
+    paralogs = tool.add_argument_group("Paralog filters")
+    naming = tool.add_argument_group("Sample naming, grouping, and masks")
+    performance = tool.add_argument_group("Performance and overwrite")
+    logging = tool.add_argument_group("Logging")
+
+    core.add_argument(
+        "-d", "--rad-bams", metavar="Path", type=Path, nargs="*",
+        help="RAD BAM inputs that delimit loci unless --loci-bed is provided; also assembled.",
     )
-    tool.add_argument(
+    core.add_argument(
         "-w", "--wgs-bams", metavar="Path", type=Path, nargs="*",
-        help="Optional bam files from WGS-type data. (glob supported; e.g., './bam/{a,b}*.bam') "
-             "These data are only assembled within loci regions delimited by RAD samples (or set using -b)"
+        help="Optional WGS BAM inputs assembled only within loci defined by RAD samples or by --loci-bed.",
     )
-    tool.add_argument(
+    core.add_argument(
         "-r", "--reference", metavar="Path", type=Path, required=True,
-        help="Path to the reference fasta used in the mapping step",
+        help="Reference FASTA that was used for mapping and is reused here for locus extraction and calling.",
     )
-    tool.add_argument(
+    core.add_argument(
         "-b", "--loci-bed", metavar="Path", type=Path,
-        help="Optional bed file delimiting loci on the reference genome.",
+        help="BED of loci to assemble instead of delimiting shared loci from RAD samples.",
     )
-    tool.add_argument(
+    core.add_argument(
         "-n", "--name", metavar="str", type=str, default="assembly",
-        help="Prefix name for output files. [default=assembly]",
+        help="Prefix for assembled output files. [default=%(default)s]",
     )
-    tool.add_argument(
+    core.add_argument(
         "-o", "--out", metavar="Path", type=Path, default="./OUT",
-        help="Directory for results and stat files. Created if it doesn't exist. [default=./OUT]",
+        help="Output directory for assembled loci, VCFs, and stats. [default=%(default)s]",
     )
-    tool.add_argument(
+
+    mapped.add_argument(
         "-qm", "--min-map-q", metavar="int", type=int, default=10,
-        help="Min mapping quality (MAPQ: 'confidence in the alignment'). [default=10]."
+        help="Discard mapped reads with MAPQ below this threshold. [default=%(default)s]",
     )
-    tool.add_argument(
-        "-qs", "--min-site-q", metavar="int", type=int, default=13,
-        help="Min variant site quality (QUAL: 'confidence a site is variant'). [default=13]."
+    mapped.add_argument(
+        "-ms", "--max-softclip", metavar="int", type=int, default=None,
+        help="Discard mapped reads with more than this many soft-clipped bases. [default=%(default)s]",
     )
-    tool.add_argument(
-        "-qg", "--min-geno-q", metavar="int", type=int, default=13,
-        help="Min genotype quality (GQ: 'confidence in a sample's genotype). [default=13]",
+    mapped.add_argument(
+        "-me", "--max-nm", metavar="int", type=int, default=None,
+        help="Discard mapped reads with NM above this threshold. [default=%(default)s]",
     )
-    tool.add_argument(
-        "-qb", "--min-base-q", metavar="int", type=int, default=13,
-        help="Min base quality score (BQ: 'confidence in base call'). [default=13]",
+    mapped.add_argument(
+        "-mt", "--max-tlen", metavar="int", type=int, default=None,
+        help="Discard pairs with absolute TLEN above this threshold (PE data only). [default=%(default)s]",
     )
-    # tool.add_argument(
-    #     "-q", "--min-map-q", metavar="int", type=int, default=10,
-    #     help="Min alignment quality... allow user only to apply this in mapper step.
+    # mapped.add_argument(
+    #     "--require-same-scaffold", action="store_true",
+    #     help="For paired data, require both mates map to the same scaffold.",
     # )
-    tool.add_argument(
-        "-s", "--min-sample-depth", metavar="int", type=int, default=1,
-        help="Min read depth within a sample to make variant calls. [default=1]",
-    )
-    tool.add_argument(
+
+    bed.add_argument(
         "-m", "--min-locus-sample-coverage", metavar="int", type=int, default=4,
-        help="Min num samples that must be present to retain a locus. [default=4]",
+        help="Min number of samples with data required to retain a locus. [default=%(default)s]",
     )
-    # This isn't super necessary. It reduces the size of the seqs h5 a bit,
-    # but otherwise this filter is applied when you use wex. Meh, let's keep it,
-    # it makes loci edges looks nicer.
-    tool.add_argument(
-        "-a", "--min-locus-trim-sample-coverage", metavar="int", type=int, default=4,
-        help="Min num samples with non-N calls for trimming locus edges. Must be <= '-m'. [default=4]",
-    )
-    tool.add_argument(
+    bed.add_argument(
         "-z", "--min-locus-length", metavar="int", type=int, default=25,
-        help="Min length of locus after trimming. [default=25]",
+        help="Min locus length after edge trimming and filtering. [default=%(default)s]",
     )
-    # tool.add_argument(
-    #     "-L", "--max-locus-length", metavar="int", type=int, default=None,
-    #     help="Max length of locus (to prevent overlapping locus beds). [default=None]",
-    # )
-    tool.add_argument(
+    bed.add_argument(
         "-g", "--min-locus-merge-distance", metavar="int", type=int, default=300,
-        help="Merge locus beds if they overlap within nbases. [default=300]",
+        help="Merge nearby locus intervals within this distance when delimiting shared loci. [default=%(default)s]",
     )
-    tool.add_argument(
+
+
+    locus.add_argument(
+        "-qb", "--min-base-q", metavar="int", type=int, default=13,
+        help="Min base quality used by mpileup and related downstream calling steps. [default=%(default)s]",
+    )
+    locus.add_argument(
+        "-qs", "--min-site-q", metavar="int", type=int, default=13,
+        help="Min site QUAL required for variant sites retained after joint calling. [default=%(default)s]",
+    )
+    locus.add_argument(
+        "-qg", "--min-geno-q", metavar="int", type=int, default=13,
+        help="Min per-sample genotype quality retained in the filtered VCF. [default=%(default)s]",
+    )
+    locus.add_argument(
+        "-s", "--min-sample-depth", metavar="int", type=int, default=1,
+        help="Min within-sample read depth to keep a genotype call instead of masking it. [default=%(default)s]",
+    )
+    locus.add_argument(
         "-u", "--max-locus-hetero-frequency", metavar="float", type=float, default=0.3,
-        help="Max frequency of samples heterozygous *at the same site* in a locus. [default=0.3]",
+        help="Max fraction of samples heterozygous at the same site before marking as a paralog [default=%(default)s]",
     )
-    tool.add_argument(
+    locus.add_argument(
         "-y", "--max-locus-variant-frequency", metavar="float", type=float, default=1.0,
-        help="Max frequency of sites that are variant in a locus. [default=1.0]",
+        help="Max fraction of sites in a locus that can be variant before the locus is filtered. [default=%(default)s]",
     )
-    tool.add_argument(
+    locus.add_argument(
+        "-a", "--min-locus-trim-sample-coverage", metavar="int", type=int, default=4,
+        help="Min number of samples with non-N calls required to keep positions at locus edges. [default=%(default)s]",
+    )
+
+    paralogs.add_argument(
+        "--depth-z-max", metavar="float", type=float, default=7.0,
+        help="Max per-sample read-depth z-score to tag a locus as a high-depth outlier. [default=%(default)s]",
+    )
+    paralogs.add_argument(
+        "--softclip-len-threshold", metavar="int", type=int, default=20,
+        help="Max soft-clipped bases to label as read as 'highly clipped'. [default=%(default)s]",
+    )
+    paralogs.add_argument(
+        "--softclip-frac-max", metavar="float", type=float, default=0.5,
+        help="Max per-sample frac. reads that are highly clipped to tag a locus as paralog-like. [default=%(default)s]",
+    )
+    paralogs.add_argument(
+        "--third-frac-cut", metavar="float", type=float, default=0.10,
+        help="Min third-allele fraction at a SNP site to count as strong multi-allelic evidence. [default=%(default)s]",
+    )
+    paralogs.add_argument(
+        "--min-3allele-sites", metavar="int", type=int, default=2,
+        help="Min strong 3-allele SNP sites before a locus is tagged as paralog-like. [default=%(default)s]",
+    )
+    paralogs.add_argument(
+        "--maf-threshold", metavar="float", type=float, default=0.20,
+        help="Min minor-allele frequency counted as excess allelic variation in a locus. [default=%(default)s]",
+    )
+    paralogs.add_argument(
+        "--max-sites-above-maf", metavar="int", type=int, default=8,
+        help="Max SNP sites above --maf-threshold before a locus is tagged as paralog-like. [default=%(default)s]",
+    )
+    paralogs.add_argument(
+        "--paralog-fail-frac-max", metavar="float", type=float, default=0.10,
+        help="Max frac. samples with data allowed to fail before a locus is dropped globally. [default=%(default)s]",
+    )
+
+    naming.add_argument(
         "-p", "--populations", metavar="Path", type=Path,
-        help=r"Pop file ('name\tpop' lines) to group samples for joint variant calls. [default=None]"
+        help="Population file for grouped calling; sample/group or classic pop_assign format.",
     )
-    tool.add_argument(
+    naming.add_argument(
+        "--rename-bams", metavar="Path", type=Path,
+        help="Two-column table mapping BAM basenames to final sample names; overrides BAM-header names for listed inputs.",
+    )
+    naming.add_argument(
         "-x", "--masks", metavar="str", nargs="*", type=str,
-        help="Site patterns to mask (e.g., restriction overhangs). [default=None]",
+        help="Optional site patterns to mask in final assembled sequences. [default=%(default)s]",
     )
-    tool.add_argument(
+
+    performance.add_argument(
         "-c", "--cores", metavar="int", type=int, default=6,
-        help="Max number of cores to use. [default=6]",
+        help="Maximum total cores to use. [default=%(default)s]",
     )
-    tool.add_argument(
+    performance.add_argument(
         "-t", "--threads", metavar="int", type=int, default=3,
-        help="Run c/t multi-threaded jobs concurrently. Larger -t reduces RAM and I/O. [default=3]",
+        help="Threads per multithreaded job; larger values reduce parallel job count. [default=%(default)s]",
     )
-    tool.add_argument(
+    performance.add_argument(
         "-f", "--force", action="store_true",
-        help="Overwrite if out dir already contains result files with identical name.",
+        help="Overwrite assemble outputs for this run.",
     )
-    tool.add_argument(
-        "-nx", "--name-delim", metavar="str", type=str, default=None,
-        help="Set name delim substring 'nx' to override auto name parsing from files. [default=None]"
-    )
-    tool.add_argument(
-        "-ni", "--name-index", metavar="int", type=int, default=1,
-        help="Set name delim index to keep substring left of the 'ni'-th substring 'nx', if valid [default=1]",
-    )
-    tool.add_argument(
+
+    logging.add_argument(
         "-l", "--log-level", metavar="str", type=str, default="INFO",
-        help="Log level (DEBUG, INFO, WARN, ERROR) [default=INFO]",
+        help="Logging verbosity. [default=%(default)s]",
     )
-    tool.add_argument(
-        "-L", "--log-file", metavar="Path", type=Path,
-        help="Log file. Logging to stdout is also appended to this file. [default=None]."
+    logging.add_argument(
+        "-h", "--help", action="help",
+        help="Show this help message and exit.",
     )

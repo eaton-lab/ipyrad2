@@ -21,7 +21,7 @@ import os
 import re
 from typing import Dict, List, Tuple, Union
 from pathlib import Path
-from collections import defaultdict
+from collections import Counter, defaultdict
 from loguru import logger
 from .exceptions import IPyradError
 
@@ -29,11 +29,8 @@ from .exceptions import IPyradError
 KNOWN_FILE_SUFFIXES = (
     ".fastq.gz",
     ".fq.gz",
-    ".fastq.bz2",
-    ".fq.bz2",
     ".fastq",
     ".fq",
-    ".bam",
 )
 
 MATE_PATTERNS = (
@@ -50,6 +47,24 @@ MATE_PATTERNS = (
     re.compile(
         r"^(?P<sample>.+?)(?P<mate>r[12]|read[12])"
         r"(?:[._-]001)?(?P<trailing>(?:[._-].+)?)$",
+        re.IGNORECASE,
+    ),
+)
+
+LITERAL_MATE_PATTERNS = (
+    re.compile(
+        r"^(?P<prefix>.+?)[._-](?P<mate>r[12]|read[12])"
+        r"(?P<suffix>(?:[._-].+)?)$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?P<prefix>.+?)[._-](?P<mate>[12])"
+        r"(?P<suffix>(?:[._-].+)?)$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?P<prefix>.+?)(?P<mate>r[12]|read[12])"
+        r"(?P<suffix>(?:[._-].+)?)$",
         re.IGNORECASE,
     ),
 )
@@ -77,8 +92,8 @@ def _validate_delim_args(delim: str | None, delim_index: int | None) -> None:
         raise IPyradError("delim cannot be an empty string.")
     if not isinstance(delim_index, int):
         raise IPyradError("delim_index must be an integer when delim is set.")
-    if delim_index == 0:
-        raise IPyradError("delim_index cannot be 0 when delim is set.")
+    if delim_index <= 0:
+        raise IPyradError("delim_index must be >= 1 when delim is set.")
 
 
 def _normalize_paths(paths: List[Path | str]) -> List[Path]:
@@ -121,6 +136,25 @@ def _parse_mate_token(path: Path) -> tuple[str, int, str] | None:
         mate = 1 if match.group("mate").lower().endswith("1") else 2
         trailing = match.group("trailing") or ""
         return sample_name, mate, trailing
+    return None
+
+
+def _parse_literal_mate_token(path: Path) -> tuple[str, int] | None:
+    """Extract a mate orientation and stem with only the mate token removed."""
+    stem = _strip_known_suffix(path.name)
+    for pattern in LITERAL_MATE_PATTERNS:
+        match = pattern.match(stem)
+        if not match:
+            continue
+        prefix = match.group("prefix").rstrip("._-")
+        if not prefix:
+            return None
+        suffix = match.group("suffix") or ""
+        sample_name = f"{prefix}{suffix}"
+        if not sample_name:
+            return None
+        mate = 1 if match.group("mate").lower().endswith("1") else 2
+        return sample_name, mate
     return None
 
 
@@ -204,12 +238,84 @@ def _group_paths_by_detected_mates(
     return groups, parsed_count
 
 
-def get_paths_list_from_fastq_str(fastq_paths: Union[Path, List[Path]]) -> List[Path]:
-    """Expand fastq_paths str (e.g., 'data/*.gz') into List[Path].
-    """
+def _group_paths_by_literal_mate_names(
+    fastqs: List[Path],
+) -> tuple[Dict[str, List[Path]], int]:
+    """Group paths by literal filename stem after removing only the mate token."""
+    groups = defaultdict(list)
+    parsed_count = 0
+    for path in fastqs:
+        parsed = _parse_literal_mate_token(path)
+        if parsed is None:
+            continue
+        parsed_count += 1
+        groups[parsed[0]].append(path)
+    return groups, parsed_count
+
+
+def _format_group_examples(groups: Dict[str, List[Path]], limit: int = 5) -> str:
+    """Render a short sample-to-files summary for user-facing parse errors."""
+    examples = []
+    for sample_name in sorted(groups)[:limit]:
+        files = ", ".join(path.name for path in sorted(groups[sample_name], key=lambda item: str(item)))
+        examples.append(f"{sample_name}: {files}")
+    if len(groups) > limit:
+        examples.append(f"... and {len(groups) - limit} more")
+    return "; ".join(examples)
+
+
+def _raise_paired_name_error(
+    fastqs: List[Path],
+    groups: Dict[str, List[Path]],
+    parsed_count: int,
+    parser,
+    source: str,
+) -> None:
+    """Raise a detailed error for incomplete or inconsistent paired-name evidence."""
+    details = []
+    for sample_name in sorted(groups):
+        paths = sorted(groups[sample_name], key=lambda item: str(item))
+        mate_counts = Counter()
+        parsed_names = []
+        for path in paths:
+            parsed = parser(path)
+            if parsed is None:
+                continue
+            mate_counts[parsed[1]] += 1
+            parsed_names.append(path.name)
+        if not mate_counts:
+            continue
+        if mate_counts.get(1, 0) == 0 or mate_counts.get(2, 0) == 0:
+            missing = "R1" if mate_counts.get(1, 0) == 0 else "R2"
+            details.append(f"{sample_name}: missing {missing} ({', '.join(parsed_names)})")
+            continue
+        duplicates = [f"R{mate} x{count}" for mate, count in sorted(mate_counts.items()) if count > 1]
+        if duplicates:
+            details.append(f"{sample_name}: duplicate mates ({', '.join(duplicates)})")
+
+    if parsed_count < len(fastqs):
+        unparsed = ", ".join(
+            sorted(path.name for path in fastqs if parser(path) is None)
+        )
+        details.append(f"unrecognized alongside paired-end-looking files: {unparsed}")
+
+    detail_text = "; ".join(details[:5])
+    if len(details) > 5:
+        detail_text += f"; and {len(details) - 5} more"
+
+    raise IPyradError(
+        f"Cannot safely pair files by {source}. Some filenames look paired-end "
+        f"but do not form complete consistent R1/R2 pairs. {detail_text}"
+    )
+
+
+def get_paths_list_from_fastq_str(
+    fastq_paths: Union[str, Path, List[str | Path]],
+) -> List[Path]:
+    """Expand FASTQ paths or glob patterns into a concrete ordered list of paths."""
     expanded = []
-    # ensure paths is a List[Path] but where the Path elements may be
-    # regex path names that have not yet been expanded.
+    # ensure paths is a List[Path] but where the Path elements may still be
+    # glob patterns that have not yet been expanded.
 
     # ensure it is a list
     if isinstance(fastq_paths, (str, Path)):
@@ -228,10 +334,12 @@ def get_paths_list_from_fastq_str(fastq_paths: Union[Path, List[Path]]) -> List[
 
         # raise if path is a dir.
         if path.is_dir():
-            raise IPyradError(f"{path} is a dir. Use regex to select files in the dir (e.g., './path/*.fastq.gz')")
+            raise IPyradError(
+                f"{path} is a dir. Use a glob pattern to select files in the dir "
+                "(e.g., './path/*.fastq.gz')"
+            )
 
-        # expand a regex operator to possibly match multiple files
-        # such as paired-end files.
+        # expand a glob pattern to possibly match multiple files
         try:
             fastqs = sorted(path.parent.glob(path.name), key=lambda item: str(item))
         except ValueError as err:
@@ -242,7 +350,7 @@ def get_paths_list_from_fastq_str(fastq_paths: Union[Path, List[Path]]) -> List[
             fastq = expand_path(fastq)
             if fastq.is_dir():
                 raise IPyradError(
-                    f"{fastq} is a dir. Use regex to select files in the dir "
+                    f"{fastq} is a dir. Use a glob pattern to select files in the dir "
                     "(e.g., './path/*.fastq.gz')"
                 )
             if fastq in seen:
@@ -258,8 +366,7 @@ def get_name_to_fastq_dict(
     delim_index: int | None,
     suffix: str | None = None,
 ) -> Dict[str, Tuple[Path, Path | None]]:
-    """
-    """
+    """Return parsed sample names mapped to single-end or paired-end FASTQ tuples."""
     # expand str to List[Path]
     paths_list = get_paths_list_from_fastq_str(fastqs)
 
@@ -310,18 +417,34 @@ def get_pairs_or_single_by_trim(
     delim: str | None,
     delim_index: int | None,
 ) -> Dict[str, Tuple[Path, Path | None]]:
-    """..."""
+    """Parse FASTQ filenames into deterministic SE or PE sample groupings."""
     fastqs = _normalize_paths(fastqs)
     _validate_delim_args(delim, delim_index)
     delim_groups = None
 
-    # try to pair sample by delim args
+    # try to pair samples by explicit delimiter args
     if delim is not None:
         delim_groups = _group_paths_by_delim(fastqs, delim, delim_index)
-        paired = _build_paired_result(delim_groups, fastqs)
-        if paired is not None:
+        if perfect_pairs(delim_groups, fastqs):
+            try:
+                paired = {
+                    name: _pair_group(delim_groups[name], name)
+                    for name in sorted(delim_groups)
+                }
+            except IPyradError as err:
+                raise IPyradError(
+                    f"Delimiter parsing with -dx={delim} -di={delim_index} grouped files into "
+                    f"ambiguous non-paired sample names. Adjust -dx/-di. "
+                    f"{_format_group_examples(delim_groups)}"
+                ) from err
             logger.info(f"paired files by user args: -dx={delim} -di={delim_index}")
             return paired
+        if not all_unique(delim_groups, fastqs):
+            raise IPyradError(
+                f"Delimiter parsing with -dx={delim} -di={delim_index} grouped files into "
+                f"ambiguous non-paired sample names. Adjust -dx/-di. "
+                f"{_format_group_examples(delim_groups)}"
+            )
         logger.info("pairing files by name-delim failed. Falling back to auto-detection.")
 
     # conservatively pair only filenames with recognizable mate tokens.
@@ -330,12 +453,27 @@ def get_pairs_or_single_by_trim(
     if paired is not None:
         logger.info("paired files by auto-detecting mate tokens in filenames")
         return paired
+
+    literal_names_to_paths, literal_parsed_count = _group_paths_by_literal_mate_names(fastqs)
+    paired = _build_paired_result(literal_names_to_paths, fastqs)
+    if paired is not None:
+        logger.info("paired files by secondary mate-token fallback")
+        return paired
     if parsed_count:
-        raise IPyradError(
-            "Cannot safely pair files by name. Some filenames look paired-end "
-            "but do not form complete R1/R2 pairs. Try setting the delim args "
-            "explicitly, or enter paths with different naming conventions as "
-            "separate inputs."
+        _raise_paired_name_error(
+            fastqs=fastqs,
+            groups=names_to_paths,
+            parsed_count=parsed_count,
+            parser=_parse_mate_token,
+            source="auto-detected mate tokens",
+        )
+    if literal_parsed_count:
+        _raise_paired_name_error(
+            fastqs=fastqs,
+            groups=literal_names_to_paths,
+            parsed_count=literal_parsed_count,
+            parser=_parse_literal_mate_token,
+            source="secondary mate-token fallback",
         )
 
     # --------------------------------------------------------------
@@ -366,7 +504,6 @@ def get_pairs_or_single_by_trim(
 if __name__ == "__main__":
 
     pass
-    # from ipyrad3.utils.logger import set_log_level
     # set_log_level("DEBUG")
 
     # path = Path("/home/deren/Documents/tools/ipyrad2/examples/Pedic-PE-ddRAD/*_R*")

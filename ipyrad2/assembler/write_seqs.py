@@ -1,53 +1,22 @@
 #!/usr/bin/env python
 
-"""Store sequence data in h5 for fast extraction.
+"""Write the sequence-alignment datasets for the final assemble HDF5 output.
 
-Q and A to remember why we do it this way
------------------------------------------
-Q: Why store the full sequences including PE inserts?
-A: Even though it is wasteful of space, we want the H5 database
-   to match the coordinates of the loci assembled given the parameters
-   set during assembly. This ensures there is a 1-to-1 match between
-   the length of a locus and the length of the window in the phymap,
-   and allows extracting loci just like in the loci file.
-   The window can still be filtered later using tools like wex.
-
-Q: Why parse and filter from the database.fa, rather than loading
-   the .loci file?
-A: It is pretty fast, and this way we can fill the h5 databases in
-   parallel while also writing the .loci file.
-
-Q: How does indexing work in the phymap?
-A: It stores the mapping of phy coordinates to genome positions using
-   Python (and bedtools) 0-based half-open indexing. Tools such as wex
-   which read this phymap will convert the coordinates when given
-   samtools region inputs. E.g., Chr1:100-250 will extract the phy
-   corresponding to 99-250 in phymap.
-
-PHYMAP format
--------------
-scaff    phy0    phy1   pos0    pos1
-    0       0     100   1000    1100
-    0     100     200   3200    3300
-    ...
-
+`phy` stores the assembled alignment matrix, while `phymap` maps alignment
+windows back to their genome coordinates using 0-based half-open indexing.
 """
 
-from typing import List
+from __future__ import annotations
+
 from pathlib import Path
 import h5py
-import pandas as pd
 import numpy as np
 from loguru import logger
+from .hdf5_utils import choose_hdf5_cache_settings
+from .hdf5_utils import choose_unsigned_int_dtype
+from .hdf5_utils import format_bytes
+from .hdf5_utils import get_fai_values
 from .loci import iter_parse_loci, filter_trim_locus
-
-
-def get_fai_values(reference: Path, key: str) -> np.ndarray:
-    """Returns the fai table from the reference as an array."""
-    fai = reference.with_suffix(reference.suffix + ".fai")
-    columns = ['scaffold', 'length', 'sumsize', 'a', 'b']
-    table = pd.read_csv(fai, names=columns, sep="\t")
-    return table[key].values
 
 
 def choose_chunk_cols(
@@ -56,39 +25,44 @@ def choose_chunk_cols(
     target_mb: int = 16,
     typical_window: int = 100_000,  # consider increasing
     min_cols: int = 8_192,
-    max_cols: int = 512_000
+    max_cols: int = 262_144,
 ) -> int:
-    """Get chunksize to make reading all rows and thousands to
-    tens/hundreds of thousands of columns efficient. We will set
-    chunk columns to this size so most reads touch 1–3 chunks.
-    """
+    """Choose an alignment-column chunk size that stays efficient to read."""
     # size-driven cols
     by_size = (target_mb * 1024 * 1024) // (nsamples * itemsize)
-    return by_size
-    logger.warning(by_size)
     cols = int(max(min_cols, min(by_size, max_cols)))
-    logger.warning(cols)
-    # bias toward typical window (round to nearest 4096)
-    cols = max(4096, (int((cols + typical_window) / 2) // 4096) * 4096)
-    logger.warning(cols)
-    return cols
+    return max(4096, (int((cols + typical_window) / 2) // 4096) * 4096)
+
+
+def _ensure_chunk_capacity(
+    chunkarr: np.ndarray,
+    nsamples: int,
+    required_cols: int,
+) -> np.ndarray:
+    """Grow the working alignment buffer when a locus exceeds the initial chunk."""
+    if required_cols <= chunkarr.shape[1]:
+        return chunkarr
+    new_cols = max(chunkarr.shape[1] * 2, required_cols)
+    grown = np.full((nsamples, new_cols), np.uint8(ord("N")), dtype=np.uint8)
+    grown[:, :chunkarr.shape[1]] = chunkarr
+    return grown
 
 
 def write_seqs_hdf5(
     name: str,
     outdir: Path,
     tmpdir: Path,
-    snames: List[str],
+    snames: list[str],
     reference: Path,
+    nsites_after_filtering: int,
+    nloci_after_filtering: int,
     min_locus_sample_coverage: int,
     min_locus_trim_sample_coverage: int,
     min_locus_length: int,
     max_locus_hetero_frequency: float,
     max_locus_variant_frequency: float,
-    # read_depth_mask: np.ndarray,
-):
-    """Write seqs h5 database from loci file.
-    """
+) -> None:
+    """Write the final alignment datasets into the combined assemble HDF5."""
     # paths
     database = tmpdir / f"{name}.database.fa"
     seqs_database = outdir / f"{name}.hdf5"
@@ -97,86 +71,118 @@ def write_seqs_hdf5(
     snames = sorted(snames)
     snames = ["assembly_reference_sequence"] + snames
     nsamples = len(snames)
+    scaffold_names = [str(i) for i in get_fai_values(reference, "scaffold")]
+    scaffold_lengths = [int(i) for i in get_fai_values(reference, "length")]
 
     # get optimal chunk size
     chunk_size = choose_chunk_cols(
         nsamples,
         np.dtype(np.uint8).itemsize,
         target_mb=256,
-        # typical_window=100_000,
+    )
+    phy_chunk_cols = min(max(1, nsites_after_filtering), chunk_size)
+    phymap_chunk_rows = min(max(1, nloci_after_filtering), 4096)
+    map_dtype = choose_unsigned_int_dtype(
+        max(
+            len(scaffold_names) - 1,
+            nsites_after_filtering,
+            nloci_after_filtering,
+            max(scaffold_lengths, default=0),
+        )
     )
 
     # get the data generator
-    # params = (min_locus_sample_coverage, min_locus_trim_sample_coverage, min_locus_length, max_locus_hetero_frequency, max_locus_variant_frequency, read_depth_mask)
     params = (min_locus_sample_coverage, min_locus_trim_sample_coverage, min_locus_length, max_locus_hetero_frequency, max_locus_variant_frequency)
-    iter_chunks = iter_super_matrix_chunks_from_database(snames, database, reference, chunk_size, *params)
+    iter_chunks = iter_super_matrix_chunks_from_database(
+        snames,
+        database,
+        reference,
+        chunk_size,
+        map_dtype,
+        *params,
+    )
 
-    # open H5: 512 MB raw data chunk cache, many hash slots reduces collisions
-    maps = []
-    kwargs = dict(libver="latest", rdcc_nbytes=512*1024*1024, rdcc_nslots=2_000_003)
+    kwargs = choose_hdf5_cache_settings()
+    logger.debug(
+        (
+            "seqs writer config: phy_chunk_cols={}, phymap_chunk_rows={}, "
+            "cache={}, cache_slots={}, map_dtype={}, nsites={}, nloci={}"
+        ),
+        phy_chunk_cols,
+        phymap_chunk_rows,
+        format_bytes(int(kwargs["rdcc_nbytes"])),
+        kwargs["rdcc_nslots"],
+        map_dtype.name,
+        nsites_after_filtering,
+        nloci_after_filtering,
+    )
     with h5py.File(seqs_database, "w", **kwargs) as io5:
 
         # database metadata.
         io5.attrs["version"] = 2.0
         io5.attrs["names"] = snames
         io5.attrs["reference"] = str(reference)
-        io5.attrs["scaffold_lengths"] = [int(i) for i in get_fai_values(reference, "length")]
-        io5.attrs["scaffold_names"] = [str(i) for i in get_fai_values(reference, "scaffold")]
+        io5.attrs["scaffold_lengths"] = scaffold_lengths
+        io5.attrs["scaffold_names"] = scaffold_names
 
         phy = io5.create_dataset(
             "phy",
-            shape=(nsamples, 0),
-            maxshape=(nsamples, None),
+            shape=(nsamples, nsites_after_filtering),
             dtype=np.uint8,
-            chunks=(nsamples, chunk_size),
+            chunks=(nsamples, phy_chunk_cols),
             compression="gzip",          # write-once → favor space
             compression_opts=4,          # 2–6 is a good speed/ratio range
             shuffle=True,                # improves gzip on byte-y data
         )
+        phy.attrs["nsites"] = int(nsites_after_filtering)
 
-        # Append column batches
-        col_total = 0
-        for chunkarr, chunkmap in iter_chunks:
-            assert chunkarr.shape[0] == nsamples
-            m = chunkarr.shape[1]
-            maps.append(chunkmap)
-
-            # Optional pre-grow to amortize resizes (e.g., grow in big steps)
-            need = col_total + m
-            cap  = phy.shape[1]
-            if need > cap:
-                # grow to next multiple of chunk_cols to avoid frequent resizes
-                new_cap = ((need + chunk_size - 1) // chunk_size) * chunk_size
-                phy.resize(new_cap, axis=1)
-                logger.debug(f"new cap = {new_cap}")
-            phy[:, col_total:col_total + m] = chunkarr
-            col_total += m
-
-        # Optionally shrink tail if we overgrew
-        phy.attrs["nsites"] = col_total
-        phy.resize(col_total, axis=1)
-
-        # store the phymap -------------------------------------------
         phymap = io5.create_dataset(
-            name="phymap",
-            data=np.concatenate(maps, axis=0),
+            "phymap",
+            shape=(nloci_after_filtering, 5),
+            dtype=map_dtype,
+            chunks=(phymap_chunk_rows, 5),
         )
         phymap.attrs["indexing"] = [0, 0, 0, 0, 0]
         phymap.attrs["columns"] = ["scaff", "phy0", "phy1", "pos0", "pos1"]
+
+        # Fill the preallocated datasets in streaming batches. The final locus
+        # pass already told us exactly how many retained sites and loci exist,
+        # so we do not need repeated HDF5 growth during writing.
+        col_total = 0
+        phymap_total = 0
+        for chunkarr, chunkmap in iter_chunks:
+            assert chunkarr.shape[0] == nsamples
+            m = chunkarr.shape[1]
+            phy[:, col_total:col_total + m] = chunkarr
+            col_total += m
+
+            if chunkmap.size:
+                nrows = chunkmap.shape[0]
+                phymap[phymap_total:phymap_total + nrows, :] = chunkmap
+                phymap_total += nrows
+
+    if col_total != nsites_after_filtering:
+        raise ValueError(
+            f"seqs writer filled {col_total} sites but loci summary reported {nsites_after_filtering}"
+        )
+    if phymap_total != nloci_after_filtering:
+        raise ValueError(
+            f"seqs writer filled {phymap_total} phymap rows but loci summary reported {nloci_after_filtering}"
+        )
     logger.debug(f"wrote seqs database to {seqs_database}")
 
 
 def iter_super_matrix_chunks_from_database(
-    snames: List[str],
+    snames: list[str],
     database: Path,
     reference: Path,
     chunk_size: int,
+    map_dtype: np.dtype,
     min_locus_sample_coverage: int,
     min_locus_trim_sample_coverage: int,
     min_locus_length: int,
     max_locus_hetero_frequency: float,
     max_locus_variant_frequency: float,
-    # read_depth_mask: np.ndarray,
 ):
     """Parse and filter loci and yield in chunks."""
 
@@ -185,8 +191,10 @@ def iter_super_matrix_chunks_from_database(
     sidxs = {j: i for (i, j) in enumerate(snames)}
     nsamples = len(sidxs)
 
-    # scaffnames
+    # Precompute scaffold indexes once so locus parsing does not repeatedly
+    # scan the scaffold-name list for every retained locus.
     scaff_names = list(get_fai_values(reference, "scaffold"))
+    scaff2idx = {str(name): idx for idx, name in enumerate(scaff_names)}
 
     # create initial chunkarr and chunkmap
     chunkarr = np.full((nsamples, chunk_size * 2), np.uint8(ord('N')), dtype=np.uint8)
@@ -195,13 +203,7 @@ def iter_super_matrix_chunks_from_database(
     # iterate to fill chunkarr
     phypos = 0
     cursor = 0
-    lidx = 0
     for oheader, ldict in iter_parse_loci(database):
-        # skip if locus failed depth outlier filter
-        # if read_depth_mask[lidx]:
-        #     lidx += 1
-        #     continue
-
         # trim and filter the locus
         args = (
             oheader,
@@ -218,9 +220,10 @@ def iter_super_matrix_chunks_from_database(
             # parse new trimmed locus header
             scaff, positions = header.strip().split(":")
             pos0, pos1 = [int(i) for i in positions.split("-")]
-            scaff_idx = scaff_names.index(scaff)
+            scaff_idx = scaff2idx[scaff]
 
             # enter data into chunkarr
+            chunkarr = _ensure_chunk_capacity(chunkarr, nsamples, cursor + tseqs.shape[1])
             for loc_sidx, loc_name in enumerate(tnames):
                 global_sidx = sidxs[loc_name]
                 chunkarr[global_sidx, cursor:cursor + tseqs.shape[1]] = tseqs[loc_sidx]
@@ -232,48 +235,16 @@ def iter_super_matrix_chunks_from_database(
             if cursor >= chunk_size:
                 # trim extra, fill empty to N, convert map to array
                 chunkarr = chunkarr[:, :cursor]
-                # chunkarr[chunkarr == 0] = 78
-                chunkmap = np.array(chunkmap, dtype=np.uint64)
+                chunkmap = np.array(chunkmap, dtype=map_dtype)
                 yield chunkarr, chunkmap
 
                 # reset
                 chunkarr = np.full((nsamples, chunk_size * 2), np.uint8(ord('N')), dtype=np.uint8)
-                # chunkarr = np.zeros((nsamples, CHUNKSIZE * 2), dtype=np.uint8)
                 chunkmap = []
                 cursor = 0  # reset cursor but not phypos
-        lidx += 1
 
-    # trim extra, fill empty to N, convert map to array
+    # trim extra and convert the final map chunk to an array
     if cursor:
         chunkarr = chunkarr[:, :cursor]
-        # chunkarr[chunkarr == 0] = 78
-        chunkmap = np.array(chunkmap, dtype=np.uint64)
+        chunkmap = np.array(chunkmap, dtype=map_dtype)
         yield chunkarr, chunkmap
-
-
-
-if __name__ == "__main__":
-
-    pass
-
-    # loci_file = data.stepdir / f"{data.name}.loci.txt"
-    DIR = Path("/home/deren/Documents/ipyrad-tests/OUT/")
-    REF = Path("/home/deren/Documents/tools/ipyrad/tests/ipsimdata/pairddrad_example_genome.fa")
-
-    SNAMES = [
-        "1A_0_R", "1B_0_R", "1C_0_R", "1D_0_R",
-        "2E_0_R", "2F_0_R", "2G_0_R", "2H_0_R",
-        "3I_0_R", "3J_0_R", "3K_0_R", "3L_0_R",
-    ]
-
-    write_seqs_hdf5(
-        name="assembly",
-        outdir=DIR,
-        snames=SNAMES,
-        reference=REF,
-        min_locus_sample_coverage=4,
-        min_locus_trim_sample_coverage=4,
-        min_locus_length=35,
-        max_locus_hetero_frequency=0.3,
-        max_locus_variant_frequency=1.0,
-    )

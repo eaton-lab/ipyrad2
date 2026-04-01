@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 
+"""Trim command-line parser."""
 
 import argparse
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
-from .make_wide import make_wide, intlike
+from .common import RAW_HELP_FORMATTER, intlike
 
 
 EPILOG = """\
@@ -55,19 +56,18 @@ def validate_trim_args(args: Namespace, parser: ArgumentParser) -> None:
 
 
 def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = None) -> None:
-    """Add `ipyrad assemble` subcommand parser.
-
-    """
+    """Add `ipyrad2 trim` subcommand parser."""
     tool = subparsers.add_parser(
         "trim",
         description=header,
-        help="Trim reads for quality, adapters, and restriction overhangs using 'fastp'.",
+        help="Trim reads for quality, adapters, and cutsite motifs using 'fastp'.",
         epilog=EPILOG,
-        formatter_class=make_wide(argparse.RawDescriptionHelpFormatter, max_help_position=60, width=140),
+        formatter_class=RAW_HELP_FORMATTER,
+        add_help=False,
     )
     core = tool.add_argument_group("Core inputs")
     filtering = tool.add_argument_group("Filtering and trimming")
-    overhangs = tool.add_argument_group("Restriction overhangs and adapters")
+    cutsites = tool.add_argument_group("Cutsite motifs and adapters")
     performance = tool.add_argument_group("Performance and compatibility")
     naming = tool.add_argument_group("Sample naming and UMI")
     logging = tool.add_argument_group("Logging")
@@ -82,7 +82,7 @@ def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = 
     )
     core.add_argument(
         "-f", "--force", action="store_true",
-        help="Overwrite existing trimmed FASTQs in the output directory.",
+        help="Overwrite trim outputs from this run.",
     )
 
     filtering.add_argument(
@@ -114,19 +114,23 @@ def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = 
         help="Skip fastp quality filtering.",
     )
 
-    overhangs.add_argument(
-        "-r", "--restriction-overhangs", metavar=("R1", "R2"), nargs=2, type=str,
-        help="Restriction overhangs for R1 and R2. Overrides kmer inference.",
+    cutsites.add_argument(
+        "-e1", "--cutsite-1", metavar="str", type=str,
+        help="5' restriction-site remnant / cutsite motif at the start of R1. Use commas for multiple motifs; overrides inference.",
     )
-    overhangs.add_argument(
+    cutsites.add_argument(
+        "-e2", "--cutsite-2", metavar="str", type=str,
+        help="5' restriction-site remnant / cutsite motif at the start of R2. Use commas for multiple motifs; overrides inference.",
+    )
+    cutsites.add_argument(
         "-k", "--max-reads-kmer", metavar="int", type=intlike, default=500_000,
-        help="Total reads sampled across files for kmer overhang inference. [default=500000]",
+        help="Total reads sampled across files for cutsite motif inference. [default=500000]",
     )
-    overhangs.add_argument(
-        "-R", "--disable-infer-re-overhangs", action="store_true",
-        help="Skip kmer-based restriction overhang inference.",
+    cutsites.add_argument(
+        "-E", "--disable-infer-cutsite-motifs", action="store_true",
+        help="Skip cutsite motif inference.",
     )
-    overhangs.add_argument(
+    cutsites.add_argument(
         "-A", "--disable-adapter-trimming", action="store_true",
         help="Skip adapter trimming.",
     )
@@ -170,6 +174,6 @@ def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = 
         help="Logging verbosity. [default=%(default)s]",
     )
     logging.add_argument(
-        "-L", "--log-file", metavar="Path", type=Path,
-        help="Append logs to this file as well as stdout.",
+        "-h", "--help", action="help",
+        help="Show this help message and exit.",
     )

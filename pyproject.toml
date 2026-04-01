@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+requires = ["setuptools>=69", "setuptools-scm>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "ipyrad2"
-version = "0.2.0"
+dynamic = ["version"]
 requires-python = ">= 3.8"
 license = { file = "LICENSE.txt" }
 dependencies = [
@@ -32,10 +32,14 @@ maintainers = [
 ]
 
 [project.optional-dependencies]
-full = [
+analysis = [
+    "scikit-learn",
+    "umap-learn",
+    "toyplot",
     "toytree >= 3.0.1",
-    "jupyter",
-    "mpi4py >= 3.0",
+]
+test = [
+    "pytest",
 ]
 
 [project_urls]
@@ -48,6 +52,12 @@ Issues = "https://github.com/eaton-lab/ipyrad2/issues"
 ipyrad2 = "ipyrad2.cli:main"
 ipyrad2-classic = "ipyrad2.classic:main"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["ipyrad2*"]
+
+[tool.setuptools_scm]
+version_file = "ipyrad2/_version.py"

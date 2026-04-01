@@ -1,90 +1,167 @@
 #!/usr/bin/env python
 
+"""Denovo command-line parser."""
 
 import argparse
+from argparse import ArgumentParser, Namespace
 from pathlib import Path
-from .make_wide import make_wide
+
+from .common import RAW_HELP_FORMATTER
 
 
 EPILOG = """\
 Examples
 --------
-$ ipyrad denovo --fastqs DATA/*.fastq.gz --out OUT/ -c 0.95 -C 0.85
+$ ipyrad2 denovo -d DATA/*.fastq.gz -o output-denovo
+$ ipyrad2 denovo -d DATA/*.fastq.gz -o OUT -s 0.95 -S 0.85 -c 12 -t 3
+$ ipyrad2 denovo -d DATA/*.fastq.gz -o OUT --graph-splitter constrained
+$ ipyrad2 denovo -d DATA/*.fastq.gz -o OUT --no-alignment
+$ ipyrad2 denovo -d DATA/*.fastq.gz -o OUT -dx _R -di 1 --keep-intermediates
 """
 
 
-def _setup_denovo_subparser(subparsers: argparse._SubParsersAction, header: str = None) -> None:
-    """Add `ipyrad assemble` subcommand parser.
+def _parser_error_if(parser: ArgumentParser, condition: bool, message: str) -> None:
+    """Raise an argparse error when a denovo CLI constraint is violated."""
+    if condition:
+        parser.error(message)
 
-    """
+
+def validate_denovo_args(args: Namespace, parser: ArgumentParser) -> None:
+    """Validate denovo CLI arguments after parsing."""
+    _parser_error_if(parser, args.cores < 1, "--cores must be >= 1")
+    _parser_error_if(parser, args.threads < 1, "--threads must be >= 1")
+    _parser_error_if(parser, args.threads > args.cores, "--threads cannot exceed --cores")
+    _parser_error_if(
+        parser,
+        not 0 < args.within_similarity <= 1,
+        "--within-similarity must be > 0 and <= 1",
+    )
+    _parser_error_if(
+        parser,
+        not 0 < args.across_similarity <= 1,
+        "--across-similarity must be > 0 and <= 1",
+    )
+    _parser_error_if(parser, args.min_derep_size < 1, "--min-derep-size must be >= 1")
+    _parser_error_if(parser, args.min_length < 1, "--min-length must be >= 1")
+    _parser_error_if(parser, args.min_merge_overlap < 1, "--min-merge-overlap must be >= 1")
+    _parser_error_if(parser, args.max_merge_diffs < 0, "--max-merge-diffs must be >= 0")
+    _parser_error_if(
+        parser,
+        args.delim_idx < 1,
+        "--delim-idx must be >= 1",
+    )
+
+
+def _setup_denovo_subparser(subparsers: argparse._SubParsersAction, header: str = None) -> None:
+    """Add `ipyrad2 denovo` subcommand parser."""
     tool = subparsers.add_parser(
         "denovo",
         description=header,
-        help="Construct a denovo reference library by clustering with 'vsearch'.",
+        help="Construct a denovo reference library by clustering reads and building locus consensuses.",
         epilog=EPILOG,
-        formatter_class=make_wide(argparse.RawDescriptionHelpFormatter, max_help_position=60, width=140),
+        formatter_class=RAW_HELP_FORMATTER,
+        add_help=False,
     )
-    tool.add_argument(
-        "-d", "--fastqs", metavar="Path", type=Path, required=True, nargs="*",
-        help="One or more paths to fastq data files (or glob patterns; e.g., './data/*.fastq.gz')",
+
+    core = tool.add_argument_group("Core inputs")
+    clustering = tool.add_argument_group("Clustering and consensus")
+    naming = tool.add_argument_group("Sample naming and library type")
+    runtime = tool.add_argument_group("Runtime and binaries")
+    logging = tool.add_argument_group("Logging")
+
+    core.add_argument(
+        "-d", "--fastqs", metavar="Path", type=Path, required=True, nargs="+",
+        help="Input FASTQ files or glob patterns.",
     )
-    tool.add_argument(
-        "-o", "--out", metavar="Path", type=Path, default="./CLUSTERS",
-        help="Directory to write trimmed read files. Will be created if it doesn't exist. [default=CLUSTERS]",
+    core.add_argument(
+        "-o", "--out", metavar="Path", type=Path, default="./output-denovo",
+        help="Output directory for the denovo reference library. [default=%(default)s]",
     )
-    tool.add_argument(
-        "-s", "--similarity-threshold-within", metavar="float", type=float, default=0.95,
-        help="Sequence similarity threshold for clustering within samples. [default=0.95]",
-    )
-    tool.add_argument(
-        "-S", "--similarity-threshold-across", metavar="float", type=float, default=0.85,
-        help="Sequence similarity threshold for clustering across samples. [default=0.85]",
-    )
-    tool.add_argument(
-        "-m", "--min-dereplication-size", metavar="int", type=int, default=2,
-        help="Min replication of sequences for inclusion. [default=2]",
-    )
-    tool.add_argument(
-        "-i", "--min-length", metavar="int", type=int, default=35,
-        help="Min length of merged paired sequences. [default=35]",
-    )
-    tool.add_argument(
-        "-g", "--min-merge-overlap", metavar="int", type=int, default=20,
-        help="Min overlap to merge paired reads. [default=20]",
-    )
-    tool.add_argument(
-        "-e", "--max-merge-diffs", metavar="int", type=int, default=4,
-        help="Max difference in merged region. [default=4]",
-    )
-    tool.add_argument(
-        "-b", "--strand-both", action="store_true",
-        help="Match both strands. Use for single-enzyme GBS.",
-    )
-    tool.add_argument(
-        "-c", "--cores", metavar="int", type=int, default=6,
-        help="Max number of cores to use. [default=6]",
-    )
-    tool.add_argument(
-        "-t", "--threads", metavar="int", type=int, default=3,
-        help="Run c/t multi-threaded jobs concurrently. Larger -t reduces RAM and I/O. [default=3]",
-    )
-    tool.add_argument(
+    core.add_argument(
         "-f", "--force", action="store_true",
-        help="Overwrite if out dir contains fastq file with identical name.",
+        help="Overwrite denovo outputs created by this command.",
     )
-    tool.add_argument(
+
+    clustering.add_argument(
+        "-s", "--within-similarity", metavar="float", type=float, default=0.95,
+        help="Sequence similarity threshold for clustering within samples. [default=%(default)s]",
+    )
+    clustering.add_argument(
+        "-S", "--across-similarity", metavar="float", type=float, default=0.85,
+        help="Sequence similarity threshold for clustering across samples. [default=%(default)s]",
+    )
+    clustering.add_argument(
+        "-m", "--min-derep-size", metavar="int", type=int, default=2,
+        help="Minimum duplicate count retained during dereplication. [default=%(default)s]",
+    )
+    clustering.add_argument(
+        "-i", "--min-length", metavar="int", type=int, default=35,
+        help="Minimum retained sequence length after pair merge or join. [default=%(default)s]",
+    )
+    clustering.add_argument(
+        "-g", "--min-merge-overlap", metavar="int", type=int, default=20,
+        help="Minimum overlap required to merge paired reads. [default=%(default)s]",
+    )
+    clustering.add_argument(
+        "-e", "--max-merge-diffs", metavar="int", type=int, default=4,
+        help="Maximum mismatches allowed in the merged region. [default=%(default)s]",
+    )
+    clustering.add_argument(
+        "--no-alignment", action="store_true",
+        help="Skip MAFFT in the final locus step and use the longest stripped sequence per locus.",
+    )
+    clustering.add_argument(
+        "--graph-splitter",
+        metavar="str",
+        choices=("threshold", "constrained"),
+        default="constrained",
+        help=(
+            "Graph refinement algorithm used after automatic duplicated-component reconciliation: "
+            "'threshold' (legacy ascending-PID sweep) or "
+            "'constrained' (sample-constrained maximum-spanning forest). "
+            "[default=%(default)s]"
+        ),
+    )
+
+    naming.add_argument(
+        "-b", "--allow-reverse-complement", action="store_true",
+        help="Cluster both strands rather than plus strand only.",
+    )
+    naming.add_argument(
         "-dx", "--delim-str", metavar="str", type=str, default=None,
-        help="Set delim substring 'dx' to override name parsing from files. [default=None]"
+        help="Delimiter substring used to parse sample names from filenames.",
     )
-    tool.add_argument(
+    naming.add_argument(
         "-di", "--delim-idx", metavar="int", type=int, default=1,
-        help="Set delim index. Extracts substring left of the 'di'-th 'dx' in filename. [default=1]",
+        help="Keep text left of the Nth delimiter when parsing sample names. [default=%(default)s]",
     )
-    tool.add_argument(
+
+    runtime.add_argument(
+        "-c", "--cores", metavar="int", type=int, default=6,
+        help="Maximum total cores to use. [default=%(default)s]",
+    )
+    runtime.add_argument(
+        "-t", "--threads", metavar="int", type=int, default=3,
+        help="Threads per vsearch or MAFFT job. [default=%(default)s]",
+    )
+    runtime.add_argument(
+        "--keep-intermediates", action="store_true",
+        help="Retain the denovo working directory instead of cleaning it on success.",
+    )
+    runtime.add_argument(
+        "--vsearch-binary", metavar="Path", type=Path,
+        help="Path to the vsearch executable. Defaults to the active environment, then PATH.",
+    )
+    runtime.add_argument(
+        "--mafft-binary", metavar="Path", type=Path,
+        help="Path to the mafft executable. Defaults to the active environment, then PATH.",
+    )
+
+    logging.add_argument(
         "-l", "--log-level", metavar="str", type=str, default="INFO",
-        help="Log level (DEBUG, INFO, WARN, ERROR) [default=INFO]",
+        help="Logging verbosity. [default=%(default)s]",
     )
-    tool.add_argument(
-        "-L", "--log-file", metavar="Path", type=Path,
-        help="Log file. Logging to stdout is also appended to this file. [default=None]."
+    logging.add_argument(
+        "-h", "--help", action="help",
+        help="Show this help message and exit.",
     )

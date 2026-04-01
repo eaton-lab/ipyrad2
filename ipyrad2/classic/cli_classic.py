@@ -59,10 +59,6 @@ def setup_parsers() -> argparse.ArgumentParser:
         "-l", "--log-level", metavar="str", type=str, default="SUCCESS",
         help="Log level (DEBUG, INFO, SUCCESS, WARN, ERROR) [default=SUCCESS]",
     )
-    parser.add_argument(
-        "-L", "--log-file", metavar="Path", type=Path,
-        help="Log file. Logging to stdout is also appended to this file. [default=None]."
-    )
     parser.add_argument("-f", "--force", action="store_true", help="force overwrite of existing data")
     parser.add_argument("-d", "--debug", action="store_true", help="Print debug information")
     parser.add_argument("-v", "--version", action='version', version=f"ipyrad {VERSION}")
@@ -105,7 +101,7 @@ def command_line():
 
     # LOGGING: -----------------------------------------------------
     if hasattr(args, "log_level"):
-        set_log_level(args.log_level, args.log_file)
+        set_log_level(args.log_level)
 
     # DEMUX: -------------------------------------------------------
     if "1" in args.steps:
