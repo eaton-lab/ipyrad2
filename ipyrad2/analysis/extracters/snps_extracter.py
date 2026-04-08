@@ -89,7 +89,7 @@ class PreparedSNPExport(NamedTuple):
     sample_data_summary: pd.DataFrame
 
 
-class SNPExtractor:
+class SNPsExtracter:
     """Extract and subsample SNP data from HDF5 after filtering."""
 
     def __init__(
@@ -577,7 +577,7 @@ class SNPExtractor:
 
     def _require_run(self) -> None:
         if self.genos is None or self.snps is None or self.snpsmap is None:
-            raise IPyradError("SNPExtractor.run() must be called before accessing data.")
+            raise IPyradError("SNPsExtracter.run() must be called before accessing data.")
 
     def subsample_column_indices(
         self, random_seed: Optional[int] = None, log_level: str = "INFO"
@@ -759,10 +759,10 @@ class SNPExtractor:
             reference = view.reference
             if impute_method is not None:
                 from ..methods.common import normalize_impute_method
-                from ..methods.snp_imputer import SNPImputer
+                from ..methods.snps_imputer import SNPsImputer
 
                 method = normalize_impute_method(impute_method)
-                genos = SNPImputer(
+                genos = SNPsImputer(
                     genos,
                     self.snames,
                     imap=self.imap,
@@ -961,7 +961,7 @@ def _eems_dissimilarity_matrix(genos: np.ndarray, *, use_mean_fill: bool) -> np.
 
 def _prepare_snp_export(
     *,
-    extractor: SNPExtractor,
+    extracter: SNPsExtracter,
     view: SNPExportView,
     impute_method: str | None,
     random_seed: int | None,
@@ -978,9 +978,9 @@ def _prepare_snp_export(
 
     method = normalize_impute_method(impute_method)
     if method is None:
-        missing = calculate_sample_missing_fraction(view.genos, extractor.snames)
+        missing = calculate_sample_missing_fraction(view.genos, extracter.snames)
         sample_summary = build_sample_data_summary(
-            samples=extractor.snames,
+            samples=extracter.snames,
             missing_fraction=missing,
             post_imputation_missing_fraction=missing,
             imputation_algorithm="not-imputed",
@@ -1003,13 +1003,13 @@ def _prepare_snp_export(
     imputation = summarize_imputation(view.genos, method)
     genos = impute_genotype_matrix(
         view.genos,
-        extractor,
+        extracter,
         impute_method=method,
         random_seed=random_seed,
     )
     snps = _reconstruct_snp_chars(genos=genos, snps=view.snps, reference=view.reference)
     sample_summary = build_imputed_sample_data_summary(
-        samples=extractor.snames,
+        samples=extracter.snames,
         matrix=view.genos,
         impute_method=method,
     )
@@ -1024,7 +1024,7 @@ def _prepare_snp_export(
 
 def _write_snps_stats(
     path: Path,
-    extractor: SNPExtractor,
+    extracter: SNPsExtracter,
     prepared: PreparedSNPExport,
     *,
     subsample: bool,
@@ -1035,14 +1035,14 @@ def _write_snps_stats(
     with open(path, "w", encoding="utf-8") as out:
         out.write("Summary\n")
         out.write("-------\n")
-        out.write(f"infile: {extractor.data}\n")
-        out.write(f"samples_selected_initial: {extractor.initial_snames}\n")
-        out.write(f"samples_dropped_by_max_missing: {extractor.dropped_samples_by_missing}\n")
-        out.write(f"samples_final: {extractor.snames}\n")
-        out.write(f"imap: {extractor.imap}\n")
-        out.write(f"minmap: {extractor.minmap}\n")
-        out.write(f"include_reference: {extractor.include_reference}\n")
-        out.write(f"max_sample_missing: {extractor.max_sample_missing}\n")
+        out.write(f"infile: {extracter.data}\n")
+        out.write(f"samples_selected_initial: {extracter.initial_snames}\n")
+        out.write(f"samples_dropped_by_max_missing: {extracter.dropped_samples_by_missing}\n")
+        out.write(f"samples_final: {extracter.snames}\n")
+        out.write(f"imap: {extracter.imap}\n")
+        out.write(f"minmap: {extracter.minmap}\n")
+        out.write(f"include_reference: {extracter.include_reference}\n")
+        out.write(f"max_sample_missing: {extracter.max_sample_missing}\n")
         out.write(f"subsample: {subsample}\n")
         out.write(f"random_seed: {random_seed}\n")
         out.write(f"impute_method: {impute_method if impute_method is not None else 'none'}\n")
@@ -1073,11 +1073,11 @@ def _write_snps_stats(
         out.write(f"written_formats: {', '.join(written_formats)}\n")
         out.write(
             "linked_post_filter_snps: "
-            f"{int(extractor.stats['post_filter_snps'])}\n"
+            f"{int(extracter.stats['post_filter_snps'])}\n"
         )
         out.write(
             "linked_post_filter_snp_containing_linkage_blocks: "
-            f"{int(extractor.stats['post_filter_snp_containing_linkage_blocks'])}\n"
+            f"{int(extracter.stats['post_filter_snp_containing_linkage_blocks'])}\n"
         )
         out.write(f"exported_snps: {prepared.view.snpsmap.shape[0]}\n")
         out.write(
@@ -1087,11 +1087,11 @@ def _write_snps_stats(
         out.write("\n")
         out.write("Filter statistics\n")
         out.write("-----------------\n")
-        for key in extractor.stats.index:
-            out.write(f"{key}: {extractor.stats[key]}\n")
+        for key in extracter.stats.index:
+            out.write(f"{key}: {extracter.stats[key]}\n")
 
 
-def run_snp_extractor(
+def run_snps_extracter(
     *,
     data: Path | str,
     name: str,
@@ -1162,7 +1162,7 @@ def run_snp_extractor(
         )
 
     outdir.mkdir(parents=True, exist_ok=True)
-    tool = SNPExtractor(
+    tool = SNPsExtracter(
         data=Path(data),
         min_sample_coverage=min_sample_coverage,
         max_sample_missing=max_sample_missing,
@@ -1180,7 +1180,7 @@ def run_snp_extractor(
         log_level="DEBUG",
     )
     prepared = _prepare_snp_export(
-        extractor=tool,
+        extracter=tool,
         view=view,
         impute_method=normalized_impute,
         random_seed=random_seed,
@@ -1298,8 +1298,8 @@ __all__ = [
     "REFERENCE_SAMPLE_NAME",
     "SNPSMAP_COLUMNS",
     "SNPExportView",
-    "SNPExtractor",
+    "SNPsExtracter",
     "_MISSING_GENO",
     "_MISSING_SNP",
-    "run_snp_extractor",
+    "run_snps_extracter",
 ]

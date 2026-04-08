@@ -40,10 +40,10 @@ from typing import Dict
 from loguru import logger
 
 from ...utils.exceptions import IPyradError
-from .window_extractor import WindowExtractor
+from .window_extracter import WindowExtracter
 
 
-class LocusExtractor:
+class LocusExtracter:
     """Tool to extract sequences from one or more loci and write to a
     concatenated sequence file in phylip or nexus format.
     """
@@ -67,7 +67,7 @@ class LocusExtractor:
             raise IPyradError("Minimum locus length must be at least 1.")
 
         # Pass the rest of the args into a wex and retrieve the phymap
-        self.wex = WindowExtractor(**kwargs)
+        self.wex = WindowExtracter(**kwargs)
         self.wex._get_phymap_windows()
         self.wex._get_phymap()
         self.phymap = self.wex.phymap.reset_index(drop=True)
@@ -380,7 +380,7 @@ class LocusExtractor:
         self._write_stats_summary(stats_records)
 
 
-def run_locus_extractor(**kwargs):
+def run_locus_extracter(**kwargs):
     """command line wrapper for locus-extracter.
 
     Parameters:
@@ -430,11 +430,11 @@ def run_locus_extractor(**kwargs):
         # pop args wex doesn't care about
         _ = kwargs.pop("nloci")
         _ = kwargs.pop("min_length", kwargs.pop("length", None))
-        tool = WindowExtractor(**kwargs)
+        tool = WindowExtracter(**kwargs)
         tool.scaffold_table.to_csv(sys.stdout, sep="\t")
         sys.exit(0)
 
-    lex = LocusExtractor(**kwargs) 
+    lex = LocusExtracter(**kwargs) 
     lex._run()
     sys.exit(0)
 
@@ -448,7 +448,7 @@ if __name__ == "__main__":
         # help(io5.create_dataset)
 
 
-    # tool = WindowExtractor(
+    # tool = WindowExtracter(
     #     data=h5,
     #     name='test',
     #     outdir=Path("/tmp/WEX"),

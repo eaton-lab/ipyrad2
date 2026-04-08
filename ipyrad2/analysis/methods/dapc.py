@@ -21,7 +21,7 @@ from .common import (
     parse_k_range,
     require_hdf5_input,
     require_sklearn,
-    run_snp_extractor_for_method,
+    run_snps_extracter_for_method,
     summarize_prepared_snp_view,
     write_assignments,
     write_membership,
@@ -135,7 +135,7 @@ def run_dapc_method(
     ensure_output_paths(paths.values(), force=force)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    extractor = run_snp_extractor_for_method(
+    extracter = run_snps_extracter_for_method(
         data=data,
         min_sample_coverage=min_sample_coverage,
         max_sample_missing=max_sample_missing,
@@ -148,7 +148,7 @@ def run_dapc_method(
         log_level=log_level,
     )
     prepared = get_numerical_input(
-        extractor,
+        extracter,
         subsample=subsample,
         random_seed=random_seed,
         impute_method=impute_method,
@@ -157,7 +157,7 @@ def run_dapc_method(
     log_snp_imputation_summary("dapc", prepared.imputation)
     log_snp_view_summary(
         "dapc",
-        summarize_prepared_snp_view(extractor, prepared.view, subsample=subsample),
+        summarize_prepared_snp_view(extracter, prepared.view, subsample=subsample),
         view_label="prepared",
     )
 
@@ -165,13 +165,13 @@ def run_dapc_method(
         lower, upper = parse_k_range(k_range)
         if lower < 2:
             raise IPyradError("K ranges for DAPC must start at 2 or greater.")
-        if upper >= len(extractor.snames):
+        if upper >= len(extracter.snames):
             raise IPyradError("Maximum K must be smaller than the number of retained samples.")
         kmax = upper
     else:
         if k is None or k < 2:
             raise IPyradError("K for DAPC must be 2 or greater.")
-        if k >= len(extractor.snames):
+        if k >= len(extracter.snames):
             raise IPyradError("K must be smaller than the number of retained samples.")
         kmax = k
 
@@ -213,12 +213,12 @@ def run_dapc_method(
         n_pcs=retained_pcs,
         seed=random_seed,
     )
-    _write_coords(paths["coords"], extractor.snames, coords)
-    write_membership(paths["membership"], extractor.snames, membership)
-    write_assignments(paths["assignments"], extractor.snames, membership)
+    _write_coords(paths["coords"], extracter.snames, coords)
+    write_membership(paths["membership"], extracter.snames, membership)
+    write_assignments(paths["assignments"], extracter.snames, membership)
     pd.DataFrame.from_records(k_rows).to_csv(paths["k_scan"], sep="\t", index=False)
     sample_summary = build_imputed_sample_data_summary(
-        samples=extractor.snames,
+        samples=extracter.snames,
         matrix=prepared.view.genos,
         impute_method=normalized_impute,
     )
@@ -226,7 +226,7 @@ def run_dapc_method(
     write_stats_file(
         paths["stats"],
         tool="dapc",
-        extractor=extractor,
+        extracter=extracter,
         subsample=subsample,
         random_seed=random_seed,
         impute_method=impute_method,
@@ -234,9 +234,9 @@ def run_dapc_method(
             "k_selected": selected_k,
             "k_range": k_range if k_range is not None else "NA",
             "n_pcs": retained_pcs,
-            "linked_post_filter_snps": int(extractor.stats["post_filter_snps"]),
+            "linked_post_filter_snps": int(extracter.stats["post_filter_snps"]),
             "linked_post_filter_snp_containing_linkage_blocks": int(
-                extractor.stats["post_filter_snp_containing_linkage_blocks"]
+                extracter.stats["post_filter_snp_containing_linkage_blocks"]
             ),
             "exported_snps": int(
                 count_linkage_blocks(prepared.view)
@@ -244,7 +244,7 @@ def run_dapc_method(
                 else prepared.view.snpsmap.shape[0]
             ),
             "exported_snp_containing_linkage_blocks": count_linkage_blocks(prepared.view),
-            "samples_retained": len(extractor.snames),
+            "samples_retained": len(extracter.snames),
         },
     )
 

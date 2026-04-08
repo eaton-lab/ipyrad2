@@ -3,35 +3,35 @@
 from importlib import import_module
 
 from .converters.vcf_to_hdf5 import VCFToHDF5, run_vcf_to_hdf5
-from .extractors.locus_extractor import LocusExtractor, run_locus_extractor
-from .extractors.snp_extractor import SNPExtractor, run_snp_extractor
-from .extractors.window_extractor import WindowExtractor, run_window_extractor
+from .extracters.locus_extracter import LocusExtracter, run_locus_extracter
+from .extracters.snps_extracter import SNPsExtracter, run_snps_extracter
+from .extracters.window_extracter import WindowExtracter, run_window_extracter
 
 __all__ = [
     "Bpp",
-    "LocusExtractor",
+    "LocusExtracter",
     "PCAFamilyResult",
-    "SNPExtractor",
-    "SNPImputer",
+    "SNPsExtracter",
+    "SNPsImputer",
     "VCFToHDF5",
-    "WindowExtractor",
+    "WindowExtracter",
     "run_admixture_method",
     "run_dapc_method",
-    "run_locus_extractor",
+    "run_locus_extracter",
     "run_pca_analysis",
     "run_pca_method",
     "run_popgen_method",
-    "run_snp_extractor",
+    "run_snps_extracter",
     "run_snmf_method",
     "run_tsne_analysis",
     "run_umap_analysis",
     "run_vcf_to_hdf5",
-    "run_window_extractor",
+    "run_window_extracter",
 ]
 
 
 _LAZY_EXPORTS = {
-    "SNPImputer": (".methods.snp_imputer", "SNPImputer"),
+    "SNPsImputer": (".methods.snps_imputer", "SNPsImputer"),
     "Bpp": (".methods.bpp", "Bpp"),
     "run_admixture_method": (".methods.admixture", "run_admixture_method"),
     "run_dapc_method": (".methods.dapc", "run_dapc_method"),

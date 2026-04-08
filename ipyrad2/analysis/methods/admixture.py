@@ -23,7 +23,7 @@ from .common import (
     normalize_impute_method,
     parse_k_range,
     require_hdf5_input,
-    run_snp_extractor_for_method,
+    run_snps_extracter_for_method,
     summarize_imputation,
     summarize_prepared_snp_view,
     write_assignments,
@@ -193,7 +193,7 @@ def run_admixture_method(
     outdir.mkdir(parents=True, exist_ok=True)
 
     binary_path = _resolve_binary(binary)
-    extractor = run_snp_extractor_for_method(
+    extracter = run_snps_extracter_for_method(
         data=data,
         min_sample_coverage=min_sample_coverage,
         max_sample_missing=max_sample_missing,
@@ -205,7 +205,7 @@ def run_admixture_method(
         cores=cores,
         log_level=log_level,
     )
-    view = extractor.get_view(
+    view = extracter.get_view(
         subsample=subsample,
         random_seed=random_seed,
         log_level="DEBUG",
@@ -218,7 +218,7 @@ def run_admixture_method(
     log_snp_imputation_summary("admixture", imputation_summary)
     log_snp_view_summary(
         "admixture",
-        summarize_prepared_snp_view(extractor, view, subsample=subsample),
+        summarize_prepared_snp_view(extracter, view, subsample=subsample),
         view_label="prepared",
     )
     if view.reference is None:
@@ -227,7 +227,7 @@ def run_admixture_method(
             "Rebuild the SNP HDF5 with a current assemble or analysis vcf-to-hdf5 run."
         )
 
-    nsamples = len(extractor.snames)
+    nsamples = len(extracter.snames)
     if k_range is not None:
         lower, upper = parse_k_range(k_range)
         if lower < 2:
@@ -261,7 +261,7 @@ def run_admixture_method(
 
     try:
         bed_prefix = stage_dir / name
-        plink_paths = extractor.write_plink(
+        plink_paths = extracter.write_plink(
             bed_prefix,
             view,
             impute_method=normalized_impute,
@@ -301,12 +301,12 @@ def run_admixture_method(
                 "Selected ADMIXTURE .P output does not match the staged BIM marker count."
             )
 
-        write_membership(paths["membership"], extractor.snames, membership)
-        write_assignments(paths["assignments"], extractor.snames, membership)
+        write_membership(paths["membership"], extracter.snames, membership)
+        write_assignments(paths["assignments"], extracter.snames, membership)
         write_marker_cluster_matrix(paths["allele_frequencies"], marker_ids, allele_freqs)
         pd.DataFrame.from_records(run_rows).to_csv(paths["k_scan"], sep="\t", index=False)
         sample_summary = build_imputed_sample_data_summary(
-            samples=extractor.snames,
+            samples=extracter.snames,
             matrix=view.genos,
             impute_method=normalized_impute,
         )
@@ -314,7 +314,7 @@ def run_admixture_method(
         write_stats_file(
             paths["stats"],
             tool="admixture",
-            extractor=extractor,
+            extracter=extracter,
             subsample=subsample,
             random_seed=random_seed,
             impute_method=normalized_impute,
@@ -325,9 +325,9 @@ def run_admixture_method(
                 "k_range": k_range if k_range is not None else "NA",
                 "selected_cv_error": selected_info["cv_error"],
                 "keep_intermediates": keep_intermediates,
-                "linked_post_filter_snps": int(extractor.stats["post_filter_snps"]),
+                "linked_post_filter_snps": int(extracter.stats["post_filter_snps"]),
                 "linked_post_filter_snp_containing_linkage_blocks": int(
-                    extractor.stats["post_filter_snp_containing_linkage_blocks"]
+                    extracter.stats["post_filter_snp_containing_linkage_blocks"]
                 ),
                 "exported_snps": int(view.snpsmap.shape[0]),
                 "exported_snp_containing_linkage_blocks": count_linkage_blocks(view),

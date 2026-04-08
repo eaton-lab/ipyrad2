@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from ...utils.exceptions import IPyradError
-from ..extractors.snp_extractor import _MISSING_GENO
+from ..extracters.snps_extracter import _MISSING_GENO
 from .common import (
     build_imputed_sample_data_summary,
     count_linkage_blocks,
@@ -27,7 +27,7 @@ from .common import (
     parse_k_range,
     require_hdf5_input,
     require_sklearn,
-    run_snp_extractor_for_method,
+    run_snps_extracter_for_method,
     summarize_prepared_snp_view,
     write_assignments,
     write_marker_cluster_matrix,
@@ -322,7 +322,7 @@ def _mean_cross_entropy(truth: np.ndarray, predicted: np.ndarray) -> float:
 
 def _cross_entropy_for_k(
     raw_matrix: np.ndarray,
-    extractor,
+    extracter,
     *,
     k: int,
     impute_method: str | None,
@@ -351,7 +351,7 @@ def _cross_entropy_for_k(
         training[heldout[:, 0], heldout[:, 1]] = _MISSING_GENO
         imputed = impute_genotype_matrix(
             training,
-            extractor,
+            extracter,
             impute_method=impute_method,
             random_seed=int(rng.integers(2**31)),
         )
@@ -456,7 +456,7 @@ def run_snmf_method(
         cv_holdout,
     )
 
-    extractor = run_snp_extractor_for_method(
+    extracter = run_snps_extracter_for_method(
         data=data,
         min_sample_coverage=min_sample_coverage,
         max_sample_missing=max_sample_missing,
@@ -471,7 +471,7 @@ def run_snmf_method(
     _validate_snmf_configuration(
         k=k,
         k_range=k_range,
-        nsamples=len(extractor.snames),
+        nsamples=len(extracter.snames),
         alpha_w=alpha_w,
         alpha_h=normalized_alpha_h,
         l1_ratio=l1_ratio,
@@ -481,7 +481,7 @@ def run_snmf_method(
     )
 
     prepared = get_numerical_input(
-        extractor,
+        extracter,
         subsample=subsample,
         random_seed=random_seed,
         impute_method=normalized_impute,
@@ -492,7 +492,7 @@ def run_snmf_method(
     log_snp_imputation_summary("snmf", prepared.imputation)
     log_snp_view_summary(
         "snmf",
-        summarize_prepared_snp_view(extractor, prepared.view, subsample=subsample),
+        summarize_prepared_snp_view(extracter, prepared.view, subsample=subsample),
         view_label="prepared",
     )
     raw_matrix = prepared.view.genos.copy()
@@ -520,7 +520,7 @@ def run_snmf_method(
         )
         cv_score = _cross_entropy_for_k(
             raw_matrix,
-            extractor,
+            extracter,
             k=current_k,
             impute_method=normalized_impute,
             seed=cv_seed,
@@ -569,8 +569,8 @@ def run_snmf_method(
         selected_row["mean_cross_entropy"],
     )
 
-    write_membership(paths["membership"], extractor.snames, selected_fit.membership)
-    write_assignments(paths["assignments"], extractor.snames, selected_fit.membership)
+    write_membership(paths["membership"], extracter.snames, selected_fit.membership)
+    write_assignments(paths["assignments"], extracter.snames, selected_fit.membership)
     write_marker_cluster_matrix(
         paths["allele_frequencies"],
         marker_ids_from_view(prepared.view),
@@ -578,7 +578,7 @@ def run_snmf_method(
     )
     pd.DataFrame.from_records(run_rows).to_csv(paths["k_scan"], sep="\t", index=False)
     sample_summary = build_imputed_sample_data_summary(
-        samples=extractor.snames,
+        samples=extracter.snames,
         matrix=prepared.view.genos,
         impute_method=normalized_impute,
     )
@@ -586,7 +586,7 @@ def run_snmf_method(
     write_stats_file(
         paths["stats"],
         tool="snmf",
-        extractor=extractor,
+        extracter=extracter,
         subsample=subsample,
         random_seed=random_seed,
         impute_method=impute_method,
@@ -608,9 +608,9 @@ def run_snmf_method(
             "selected_fit_hit_max_iter": selected_fit.hit_max_iter,
             "capped_fits_for_selected_k": selected_capped_fit_count,
             "total_fits_for_selected_k": selected_total_fit_count,
-            "linked_post_filter_snps": int(extractor.stats["post_filter_snps"]),
+            "linked_post_filter_snps": int(extracter.stats["post_filter_snps"]),
             "linked_post_filter_snp_containing_linkage_blocks": int(
-                extractor.stats["post_filter_snp_containing_linkage_blocks"]
+                extracter.stats["post_filter_snp_containing_linkage_blocks"]
             ),
             "exported_snps": int(
                 count_linkage_blocks(prepared.view)
@@ -618,7 +618,7 @@ def run_snmf_method(
                 else prepared.view.snpsmap.shape[0]
             ),
             "exported_snp_containing_linkage_blocks": count_linkage_blocks(prepared.view),
-            "samples_retained": len(extractor.snames),
+            "samples_retained": len(extracter.snames),
         },
     )
     logger.debug(

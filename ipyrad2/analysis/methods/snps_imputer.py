@@ -12,7 +12,7 @@ from ...utils.exceptions import IPyradError
 _MISSING_GENO = 255
 
 
-class SNPImputer(object):
+class SNPsImputer(object):
     """
     Impute missing diploid SNP genotypes from within-group allele frequencies.
 
@@ -51,9 +51,9 @@ class SNPImputer(object):
         """Return a writable 2D genotype array copy."""
         snps = np.asarray(data)
         if snps.ndim != 2:
-            raise IPyradError("SNPImputer data must be a 2D genotype matrix.")
+            raise IPyradError("SNPsImputer data must be a 2D genotype matrix.")
         if not np.issubdtype(snps.dtype, np.integer):
-            raise IPyradError("SNPImputer data must have an integer genotype dtype.")
+            raise IPyradError("SNPsImputer data must have an integer genotype dtype.")
         return snps.copy()
 
     @staticmethod
@@ -62,7 +62,7 @@ class SNPImputer(object):
         normalized = [str(name) for name in names]
         if len(normalized) != nsamples:
             raise IPyradError(
-                "SNPImputer names length must match the number of genotype rows."
+                "SNPsImputer names length must match the number of genotype rows."
             )
         return normalized
 
@@ -71,7 +71,7 @@ class SNPImputer(object):
         if imap is None:
             return {"1": list(self.names)}
         if not isinstance(imap, dict):
-            raise IPyradError("SNPImputer imap must be a dict or None.")
+            raise IPyradError("SNPsImputer imap must be a dict or None.")
 
         normalized = {}
         seen = set()
@@ -79,22 +79,22 @@ class SNPImputer(object):
             group_name = str(group)
             sample_names = [str(name) for name in samples]
             if not sample_names:
-                raise IPyradError(f"SNPImputer imap group {group_name!r} is empty.")
+                raise IPyradError(f"SNPsImputer imap group {group_name!r} is empty.")
             if len(set(sample_names)) != len(sample_names):
                 raise IPyradError(
-                    f"SNPImputer imap group {group_name!r} contains duplicate sample names."
+                    f"SNPsImputer imap group {group_name!r} contains duplicate sample names."
                 )
             missing = sorted(set(sample_names).difference(self.name_to_index))
             if missing:
                 raise IPyradError(
-                    "SNPImputer imap contains sample names not present in the genotype matrix: "
+                    "SNPsImputer imap contains sample names not present in the genotype matrix: "
                     + ", ".join(missing)
                 )
             duplicates = sorted(name for name in sample_names if name in seen)
             if duplicates:
                 dupes = ", ".join(sorted(set(duplicates)))
                 raise IPyradError(
-                    "SNPImputer imap assigns a sample to multiple groups: " + dupes
+                    "SNPsImputer imap assigns a sample to multiple groups: " + dupes
                 )
             seen.update(sample_names)
             normalized[group_name] = sample_names
@@ -110,7 +110,7 @@ class SNPImputer(object):
         if isinstance(impute_method, str) and impute_method.lower() in {"none", "zero", "zero-fill"}:
             return "zero-fill"
         raise IPyradError(
-            "Unsupported SNPImputer impute_method. Use 'sample' or 'zero-fill'."
+            "Unsupported SNPsImputer impute_method. Use 'sample' or 'zero-fill'."
         )
 
     def run(self):
@@ -179,4 +179,4 @@ class SNPImputer(object):
             )
         )
 
-__all__ = ["SNPImputer"]
+__all__ = ["SNPsImputer"]

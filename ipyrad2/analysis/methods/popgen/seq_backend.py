@@ -16,10 +16,10 @@ from loguru import logger
 
 from ....utils.exceptions import IPyradError
 from ....utils.parallel import run_with_pool
-from ...extractors.sequence_common import build_sequence_imap_minmap
-from ...extractors.sequence_common import normalize_sequence_population_inputs
-from ...extractors.sequence_common import resolve_sequence_sample_subset
-from ...extractors.sequence_common import sync_sequence_imap_after_sample_drop
+from ...extracters.sequence_common import build_sequence_imap_minmap
+from ...extracters.sequence_common import normalize_sequence_population_inputs
+from ...extracters.sequence_common import resolve_sequence_sample_subset
+from ...extracters.sequence_common import sync_sequence_imap_after_sample_drop
 from ..common import build_sample_data_summary
 from .common import build_pairwise_stats_dataframe
 from .common import build_population_stats_dataframe

@@ -30,7 +30,7 @@ from loguru import logger
 
 from ...utils.progress import ProgressBar
 from ...utils.exceptions import IPyradError
-from ..extractors.snp_extractor import _MISSING_GENO
+from ..extracters.snps_extracter import _MISSING_GENO
 
 class VCFToHDF5(object):
     """

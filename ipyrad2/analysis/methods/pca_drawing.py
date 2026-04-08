@@ -60,7 +60,7 @@ def _mean_variances(result: "PCAFamilyResult") -> np.ndarray:
 def _sample_to_group(result: "PCAFamilyResult") -> dict[str, str]:
     """Return the plotting group for each sample."""
     mapping = {}
-    for group, names in result.extractor.imap.items():
+    for group, names in result.extracter.imap.items():
         for name in names:
             mapping[name] = group
     missing = [name for name in result.samples if name not in mapping]
@@ -217,7 +217,7 @@ def write_pca_svg_plot(
     aligned = _align_replicate_coords(result)
     variances = _mean_variances(result)
     sample_to_group = _sample_to_group(result)
-    groups = list(result.extractor.imap)
+    groups = list(result.extracter.imap)
     nreplicates = len(aligned)
 
     centroid_styles, replicate_styles, legend_items = _build_marker_styles(
