@@ -490,7 +490,7 @@ def resolve_locus_for_output(
         "variant_phylo_informative_site_frequency": 0,
         "variant_phylo_informative_site_frequency_where_sample_cov_greater_than_3": 0,
         "masked_samples_by_max_sample_hetero_frequency": tuple(),
-        "sample_locus_masks_by_max_sample_hetero_frequency": 0,
+        "masked_sample_count_by_max_sample_hetero_frequency": 0,
     }
 
     tseqs, tsite_sample_covs, trim_left, trim_right = _trim_locus_matrix(
@@ -522,7 +522,7 @@ def resolve_locus_for_output(
         trim_right += extra_right
 
     stats["masked_samples_by_max_sample_hetero_frequency"] = tuple(masked_samples)
-    stats["sample_locus_masks_by_max_sample_hetero_frequency"] = len(masked_samples)
+    stats["masked_sample_count_by_max_sample_hetero_frequency"] = len(masked_samples)
     if sample_props:
         stats["sample_hetero_frequencies"] = sample_props
 
@@ -739,15 +739,17 @@ def write_assemble_stats_report(
             "loci_filtered_max_shared_heterozygosity",
             _format_count(int(filter_counts["max_shared_hetero_frequency"])),
         ),
-        (
-            "loci_with_sample_masks_max_sample_heterozygosity",
-            _format_count(int(loci_summary.get("loci_with_sample_mask_max_sample_hetero_frequency", 0))),
-        ),
-        (
-            "sample_locus_masks_max_sample_heterozygosity",
-            _format_count(int(loci_summary.get("sample_locus_mask_count_max_sample_hetero_frequency", 0))),
-        ),
         ("loci_filtered_max_depth_outlier", _format_count(int(filter_counts["max_depth_outlier"]))),
+    ]
+    sample_masking_rows = [
+        (
+            "loci_with_samples_masked_by_max_hetero_frequency",
+            _format_count(int(loci_summary.get("loci_with_samples_masked_by_max_hetero_frequency", 0))),
+        ),
+        (
+            "total_masked_sample_occurrences_by_max_hetero_frequency",
+            _format_count(int(loci_summary.get("total_masked_sample_occurrences_by_max_hetero_frequency", 0))),
+        ),
     ]
 
     alignment_rows = [
@@ -785,7 +787,7 @@ def write_assemble_stats_report(
         "median_depth_shared_loci",
         "mean_depth_nonzero_shared_loci",
         "median_depth_nonzero_shared_loci",
-        "loci_masked_max_sample_hetero_frequency",
+        "masked_by_max_hetero_frequency",
     ]
     sample_rows: list[list[str]] = []
     for sname in sorted(snames):
@@ -802,7 +804,7 @@ def write_assemble_stats_report(
             _format_float(float(depth_stats["median_depth_shared_loci"])),
             _format_float(float(depth_stats["mean_depth_nonzero_shared_loci"])),
             _format_float(float(depth_stats["median_depth_nonzero_shared_loci"])),
-            _format_count(int(loci_summary.get("sample_locus_mask_counts", {}).get(sname, 0))),
+            _format_count(int(loci_summary.get("masked_by_max_hetero_frequency_counts", {}).get(sname, 0))),
         ])
 
     occupancy_headers = ["samples_with_data", "loci", "fraction_of_final_loci"]
@@ -838,6 +840,7 @@ def write_assemble_stats_report(
         ]
         _append_key_value_section(lines, "Mixed RAD/WGS Summary", mixed_rows)
     _append_key_value_section(lines, "Locus Filtering", filtering_rows)
+    _append_key_value_section(lines, "Sample Masking", sample_masking_rows)
     _append_key_value_section(lines, "Alignment Summary", alignment_rows)
     _append_table_section(lines, "Sample Summary", sample_headers, sample_rows)
     _append_table_section(lines, "Locus Occupancy", occupancy_headers, occupancy_rows)
@@ -860,7 +863,7 @@ def _build_retained_locus_outputs(
     """Build all retained-locus outputs needed by the ordered final writer."""
     scaff, pos = header.split(":")
     pos0, pos1 = (int(i) for i in pos.split("-"))
-    masked_samples = list(stats.get("masked_samples_by_max_sample_hetero_frequency", ()))
+    masked_samples = set(stats.get("masked_samples_by_max_sample_hetero_frequency", ()))
 
     sample_mask = np.array([sname != refname for sname in tnames], dtype=bool)
     sample_rows = sample_mask & _sample_rows_with_data(tseqs)
@@ -875,7 +878,14 @@ def _build_retained_locus_outputs(
         sample_seqs = tseqs[sample_rows]
         nonmissing_sample_bases = int(np.sum((sample_seqs != 78) & (sample_seqs != 45)))
 
-    locus_lines = [f"{padded[sname]}{bytes(seq).decode()}" for sname, seq in zip(tnames, tseqs)]
+    # `.loci.gz` should omit samples masked by the max-sample-heterozygosity rule,
+    # while fixed-axis outputs keep them as missing data for that locus.
+    visible_rows = [
+        (sname, seq)
+        for sname, seq in zip(tnames, tseqs, strict=True)
+        if sname not in masked_samples
+    ]
+    locus_lines = [f"{padded[sname]}{bytes(seq).decode()}" for sname, seq in visible_rows]
     snpstring_arr = snpsarr.copy()
     snpstring_arr[snpstring_arr == 0] = 32
     snpstring_arr[snpstring_arr == 1] = 45
@@ -887,9 +897,9 @@ def _build_retained_locus_outputs(
         "tseqs": tseqs,
         "tnames": tnames,
         "locus_length": int(tseqs.shape[1]),
-        "bed_row": f"{scaff}\t{pos0 - 1}\t{pos1}\t{tseqs.shape[0]}\n",
-        "manifest_row": (raw_header, header, ",".join(masked_samples)),
-        "masked_samples": masked_samples,
+        "bed_row": f"{scaff}\t{pos0 - 1}\t{pos1}\t{len(visible_rows)}\n",
+        "manifest_row": (raw_header, header, ",".join(sorted(masked_samples))),
+        "masked_samples": sorted(masked_samples),
         "mask_bed_row": f"{scaff}\t{pos0 - 1}\t{pos1}\n",
         "sample_names_with_data": sample_names_with_data,
         "sample_count": sample_count,
@@ -1053,9 +1063,9 @@ def write_final_outputs(
         "max_shared_hetero_frequency": 0,
         "max_depth_outlier": 0,
     }
-    sample_locus_mask_counts = {i: 0 for i in real_snames}
-    loci_with_sample_masks = 0
-    sample_locus_mask_total = 0
+    masked_by_max_hetero_frequency_counts = {i: 0 for i in real_snames}
+    loci_with_samples_masked_by_max_hetero_frequency = 0
+    total_masked_sample_occurrences_by_max_hetero_frequency = 0
     total_stats = {
         "variant_sites": 0,
         "variant_phylo_informative_sites": 0,
@@ -1109,7 +1119,9 @@ def write_final_outputs(
 
         def _flush_pending() -> None:
             nonlocal next_batch_idx, nloci_before_filtering, flidx
-            nonlocal loci_with_sample_masks, sample_locus_mask_total, alignment_nonmissing_sample_bases
+            nonlocal loci_with_samples_masked_by_max_hetero_frequency
+            nonlocal total_masked_sample_occurrences_by_max_hetero_frequency
+            nonlocal alignment_nonmissing_sample_bases
             while next_batch_idx in pending_results:
                 batch_result = pending_results.pop(next_batch_idx)
                 next_batch_idx += 1
@@ -1123,10 +1135,10 @@ def write_final_outputs(
                     manifest_writer.writerow(list(locus_output["manifest_row"]))
                     masked_samples = list(locus_output["masked_samples"])
                     if masked_samples:
-                        loci_with_sample_masks += 1
-                        sample_locus_mask_total += len(masked_samples)
+                        loci_with_samples_masked_by_max_hetero_frequency += 1
+                        total_masked_sample_occurrences_by_max_hetero_frequency += len(masked_samples)
                         for sname in masked_samples:
-                            sample_locus_mask_counts[sname] += 1
+                            masked_by_max_hetero_frequency_counts[sname] += 1
                             mask_handles[sname].write(str(locus_output["mask_bed_row"]))
 
                     for sname in locus_output["sample_names_with_data"]:
@@ -1220,9 +1232,9 @@ def write_final_outputs(
         "filter_counts": dict(total_filters),
         "site_totals": dict(total_stats),
         "sample_locus_counts": dict(per_sample_locus_counts),
-        "sample_locus_mask_counts": dict(sample_locus_mask_counts),
-        "loci_with_sample_mask_max_sample_hetero_frequency": loci_with_sample_masks,
-        "sample_locus_mask_count_max_sample_hetero_frequency": sample_locus_mask_total,
+        "masked_by_max_hetero_frequency_counts": dict(masked_by_max_hetero_frequency_counts),
+        "loci_with_samples_masked_by_max_hetero_frequency": loci_with_samples_masked_by_max_hetero_frequency,
+        "total_masked_sample_occurrences_by_max_hetero_frequency": total_masked_sample_occurrences_by_max_hetero_frequency,
         "samples_per_locus_counts": dict(samples_per_locus),
         "locus_length_counts": dict(locus_length_counts),
         "alignment_nonmissing_sample_bases": alignment_nonmissing_sample_bases,
@@ -1270,9 +1282,9 @@ def write_loci_and_stats_files(
         "max_shared_hetero_frequency": 0,
         "max_depth_outlier": 0,
     }
-    sample_locus_mask_counts = {i: 0 for i in real_snames}
-    loci_with_sample_masks = 0
-    sample_locus_mask_total = 0
+    masked_by_max_hetero_frequency_counts = {i: 0 for i in real_snames}
+    loci_with_samples_masked_by_max_hetero_frequency = 0
+    total_masked_sample_occurrences_by_max_hetero_frequency = 0
     total_stats = {
         "variant_sites": 0,
         "variant_phylo_informative_sites": 0,
@@ -1329,14 +1341,19 @@ def write_loci_and_stats_files(
                 # stays synchronized with the filtered loci text output.
                 scaff, pos = header.split(":")
                 pos0, pos1 = (int(i) for i in pos.split("-"))
-                out_bed.write(f"{scaff}\t{pos0 - 1}\t{pos1}\t{tseqs.shape[0]}\n")
                 masked_samples = list(stats.get("masked_samples_by_max_sample_hetero_frequency", ()))
+                visible_sample_rows = [
+                    (sname, seq)
+                    for sname, seq in zip(tnames, tseqs, strict=True)
+                    if sname not in masked_samples
+                ]
+                out_bed.write(f"{scaff}\t{pos0 - 1}\t{pos1}\t{len(visible_sample_rows)}\n")
                 manifest_writer.writerow([oheader, header, ",".join(masked_samples)])
                 if masked_samples:
-                    loci_with_sample_masks += 1
-                    sample_locus_mask_total += len(masked_samples)
+                    loci_with_samples_masked_by_max_hetero_frequency += 1
+                    total_masked_sample_occurrences_by_max_hetero_frequency += len(masked_samples)
                     for sname in masked_samples:
-                        sample_locus_mask_counts[sname] += 1
+                        masked_by_max_hetero_frequency_counts[sname] += 1
                         mask_handles[sname].write(f"{scaff}\t{pos0 - 1}\t{pos1}\n")
 
                 # Count only empirical samples in the report summaries so the
@@ -1359,7 +1376,7 @@ def write_loci_and_stats_files(
 
                 # build locus with snpstring
                 locus = []
-                for sname, seq in zip(tnames, tseqs):
+                for sname, seq in visible_sample_rows:
                     locus.append(f"{padded[sname]}{bytes(seq).decode()}")
                 snpsarr[snpsarr == 0] = 32
                 snpsarr[snpsarr == 1] = 45
@@ -1394,9 +1411,9 @@ def write_loci_and_stats_files(
         "filter_counts": dict(total_filters),
         "site_totals": dict(total_stats),
         "sample_locus_counts": dict(per_sample_locus_counts),
-        "sample_locus_mask_counts": dict(sample_locus_mask_counts),
-        "loci_with_sample_mask_max_sample_hetero_frequency": loci_with_sample_masks,
-        "sample_locus_mask_count_max_sample_hetero_frequency": sample_locus_mask_total,
+        "masked_by_max_hetero_frequency_counts": dict(masked_by_max_hetero_frequency_counts),
+        "loci_with_samples_masked_by_max_hetero_frequency": loci_with_samples_masked_by_max_hetero_frequency,
+        "total_masked_sample_occurrences_by_max_hetero_frequency": total_masked_sample_occurrences_by_max_hetero_frequency,
         "samples_per_locus_counts": dict(samples_per_locus),
         "locus_length_counts": dict(locus_length_counts),
         "alignment_nonmissing_sample_bases": alignment_nonmissing_sample_bases,
