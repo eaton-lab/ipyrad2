@@ -110,3 +110,35 @@ def get_fai_values(reference: Path, key: str) -> np.ndarray:
     if column_idx == 0:
         return np.array([row[column_idx] for row in rows], dtype=object)
     return np.array([row[column_idx] for row in rows], dtype=np.int64)
+
+
+def get_retained_fai_rows(reference: Path, loci_bed: Path) -> tuple[tuple[str | int, ...], ...]:
+    """Return reference `.fai` rows for scaffolds present in one BED, in reference order."""
+    fai = reference.with_suffix(reference.suffix + ".fai")
+    rows = _read_fai_rows(str(fai))
+
+    retained: set[str] = set()
+    with open(loci_bed, "rt", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            retained.add(line.split("\t", 1)[0])
+
+    if not retained:
+        return tuple()
+
+    retained_rows = tuple(row for row in rows if str(row[0]) in retained)
+    if len(retained_rows) != len(retained):
+        known = {str(row[0]) for row in rows}
+        missing = ", ".join(sorted(retained.difference(known)))
+        raise ValueError(f"Scaffolds from {loci_bed} are absent from {fai}: {missing}")
+    return retained_rows
+
+
+def write_retained_fai(reference: Path, loci_bed: Path, out_path: Path) -> Path:
+    """Write a subset `.fai` containing only scaffolds present in one BED."""
+    rows = get_retained_fai_rows(reference, loci_bed)
+    lines = ["\t".join(str(value) for value in row) for row in rows]
+    out_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return out_path

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import gzip
+import csv
 import re
 import shutil
 import sys
@@ -14,12 +15,13 @@ import numpy as np
 from loguru import logger
 from ..utils.seqs import comp
 from ..utils.jit_funcs import snp_count_numba, max_heteros_count_numba
-from ..utils.parallel import run_pipeline
+from ..utils.parallel import run_pipeline, run_with_pool_iter
 
 BIN = Path(sys.prefix) / "bin"
 BIN_SAM = str(BIN / "samtools")
 BIN_BCF = str(BIN / "bcftools")
 BIN_BED = str(BIN / "bedtools")
+HETERO_CODES = np.array(list(b"RSKYWM"), dtype=np.uint8)
 
 
 def get_lowdepth_mask_path(sname: str, tmpdir: Path) -> Path:
@@ -40,6 +42,21 @@ def get_indel_overlap_mask_path(sname: str, tmpdir: Path) -> Path:
 def get_sample_mask_path(sname: str, tmpdir: Path) -> Path:
     """Return the merged mask path consumed by consensus calling."""
     return tmpdir / "beds" / f"{sname}.mask.bed"
+
+
+def get_consensus_hetero_mask_path(sname: str, tmpdir: Path) -> Path:
+    """Return the final-output BED path for consensus heterozygosity masking."""
+    return tmpdir / "beds" / f"{sname}.consensus_hetero.mask.bed"
+
+
+def get_final_vcf_mask_path(sname: str, tmpdir: Path) -> Path:
+    """Return the final merged sample-mask BED path used on the final VCF."""
+    return tmpdir / "beds" / f"{sname}.final.vcf.mask.bed"
+
+
+def get_retained_loci_manifest_path(name: str, tmpdir: Path) -> Path:
+    """Return the manifest path describing retained/masked final loci."""
+    return tmpdir / f"{name}.retained_loci.tsv"
 
 
 def write_sam_faidx(tmpdir: Path) -> Path:
@@ -144,9 +161,10 @@ def make_lowdepth_mask(sname: str, min_sample_depth: int, tmpdir: Path):
         f'BEGIN{{OFS="\\t"}} $4>={min_sample_depth} {{print $1,$2,$3}}',
         str(sample_bedgraph),
     ]
-    cmd2 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
+    cmd2 = ["sort", "-k1,1", "-k2,2n", "-T", str(tmpdir)]
     cmd3 = [BIN_BED, "merge", "-i", "-"]
-    run_pipeline([cmd1, cmd2, cmd3], good_bed)
+    cmd4 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
+    run_pipeline([cmd1, cmd2, cmd3, cmd4], good_bed)
 
     return _subtract_sorted_beds(loci_bed, good_bed, ref_info, out_bed)
 
@@ -191,9 +209,34 @@ def merge_sample_mask_beds(sname: str, tmpdir: Path) -> Path:
     # Merge every active interval source into one sorted mask so consensus
     # calling sees a single BED regardless of why a site was filtered.
     cmd1 = ["cat"] + [str(path) for path in existing]
-    cmd2 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
+    cmd2 = ["sort", "-k1,1", "-k2,2n", "-T", str(tmpdir)]
     cmd3 = [BIN_BED, "merge", "-i", "-"]
-    run_pipeline([cmd1, cmd2, cmd3], out_bed)
+    cmd4 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
+    run_pipeline([cmd1, cmd2, cmd3, cmd4], out_bed)
+    return out_bed
+
+
+def merge_final_vcf_mask_beds(sname: str, tmpdir: Path) -> Path:
+    """Merge consensus-time and final-output sample masks for final VCF masking."""
+    ref_info = tmpdir / "REF_info.txt"
+    out_bed = get_final_vcf_mask_path(sname, tmpdir)
+    existing = [
+        path
+        for path in (get_sample_mask_path(sname, tmpdir), get_consensus_hetero_mask_path(sname, tmpdir))
+        if path.exists() and path.stat().st_size
+    ]
+    if not existing:
+        out_bed.write_text("", encoding="utf-8")
+        return out_bed
+    if len(existing) == 1:
+        shutil.copy2(existing[0], out_bed)
+        return out_bed
+
+    cmd1 = ["cat"] + [str(path) for path in existing]
+    cmd2 = ["sort", "-k1,1", "-k2,2n", "-T", str(tmpdir)]
+    cmd3 = [BIN_BED, "merge", "-i", "-"]
+    cmd4 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
+    run_pipeline([cmd1, cmd2, cmd3, cmd4], out_bed)
     return out_bed
 
 
@@ -336,7 +379,79 @@ def iter_parse_loci(database_fasta: Path):
             break
 
 
-def filter_trim_locus(
+def iter_locus_batches(database_fasta: Path, batch_size: int = 128):
+    """Yield fixed-size batches of parsed loci while preserving input order."""
+    batch: list[tuple[str, dict[str, str]]] = []
+    batch_idx = 0
+    for item in iter_parse_loci(database_fasta):
+        batch.append(item)
+        if len(batch) >= batch_size:
+            yield batch_idx, batch
+            batch_idx += 1
+            batch = []
+    if batch:
+        yield batch_idx, batch
+
+
+def _trim_locus_matrix(
+    seqs: np.ndarray,
+    *,
+    min_locus_trim_sample_coverage: int,
+) -> tuple[np.ndarray, np.ndarray, int, int]:
+    """Trim one locus matrix to the region with sufficient sample coverage."""
+    site_sample_covs = np.sum((seqs != 78) & (seqs != 45), axis=0)
+    cov_sufficient = np.where(site_sample_covs >= min_locus_trim_sample_coverage)[0]
+    try:
+        trim_left = int(cov_sufficient[0])
+    except IndexError:
+        trim_left = 0
+    try:
+        trim_right = seqs.shape[1] - int(cov_sufficient[-1]) - 1
+    except IndexError:
+        trim_right = 0
+    trimmed = seqs[:, trim_left:seqs.shape[1] - trim_right]
+    trimmed_cov = site_sample_covs[trim_left:seqs.shape[1] - trim_right]
+    return trimmed, trimmed_cov, trim_left, trim_right
+
+
+def _sample_rows_with_data(tseqs: np.ndarray) -> np.ndarray:
+    """Return a boolean row mask for samples with at least one non-missing base."""
+    if tseqs.size == 0:
+        return np.zeros(tseqs.shape[0], dtype=bool)
+    return np.any((tseqs != 78) & (tseqs != 45), axis=1)
+
+
+def _mask_high_hetero_samples(
+    tnames: list[str],
+    tseqs: np.ndarray,
+    *,
+    max_sample_hetero_frequency: float,
+) -> tuple[np.ndarray, list[str], dict[str, float]]:
+    """Mask samples that exceed the per-locus heterozygosity threshold."""
+    if tseqs.size == 0:
+        return tseqs.copy(), [], {}
+
+    masked = tseqs.copy()
+    variable_sites = snp_count_numba(tseqs) > 0
+    masked_samples: list[str] = []
+    sample_props: dict[str, float] = {}
+    for row_idx, sname in enumerate(tnames):
+        if sname == "assembly_reference_sequence":
+            continue
+        row = masked[row_idx]
+        masked_variable_n = (row == 78) & variable_sites
+        observed = (row != 78) & (row != 45)
+        explicit_hetero = np.isin(row, HETERO_CODES)
+        numer = int(explicit_hetero.sum() + masked_variable_n.sum())
+        denom = int(observed.sum() + masked_variable_n.sum())
+        sample_props[sname] = float(numer / denom) if denom else 0.0
+        if denom and sample_props[sname] > max_sample_hetero_frequency:
+            masked[row_idx, :] = np.uint8(ord("N"))
+            masked_samples.append(sname)
+    return masked, masked_samples, sample_props
+
+
+def resolve_locus_for_output(
     header: str,
     locus_dict: dict[str, str],
     min_locus_sample_coverage: int,
@@ -344,16 +459,16 @@ def filter_trim_locus(
     min_locus_length: int,
     max_locus_hetero_frequency: float,
     max_locus_variant_frequency: float,
+    max_sample_hetero_frequency: float = 0.10,
+    *,
+    forced_masked_samples: set[str] | None = None,
 ):
-    """Trim one locus, evaluate the final filters, and return summary metrics."""
-    # parse input locus
+    """Trim one locus, apply sample-level masking, and return final summary metrics."""
     scaff, pos = header.split(":")
     rstart, rend = [int(i) for i in pos.split("-")]
-    snames = list(locus_dict.keys())
-    seqs = [list(bytes(seq, "utf-8")) for seq in locus_dict.values()]
-    seqs = np.array(seqs, dtype=np.uint8)
+    tnames = list(locus_dict.keys())
+    seqs = np.array([list(bytes(seq, "utf-8")) for seq in locus_dict.values()], dtype=np.uint8)
 
-    # dicts to fill and return
     filters = {
         "min_length": False,
         "min_samples": False,
@@ -362,7 +477,7 @@ def filter_trim_locus(
         "max_depth_outlier": False,
     }
     stats = {
-        "locus_cov": 0,       # number of samples in locus
+        "locus_cov": 0,
         "variant_sites": 0,
         "variant_phylo_informative_sites": 0,
         "nsites": 0,
@@ -374,46 +489,65 @@ def filter_trim_locus(
         "variant_site_frequency_where_sample_cov_greater_than_2": 0,
         "variant_phylo_informative_site_frequency": 0,
         "variant_phylo_informative_site_frequency_where_sample_cov_greater_than_3": 0,
+        "masked_samples_by_max_sample_hetero_frequency": tuple(),
+        "sample_locus_masks_by_max_sample_hetero_frequency": 0,
     }
 
-    # apply min_samples filter --------------------------------------
-    if seqs.shape[0] < min_locus_sample_coverage:
+    tseqs, tsite_sample_covs, trim_left, trim_right = _trim_locus_matrix(
+        seqs,
+        min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
+    )
+
+    if forced_masked_samples is None:
+        tseqs, masked_samples, sample_props = _mask_high_hetero_samples(
+            tnames,
+            tseqs,
+            max_sample_hetero_frequency=max_sample_hetero_frequency,
+        )
+    else:
+        tseqs = tseqs.copy()
+        masked_samples = []
+        sample_props = {}
+        for row_idx, sname in enumerate(tnames):
+            if sname in forced_masked_samples:
+                tseqs[row_idx, :] = np.uint8(ord("N"))
+                masked_samples.append(sname)
+
+    if masked_samples:
+        tseqs, tsite_sample_covs, extra_left, extra_right = _trim_locus_matrix(
+            tseqs,
+            min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
+        )
+        trim_left += extra_left
+        trim_right += extra_right
+
+    stats["masked_samples_by_max_sample_hetero_frequency"] = tuple(masked_samples)
+    stats["sample_locus_masks_by_max_sample_hetero_frequency"] = len(masked_samples)
+    if sample_props:
+        stats["sample_hetero_frequencies"] = sample_props
+
+    row_has_data = _sample_rows_with_data(tseqs)
+    effective_locus_cov = int(row_has_data.sum())
+    stats["locus_cov"] = effective_locus_cov
+    if effective_locus_cov < min_locus_sample_coverage:
         filters["min_samples"] = True
 
-    # apply edge trimming ---- --------------------------------------
-    # get number of bases to trim from each side where sample cov < min_trim_sample_cov
-    site_sample_covs = np.sum((seqs != 78) & (seqs != 45), axis=0)
-    cov_sufficient = np.where(site_sample_covs >= min_locus_trim_sample_coverage)[0]
-    try:
-        trim_left = int(cov_sufficient[0])
-    except IndexError:
-        trim_left = 0
-    try:
-        trim_right = seqs.shape[1] - int(cov_sufficient[-1]) - 1
-    except IndexError:
-        trim_right = 0
-    tseqs = seqs[:, trim_left:seqs.shape[1] - trim_right]
-    tsite_sample_covs = site_sample_covs[trim_left:seqs.shape[1] - trim_right]
-
-    # get snps array
     snpsarr = snp_count_numba(tseqs)
     stats["variant_sites"] = int(np.sum(snpsarr > 0))
     stats["variant_phylo_informative_sites"] = int(np.sum(snpsarr == 2))
-
-    # do not count sites where variation is not possible (sample_cov=1)
-    stats["locus_cov"] = int(tseqs.shape[0])
     stats["nsites"] = int(tseqs.shape[1])
     stats["nsites_sample_cov_greater_than_1"] = int(np.sum(tsite_sample_covs > 1))
     stats["nsites_sample_cov_greater_than_2"] = int(np.sum(tsite_sample_covs > 2))
     stats["nsites_sample_cov_greater_than_3"] = int(np.sum(tsite_sample_covs > 3))
-    stats["nsites_sample_cov_greater_than_or_equal_to_min_locus_trim_sample_coverage"] = int(np.sum(tsite_sample_covs >= min_locus_trim_sample_coverage))
+    stats["nsites_sample_cov_greater_than_or_equal_to_min_locus_trim_sample_coverage"] = int(
+        np.sum(tsite_sample_covs >= min_locus_trim_sample_coverage)
+    )
 
-    # calculate proportion variable from sites with enough sample cov to detect pis
     if stats["nsites_sample_cov_greater_than_2"]:
-        stats["variant_site_frequency_where_sample_cov_greater_than_2"] = float(stats["variant_sites"] / stats["nsites_sample_cov_greater_than_2"])
+        stats["variant_site_frequency_where_sample_cov_greater_than_2"] = float(
+            stats["variant_sites"] / stats["nsites_sample_cov_greater_than_2"]
+        )
 
-    # Apply the user-facing minimum locus length to the number of informative
-    # sites that still have enough sample coverage after edge trimming.
     if min_locus_sample_coverage >= 4:
         informative_sites = stats["nsites_sample_cov_greater_than_3"]
     elif min_locus_sample_coverage == 3:
@@ -423,20 +557,40 @@ def filter_trim_locus(
     if informative_sites < min_locus_length:
         filters["min_length"] = True
 
-    # filter for max proportion polymorphic sites ---------------------------------------
     if stats["variant_site_frequency_where_sample_cov_greater_than_2"] > max_locus_variant_frequency:
         filters["max_variant_frequency"] = True
 
-    # filter for max shared het sites ----------------------------------------------------
     if tseqs.size:
         max_shared_h = max_heteros_count_numba(tseqs)
-        max_shared_h_prop = max_shared_h / tseqs.shape[0]
+        max_shared_h_prop = max_shared_h / max(1, effective_locus_cov)
         if max_shared_h_prop > max_locus_hetero_frequency:
             filters["max_shared_hetero_frequency"] = True
 
-    # if keeping locus revise the header for trim.
     header = f"{scaff}:{rstart + trim_left}-{rend - trim_right}"
-    return header, snames, tseqs, snpsarr, filters, stats
+    return header, tnames, tseqs, snpsarr, filters, stats
+
+
+def filter_trim_locus(
+    header: str,
+    locus_dict: dict[str, str],
+    min_locus_sample_coverage: int,
+    min_locus_trim_sample_coverage: int,
+    min_locus_length: int,
+    max_locus_hetero_frequency: float,
+    max_locus_variant_frequency: float,
+    max_sample_hetero_frequency: float = 1.0,
+):
+    """Trim one locus, evaluate the final filters, and return summary metrics."""
+    return resolve_locus_for_output(
+        header,
+        locus_dict,
+        min_locus_sample_coverage,
+        min_locus_trim_sample_coverage,
+        min_locus_length,
+        max_locus_hetero_frequency,
+        max_locus_variant_frequency,
+        max_sample_hetero_frequency,
+    )
 
 
 def _safe_fraction(numer: int | float, denom: int | float) -> float:
@@ -585,6 +739,14 @@ def write_assemble_stats_report(
             "loci_filtered_max_shared_heterozygosity",
             _format_count(int(filter_counts["max_shared_hetero_frequency"])),
         ),
+        (
+            "loci_with_sample_masks_max_sample_heterozygosity",
+            _format_count(int(loci_summary.get("loci_with_sample_mask_max_sample_hetero_frequency", 0))),
+        ),
+        (
+            "sample_locus_masks_max_sample_heterozygosity",
+            _format_count(int(loci_summary.get("sample_locus_mask_count_max_sample_hetero_frequency", 0))),
+        ),
         ("loci_filtered_max_depth_outlier", _format_count(int(filter_counts["max_depth_outlier"]))),
     ]
 
@@ -623,6 +785,7 @@ def write_assemble_stats_report(
         "median_depth_shared_loci",
         "mean_depth_nonzero_shared_loci",
         "median_depth_nonzero_shared_loci",
+        "loci_masked_max_sample_hetero_frequency",
     ]
     sample_rows: list[list[str]] = []
     for sname in sorted(snames):
@@ -639,6 +802,7 @@ def write_assemble_stats_report(
             _format_float(float(depth_stats["median_depth_shared_loci"])),
             _format_float(float(depth_stats["mean_depth_nonzero_shared_loci"])),
             _format_float(float(depth_stats["median_depth_nonzero_shared_loci"])),
+            _format_count(int(loci_summary.get("sample_locus_mask_counts", {}).get(sname, 0))),
         ])
 
     occupancy_headers = ["samples_with_data", "loci", "fraction_of_final_loci"]
@@ -682,6 +846,389 @@ def write_assemble_stats_report(
     return outpath
 
 
+def _build_retained_locus_outputs(
+    *,
+    raw_header: str,
+    header: str,
+    tnames: list[str],
+    tseqs: np.ndarray,
+    snpsarr: np.ndarray,
+    stats: dict[str, object],
+    padded: dict[str, str],
+    refname: str,
+) -> dict[str, object]:
+    """Build all retained-locus outputs needed by the ordered final writer."""
+    scaff, pos = header.split(":")
+    pos0, pos1 = (int(i) for i in pos.split("-"))
+    masked_samples = list(stats.get("masked_samples_by_max_sample_hetero_frequency", ()))
+
+    sample_mask = np.array([sname != refname for sname in tnames], dtype=bool)
+    sample_rows = sample_mask & _sample_rows_with_data(tseqs)
+    sample_names_with_data = [
+        sname
+        for row_idx, sname in enumerate(tnames)
+        if sname != refname and sample_rows[row_idx]
+    ]
+    sample_count = len(sample_names_with_data)
+    nonmissing_sample_bases = 0
+    if sample_count:
+        sample_seqs = tseqs[sample_rows]
+        nonmissing_sample_bases = int(np.sum((sample_seqs != 78) & (sample_seqs != 45)))
+
+    locus_lines = [f"{padded[sname]}{bytes(seq).decode()}" for sname, seq in zip(tnames, tseqs)]
+    snpstring_arr = snpsarr.copy()
+    snpstring_arr[snpstring_arr == 0] = 32
+    snpstring_arr[snpstring_arr == 1] = 45
+    snpstring_arr[snpstring_arr == 2] = 42
+
+    return {
+        "raw_header": raw_header,
+        "header": header,
+        "tseqs": tseqs,
+        "tnames": tnames,
+        "locus_length": int(tseqs.shape[1]),
+        "bed_row": f"{scaff}\t{pos0 - 1}\t{pos1}\t{tseqs.shape[0]}\n",
+        "manifest_row": (raw_header, header, ",".join(masked_samples)),
+        "masked_samples": masked_samples,
+        "mask_bed_row": f"{scaff}\t{pos0 - 1}\t{pos1}\n",
+        "sample_names_with_data": sample_names_with_data,
+        "sample_count": sample_count,
+        "nonmissing_sample_bases": nonmissing_sample_bases,
+        "stats": dict(stats),
+        "locus_lines": locus_lines,
+        "snpstring": bytes(snpstring_arr).decode(),
+        "scaff": scaff,
+        "pos0": pos0,
+        "pos1": pos1,
+    }
+
+
+def _resolve_output_batch(
+    *,
+    batch_idx: int,
+    batch_items: list[tuple[str, dict[str, str]]],
+    min_locus_sample_coverage: int,
+    min_locus_trim_sample_coverage: int,
+    min_locus_length: int,
+    max_locus_hetero_frequency: float,
+    max_locus_variant_frequency: float,
+    max_sample_hetero_frequency: float,
+    padded: dict[str, str],
+    refname: str,
+    output_snames: list[str],
+    scaff2idx: dict[str, int],
+    map_dtype_name: str,
+) -> tuple[int, dict[str, object]]:
+    """Resolve one batch of loci for the combined final-output writer."""
+    map_dtype = np.dtype(map_dtype_name)
+    sidxs = {name: idx for idx, name in enumerate(output_snames)}
+    nsamples = len(output_snames)
+    retained_loci: list[dict[str, object]] = []
+    total_filters = {
+        "min_length": 0,
+        "min_samples": 0,
+        "max_variant_frequency": 0,
+        "max_shared_hetero_frequency": 0,
+        "max_depth_outlier": 0,
+    }
+    phy_cursor = 0
+    chunk_arrays: list[np.ndarray] = []
+    chunk_map_rows: list[tuple[int, int, int, int, int]] = []
+
+    for raw_header, ldict in batch_items:
+        header, tnames, tseqs, snpsarr, filters, stats = resolve_locus_for_output(
+            raw_header,
+            ldict,
+            min_locus_sample_coverage,
+            min_locus_trim_sample_coverage,
+            min_locus_length,
+            max_locus_hetero_frequency,
+            max_locus_variant_frequency,
+            max_sample_hetero_frequency,
+        )
+        for key in total_filters:
+            total_filters[key] += int(filters[key])
+        if sum(filters.values()):
+            continue
+
+        locus_output = _build_retained_locus_outputs(
+            raw_header=raw_header,
+            header=header,
+            tnames=tnames,
+            tseqs=tseqs,
+            snpsarr=snpsarr,
+            stats=stats,
+            padded=padded,
+            refname=refname,
+        )
+        locus_arr = np.full((nsamples, locus_output["locus_length"]), np.uint8(ord("N")), dtype=np.uint8)
+        for row_idx, sname in enumerate(tnames):
+            locus_arr[sidxs[sname], :] = tseqs[row_idx]
+        chunk_arrays.append(locus_arr)
+        chunk_map_rows.append(
+            (
+                int(scaff2idx[locus_output["scaff"]]),
+                phy_cursor,
+                phy_cursor + int(locus_output["locus_length"]),
+                int(locus_output["pos0"]),
+                int(locus_output["pos1"]),
+            )
+        )
+        phy_cursor += int(locus_output["locus_length"])
+        retained_loci.append(locus_output)
+
+    if chunk_arrays:
+        chunkarr = np.concatenate(chunk_arrays, axis=1)
+    else:
+        chunkarr = np.empty((nsamples, 0), dtype=np.uint8)
+    if chunk_map_rows:
+        chunkmap = np.array(chunk_map_rows, dtype=map_dtype)
+    else:
+        chunkmap = np.empty((0, 5), dtype=map_dtype)
+
+    return {
+        "nloci_before_filtering": len(batch_items),
+        "filter_counts": total_filters,
+        "retained_loci": retained_loci,
+        "chunkarr": chunkarr,
+        "chunkmap": chunkmap,
+    }
+
+
+def write_final_outputs(
+    *,
+    snames: list[str],
+    name: str,
+    outdir: Path,
+    tmpdir: Path,
+    reference: Path,
+    min_locus_sample_coverage: int,
+    min_locus_trim_sample_coverage: int,
+    min_locus_length: int,
+    max_locus_hetero_frequency: float,
+    max_locus_variant_frequency: float,
+    max_sample_hetero_frequency: float = 0.10,
+    cores: int = 1,
+    log_level: str = "INFO",
+    batch_size: int = 128,
+) -> dict[str, object]:
+    """Resolve final loci once, then write `.loci`, BED, stats, and sequence HDF5."""
+    from .write_seqs import (
+        append_seqs_hdf5_chunk,
+        close_seqs_hdf5_writer,
+        finalize_seqs_hdf5_writer,
+        open_seqs_hdf5_writer,
+    )
+
+    database = tmpdir / f"{name}.database.fa"
+    loci_file = outdir / f"{name}.loci.gz"
+    manifest_path = get_retained_loci_manifest_path(name, tmpdir)
+    final_loci_bed = outdir / f"{name}.bed"
+    (tmpdir / "beds").mkdir(parents=True, exist_ok=True)
+
+    real_snames = list(snames)
+    refname = "assembly_reference_sequence"
+    output_snames = [refname] + sorted(real_snames)
+    max_len = max(len(i) for i in output_snames) + 2
+    padded = {n: n + (" " * (max_len - len(n))) for n in output_snames}
+
+    if final_loci_bed.exists():
+        final_loci_bed.unlink()
+    writer = open_seqs_hdf5_writer(
+        name=name,
+        outdir=outdir,
+        snames=real_snames,
+        reference=reference,
+        loci_bed=final_loci_bed,
+    )
+    scaff2idx = {str(scaff): idx for idx, scaff in enumerate(writer.io5.attrs["scaffold_names"])}
+
+    samples_per_locus = Counter()
+    locus_length_counts = Counter()
+    per_sample_locus_counts = {i: 0 for i in real_snames}
+    total_filters = {
+        "min_length": 0,
+        "min_samples": 0,
+        "max_variant_frequency": 0,
+        "max_shared_hetero_frequency": 0,
+        "max_depth_outlier": 0,
+    }
+    sample_locus_mask_counts = {i: 0 for i in real_snames}
+    loci_with_sample_masks = 0
+    sample_locus_mask_total = 0
+    total_stats = {
+        "variant_sites": 0,
+        "variant_phylo_informative_sites": 0,
+        "nsites": 0,
+        "nsites_sample_cov_greater_than_1": 0,
+        "nsites_sample_cov_greater_than_2": 0,
+        "nsites_sample_cov_greater_than_3": 0,
+        "nsites_sample_cov_greater_than_or_equal_to_min_locus_trim_sample_coverage": 0,
+    }
+    alignment_nonmissing_sample_bases = 0
+    nloci_before_filtering = 0
+    flidx = 0
+    retained_scaffold_names_seen: set[str] = set()
+
+    nbatches = sum(1 for _ in iter_locus_batches(database, batch_size=batch_size))
+    output_workers = min(max(1, cores - 1), max(1, nbatches))
+
+    def _iter_jobs():
+        for batch_idx, batch_items in iter_locus_batches(database, batch_size=batch_size):
+            yield batch_idx, (
+                _resolve_output_batch,
+                dict(
+                    batch_idx=batch_idx,
+                    batch_items=batch_items,
+                    min_locus_sample_coverage=min_locus_sample_coverage,
+                    min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
+                    min_locus_length=min_locus_length,
+                    max_locus_hetero_frequency=max_locus_hetero_frequency,
+                    max_locus_variant_frequency=max_locus_variant_frequency,
+                    max_sample_hetero_frequency=max_sample_hetero_frequency,
+                    padded=padded,
+                    refname=refname,
+                    output_snames=output_snames,
+                    scaff2idx=scaff2idx,
+                    map_dtype_name=writer.phymap.dtype.name,
+                ),
+            )
+
+    pending_results: dict[int, dict[str, object]] = {}
+    next_batch_idx = 0
+    with gzip.open(loci_file, "wt", encoding="utf-8", compresslevel=1) as out, final_loci_bed.open(
+        "w",
+        encoding="utf-8",
+    ) as out_bed, manifest_path.open("w", encoding="utf-8", newline="") as manifest_handle:
+        manifest_writer = csv.writer(manifest_handle, delimiter="\t")
+        manifest_writer.writerow(["raw_header", "final_header", "masked_samples"])
+        mask_handles = {
+            sname: get_consensus_hetero_mask_path(sname, tmpdir).open("w", encoding="utf-8")
+            for sname in real_snames
+        }
+
+        def _flush_pending() -> None:
+            nonlocal next_batch_idx, nloci_before_filtering, flidx
+            nonlocal loci_with_sample_masks, sample_locus_mask_total, alignment_nonmissing_sample_bases
+            while next_batch_idx in pending_results:
+                batch_result = pending_results.pop(next_batch_idx)
+                next_batch_idx += 1
+                nloci_before_filtering += int(batch_result["nloci_before_filtering"])
+                for key in total_filters:
+                    total_filters[key] += int(batch_result["filter_counts"][key])
+                retained_loci = batch_result["retained_loci"]
+                for locus_output in retained_loci:
+                    out_bed.write(str(locus_output["bed_row"]))
+                    retained_scaffold_names_seen.add(str(locus_output["scaff"]))
+                    manifest_writer.writerow(list(locus_output["manifest_row"]))
+                    masked_samples = list(locus_output["masked_samples"])
+                    if masked_samples:
+                        loci_with_sample_masks += 1
+                        sample_locus_mask_total += len(masked_samples)
+                        for sname in masked_samples:
+                            sample_locus_mask_counts[sname] += 1
+                            mask_handles[sname].write(str(locus_output["mask_bed_row"]))
+
+                    for sname in locus_output["sample_names_with_data"]:
+                        per_sample_locus_counts[sname] += 1
+                    samples_per_locus[int(locus_output["sample_count"])] += 1
+                    locus_length_counts[int(locus_output["locus_length"])] += 1
+                    alignment_nonmissing_sample_bases += int(locus_output["nonmissing_sample_bases"])
+                    for stat in total_stats:
+                        total_stats[stat] += int(locus_output["stats"][stat])
+
+                    out.write(
+                        "\n".join(locus_output["locus_lines"])
+                        + f"\n//{' ' * (max_len - 2)}{locus_output['snpstring']}|{flidx}:{locus_output['header']}\n"
+                    )
+                    flidx += 1
+
+                chunkarr = batch_result["chunkarr"]
+                chunkmap = batch_result["chunkmap"]
+                if chunkmap.size:
+                    chunkmap = chunkmap.copy()
+                    chunkmap[:, 1] += writer.nsites
+                    chunkmap[:, 2] += writer.nsites
+                append_seqs_hdf5_chunk(writer, chunkarr, chunkmap)
+
+        try:
+            if nbatches == 0:
+                pass
+            elif output_workers == 1 or nbatches == 1:
+                for batch_idx, batch_items in iter_locus_batches(database, batch_size=batch_size):
+                    result = _resolve_output_batch(
+                        batch_idx=batch_idx,
+                        batch_items=batch_items,
+                        min_locus_sample_coverage=min_locus_sample_coverage,
+                        min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
+                        min_locus_length=min_locus_length,
+                        max_locus_hetero_frequency=max_locus_hetero_frequency,
+                        max_locus_variant_frequency=max_locus_variant_frequency,
+                        max_sample_hetero_frequency=max_sample_hetero_frequency,
+                        padded=padded,
+                        refname=refname,
+                        output_snames=output_snames,
+                        scaff2idx=scaff2idx,
+                        map_dtype_name=writer.phymap.dtype.name,
+                    )
+                    pending_results[batch_idx] = result
+                    _flush_pending()
+            else:
+                for batch_idx, result in run_with_pool_iter(
+                    _iter_jobs(),
+                    log_level=log_level,
+                    max_workers=output_workers,
+                    msg="Resolving and writing final loci",
+                    njobs=nbatches,
+                ):
+                    pending_results[batch_idx] = result
+                    _flush_pending()
+        except Exception:
+            for handle in mask_handles.values():
+                handle.close()
+            close_seqs_hdf5_writer(writer)
+            raise
+        else:
+            for handle in mask_handles.values():
+                handle.close()
+
+    all_scaffold_names = [str(value) for value in writer.io5.attrs["scaffold_names"]]
+    all_scaffold_lengths = [int(value) for value in writer.io5.attrs["scaffold_lengths"]]
+    retained_scaffold_names = [
+        name
+        for name in all_scaffold_names
+        if name in retained_scaffold_names_seen
+    ]
+    length_lookup = dict(zip(all_scaffold_names, all_scaffold_lengths, strict=True))
+    retained_scaffold_lengths = [length_lookup[name] for name in retained_scaffold_names]
+    try:
+        finalize_seqs_hdf5_writer(
+            writer,
+            expected_nsites=int(total_stats["nsites"]),
+            expected_nloci=flidx,
+            retained_scaffold_names=retained_scaffold_names,
+            retained_scaffold_lengths=retained_scaffold_lengths,
+        )
+    finally:
+        close_seqs_hdf5_writer(writer)
+
+    logger.debug("wrote final loci, BED, and sequence HDF5 outputs to {}", outdir)
+    return {
+        "nloci_before_filtering": nloci_before_filtering,
+        "nloci_after_filtering": flidx,
+        "nsites_after_filtering": int(total_stats["nsites"]),
+        "filter_counts": dict(total_filters),
+        "site_totals": dict(total_stats),
+        "sample_locus_counts": dict(per_sample_locus_counts),
+        "sample_locus_mask_counts": dict(sample_locus_mask_counts),
+        "loci_with_sample_mask_max_sample_hetero_frequency": loci_with_sample_masks,
+        "sample_locus_mask_count_max_sample_hetero_frequency": sample_locus_mask_total,
+        "samples_per_locus_counts": dict(samples_per_locus),
+        "locus_length_counts": dict(locus_length_counts),
+        "alignment_nonmissing_sample_bases": alignment_nonmissing_sample_bases,
+    }
+
+
 def write_loci_and_stats_files(
     snames: list[str],
     name: str,
@@ -692,6 +1239,7 @@ def write_loci_and_stats_files(
     min_locus_length: int,
     max_locus_hetero_frequency: float,
     max_locus_variant_frequency: float,
+    max_sample_hetero_frequency: float = 0.10,
 )-> dict[str, object]:
     """Write the final `.loci.gz` and `.bed` outputs and collect report counters."""
     # database file is in the tmpdir inside outdir
@@ -722,6 +1270,9 @@ def write_loci_and_stats_files(
         "max_shared_hetero_frequency": 0,
         "max_depth_outlier": 0,
     }
+    sample_locus_mask_counts = {i: 0 for i in real_snames}
+    loci_with_sample_masks = 0
+    sample_locus_mask_total = 0
     total_stats = {
         "variant_sites": 0,
         "variant_phylo_informative_sites": 0,
@@ -739,11 +1290,19 @@ def write_loci_and_stats_files(
     loci = []
     lidx = 0    # counter of all loci
     flidx = 0   # counter of loci that passed filters
+    manifest_path = get_retained_loci_manifest_path(name, tmpdir)
+    (tmpdir / "beds").mkdir(parents=True, exist_ok=True)
     with gzip.open(loci_file, "wt", encoding="utf-8", compresslevel=loci_compresslevel) as out, open(
         outdir / f"{name}.bed",
         "w",
         encoding="utf-8",
-    ) as out_bed:
+    ) as out_bed, manifest_path.open("w", encoding="utf-8", newline="") as manifest_handle:
+        manifest_writer = csv.writer(manifest_handle, delimiter="\t")
+        manifest_writer.writerow(["raw_header", "final_header", "masked_samples"])
+        mask_handles = {
+            sname: get_consensus_hetero_mask_path(sname, tmpdir).open("w", encoding="utf-8")
+            for sname in real_snames
+        }
         for oheader, ldict in iter_parse_loci(database):
 
             # apply trim and filters to locus
@@ -755,6 +1314,7 @@ def write_loci_and_stats_files(
                 min_locus_length,
                 max_locus_hetero_frequency,
                 max_locus_variant_frequency,
+                max_sample_hetero_frequency,
             )
             result = filter_trim_locus(*args)
             header, tnames, tseqs, snpsarr, filters, stats = result
@@ -770,18 +1330,27 @@ def write_loci_and_stats_files(
                 scaff, pos = header.split(":")
                 pos0, pos1 = (int(i) for i in pos.split("-"))
                 out_bed.write(f"{scaff}\t{pos0 - 1}\t{pos1}\t{tseqs.shape[0]}\n")
+                masked_samples = list(stats.get("masked_samples_by_max_sample_hetero_frequency", ()))
+                manifest_writer.writerow([oheader, header, ",".join(masked_samples)])
+                if masked_samples:
+                    loci_with_sample_masks += 1
+                    sample_locus_mask_total += len(masked_samples)
+                    for sname in masked_samples:
+                        sample_locus_mask_counts[sname] += 1
+                        mask_handles[sname].write(f"{scaff}\t{pos0 - 1}\t{pos1}\n")
 
                 # Count only empirical samples in the report summaries so the
                 # synthetic reference row does not inflate occupancy metrics.
                 sample_mask = np.array([sname != refname for sname in tnames], dtype=bool)
-                sample_count = int(np.sum(sample_mask))
-                for sname in tnames:
-                    if sname != refname:
+                sample_rows = sample_mask & _sample_rows_with_data(tseqs)
+                sample_count = int(np.sum(sample_rows))
+                for row_idx, sname in enumerate(tnames):
+                    if sname != refname and sample_rows[row_idx]:
                         per_sample_locus_counts[sname] += 1
                 samples_per_locus[sample_count] += 1
                 locus_length_counts[int(tseqs.shape[1])] += 1
                 if sample_count:
-                    sample_seqs = tseqs[sample_mask]
+                    sample_seqs = tseqs[sample_rows]
                     alignment_nonmissing_sample_bases += int(
                         np.sum((sample_seqs != 78) & (sample_seqs != 45))
                     )
@@ -814,6 +1383,8 @@ def write_loci_and_stats_files(
         # write last chunk
         if loci:
             out.write("".join(loci))
+        for handle in mask_handles.values():
+            handle.close()
 
     logger.debug("wrote final loci and BED outputs to {}", outdir)
     return {
@@ -823,6 +1394,9 @@ def write_loci_and_stats_files(
         "filter_counts": dict(total_filters),
         "site_totals": dict(total_stats),
         "sample_locus_counts": dict(per_sample_locus_counts),
+        "sample_locus_mask_counts": dict(sample_locus_mask_counts),
+        "loci_with_sample_mask_max_sample_hetero_frequency": loci_with_sample_masks,
+        "sample_locus_mask_count_max_sample_hetero_frequency": sample_locus_mask_total,
         "samples_per_locus_counts": dict(samples_per_locus),
         "locus_length_counts": dict(locus_length_counts),
         "alignment_nonmissing_sample_bases": alignment_nonmissing_sample_bases,
