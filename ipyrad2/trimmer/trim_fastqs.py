@@ -237,7 +237,6 @@ def _sample_output_artifacts(
         artifacts.append(outdir / f"{sname}.R2.trimmed.fastq.gz")
     artifacts.extend([
         outdir / f"{sname}.stats.json",
-        outdir / f"{sname}.stats.html",
     ])
     return tuple(artifacts)
 
@@ -276,8 +275,8 @@ def _build_fastp_command(
     """Build a fastp command for a single sample."""
     out1 = outdir / f"{sname}.R1.trimmed.fastq.gz"
     out2 = outdir / f"{sname}.R2.trimmed.fastq.gz"
-    stats_html = outdir / f"{sname}.stats.html"
     stats_json = outdir / f"{sname}.stats.json"
+    stats_html = outdir / f"{sname}.stats.html"
     is_paired = fastqs[1] is not None and fastqs[1].name != "-null-"
     trim_front_lengths = trim_front_lengths or (
         len(cutsite_motifs[0]),
@@ -310,13 +309,16 @@ def _build_fastp_command(
             "--trim_front1", str(trim_front_lengths[0]),
         ]
 
+    if not disable_quality_filtering:
+        cmd.extend([
+            "-q", str(min_quality),
+            "-u", str(max_unqualified_percent),
+            "-M", str(min_mean_window_quality),
+            "-W", str(cut_window_size),
+            "--cut_tail", "--cut_tail_window_size", "5",
+        ])
+
     cmd.extend([
-        "-q", str(min_quality),
-        "-u", str(max_unqualified_percent),
-        "-M", str(min_mean_window_quality),
-        "-W", str(cut_window_size),
-        "--cut_front", "--cut_front_window_size", "5",
-        "--cut_tail", "--cut_tail_window_size", "5",
         "--length_required", str(min_trimmed_length),
         "--trim_poly_g",
         "--trim_poly_x",
@@ -453,6 +455,13 @@ def trim_sample_with_fastp(
         raise IPyradError(
             f"fastp failed for sample '{sname}' on input(s) {input_paths}: {err}"
         ) from err
+    html_idx = cmd.index("--html") + 1
+    html_report = Path(cmd[html_idx])
+    try:
+        if html_report.exists():
+            html_report.unlink()
+    except OSError:
+        logger.debug("failed to remove temporary fastp HTML report {}", html_report)
     logger.debug(f"finished trimming {sname}")
 
 

@@ -95,11 +95,11 @@ def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = 
     )
     filtering.add_argument(
         "-M", "--min-mean-window-quality", metavar="int", type=int, default=30,
-        help="Minimum sliding-window mean quality. [default=%(default)s]",
+        help="Minimum sliding-window mean quality for tail trimming. [default=%(default)s]",
     )
     filtering.add_argument(
         "-W", "--cut-window-size", metavar="int", type=int, default=5,
-        help="Sliding-window size for front and tail trimming. [default=%(default)s]",
+        help="Sliding-window size for tail trimming. [default=%(default)s]",
     )
     filtering.add_argument(
         "-n", "--max-ns", metavar="int", type=int, default=5,
@@ -111,7 +111,7 @@ def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = 
     )
     filtering.add_argument(
         "-Q", "--disable-quality-filtering", action="store_true",
-        help="Skip fastp quality filtering.",
+        help="Skip fastp quality filtering and quality-based trimming.",
     )
 
     cutsites.add_argument(
