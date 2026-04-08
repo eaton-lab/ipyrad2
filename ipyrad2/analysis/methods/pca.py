@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from ...utils.exceptions import IPyradError
-from ..extractors.snp_extractor import SNPExtractor
+from ..extracters.snps_extracter import SNPsExtracter
 from .common import (
     NumericalInput,
     aggregate_sample_data_summaries,
@@ -29,7 +29,7 @@ from .common import (
     require_hdf5_input,
     require_sklearn,
     require_umap,
-    run_snp_extractor_for_method,
+    run_snps_extracter_for_method,
     summarize_prepared_snp_view,
     write_sample_data_summary,
     write_stats_file,
@@ -45,7 +45,7 @@ class PCAFamilyResult:
     coords_by_replicate: dict[int, np.ndarray]
     variance_by_replicate: dict[int, np.ndarray]
     sample_missing: pd.Series
-    extractor: SNPExtractor
+    extracter: SNPsExtracter
     prepared_inputs_by_replicate: dict[int, NumericalInput]
 
     @property
@@ -208,7 +208,7 @@ def _write_variance(path: Path, variances: dict[int, np.ndarray]) -> None:
     pd.DataFrame.from_records(records).to_csv(path, sep="\t", index=False)
 
 
-def _build_extractor(
+def _build_extracter(
     *,
     data: Path | str,
     min_sample_coverage: float,
@@ -220,9 +220,9 @@ def _build_extractor(
     include_reference: bool,
     cores: int,
     log_level: str,
-) -> SNPExtractor:
-    """Create and run the canonical SNP extractor once for a PCA-family method."""
-    return run_snp_extractor_for_method(
+) -> SNPsExtracter:
+    """Create and run the canonical SNP extracter once for a PCA-family method."""
+    return run_snps_extracter_for_method(
         data=require_hdf5_input(data, "pca"),
         min_sample_coverage=min_sample_coverage,
         max_sample_missing=max_sample_missing,
@@ -239,7 +239,7 @@ def _build_extractor(
 def _prepare_inputs(
     *,
     method: str,
-    extractor: SNPExtractor,
+    extracter: SNPsExtracter,
     subsample: bool,
     random_seed: int | None,
     replicates: int,
@@ -253,7 +253,7 @@ def _prepare_inputs(
     prepared_inputs = {}
     for rep, rep_seed in seeds.items():
         prepared = get_numerical_input(
-            extractor,
+            extracter,
             subsample=subsample,
             random_seed=rep_seed,
             impute_method=impute_method,
@@ -267,7 +267,7 @@ def _prepare_inputs(
     log_snp_view_summary(
         method,
         summarize_prepared_snp_view(
-            extractor,
+            extracter,
             prepared_inputs[min(prepared_inputs)].view,
             subsample=subsample,
         ),
@@ -281,7 +281,7 @@ def _prepare_inputs(
 def _build_result(
     *,
     method: str,
-    extractor: SNPExtractor,
+    extracter: SNPsExtracter,
     prepared_inputs_by_replicate: dict[int, NumericalInput],
     coords_by_replicate: dict[int, np.ndarray],
     variance_by_replicate: dict[int, np.ndarray],
@@ -289,11 +289,11 @@ def _build_result(
     """Construct the normalized PCA-family result object."""
     return PCAFamilyResult(
         method=method,
-        samples=list(extractor.snames),
+        samples=list(extracter.snames),
         coords_by_replicate=coords_by_replicate,
         variance_by_replicate=variance_by_replicate,
-        sample_missing=extractor.sample_missing.copy(),
-        extractor=extractor,
+        sample_missing=extracter.sample_missing.copy(),
+        extracter=extracter,
         prepared_inputs_by_replicate=prepared_inputs_by_replicate,
     )
 
@@ -314,9 +314,9 @@ def _build_summary(
     return {
         "method": result.method,
         "replicates": replicates,
-        "linked_post_filter_snps": int(result.extractor.stats["post_filter_snps"]),
+        "linked_post_filter_snps": int(result.extracter.stats["post_filter_snps"]),
         "linked_post_filter_snp_containing_linkage_blocks": int(
-            result.extractor.stats["post_filter_snp_containing_linkage_blocks"]
+            result.extracter.stats["post_filter_snp_containing_linkage_blocks"]
         ),
         "exported_snps": exported_snps,
         "exported_snp_containing_linkage_blocks": exported_blocks,
@@ -359,7 +359,7 @@ def run_pca_analysis(
             impute_method,
             canonical_impute,
         )
-    extractor = _build_extractor(
+    extracter = _build_extracter(
         data=data,
         min_sample_coverage=min_sample_coverage,
         max_sample_missing=max_sample_missing,
@@ -373,7 +373,7 @@ def run_pca_analysis(
     )
     _seeds, prepared_inputs = _prepare_inputs(
         method="pca",
-        extractor=extractor,
+        extracter=extracter,
         subsample=subsample,
         random_seed=random_seed,
         replicates=replicates,
@@ -389,7 +389,7 @@ def run_pca_analysis(
         variance_by_replicate[rep] = variance
     return _build_result(
         method="pca",
-        extractor=extractor,
+        extracter=extracter,
         prepared_inputs_by_replicate=prepared_inputs,
         coords_by_replicate=coords_by_replicate,
         variance_by_replicate=variance_by_replicate,
@@ -428,7 +428,7 @@ def run_tsne_analysis(
             impute_method,
             canonical_impute,
         )
-    extractor = _build_extractor(
+    extracter = _build_extracter(
         data=data,
         min_sample_coverage=min_sample_coverage,
         max_sample_missing=max_sample_missing,
@@ -442,7 +442,7 @@ def run_tsne_analysis(
     )
     seeds, prepared_inputs = _prepare_inputs(
         method="tsne",
-        extractor=extractor,
+        extracter=extracter,
         subsample=subsample,
         random_seed=random_seed,
         replicates=1,
@@ -459,7 +459,7 @@ def run_tsne_analysis(
     )
     return _build_result(
         method="tsne",
-        extractor=extractor,
+        extracter=extracter,
         prepared_inputs_by_replicate=prepared_inputs,
         coords_by_replicate={0: coords},
         variance_by_replicate={0: variance},
@@ -492,7 +492,7 @@ def run_umap_analysis(
             impute_method,
             canonical_impute,
         )
-    extractor = _build_extractor(
+    extracter = _build_extracter(
         data=data,
         min_sample_coverage=min_sample_coverage,
         max_sample_missing=max_sample_missing,
@@ -506,7 +506,7 @@ def run_umap_analysis(
     )
     seeds, prepared_inputs = _prepare_inputs(
         method="umap",
-        extractor=extractor,
+        extracter=extracter,
         subsample=subsample,
         random_seed=random_seed,
         replicates=1,
@@ -522,7 +522,7 @@ def run_umap_analysis(
     )
     return _build_result(
         method="umap",
-        extractor=extractor,
+        extracter=extracter,
         prepared_inputs_by_replicate=prepared_inputs,
         coords_by_replicate={0: coords},
         variance_by_replicate={0: variance},
@@ -676,7 +676,7 @@ def run_pca_method(
     write_stats_file(
         paths["stats"],
         tool="pca",
-        extractor=result.extractor,
+        extracter=result.extracter,
         subsample=subsample,
         random_seed=random_seed,
         impute_method=canonical_impute,

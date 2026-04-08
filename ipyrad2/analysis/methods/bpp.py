@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from types import SimpleNamespace
-from ..extractors.locus_extractor import LocusExtractor
+from ..extracters.locus_extracter import LocusExtracter
 from ...utils.exceptions import IPyradError
 from ...utils.parallel import run_with_pool
 from ...utils.progress import ProgressBar
@@ -593,7 +593,7 @@ class Bpp(object):
         self.asyncs = []
 
         # apply locus extracter filtering
-        self.lex = LocusExtractor(
+        self.lex = LocusExtracter(
             data=self.data, 
             name=self.name,
             outdir=self.workdir,
@@ -2020,4 +2020,3 @@ burnin = {burnin}
 sampfreq = {sampfreq}
 nsample = {nsample}
 """
-

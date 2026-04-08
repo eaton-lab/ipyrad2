@@ -56,7 +56,7 @@ begin data;
 REFERENCE_SAMPLE_NAME = "assembly_reference_sequence"
 
 
-class WindowExtractor:
+class WindowExtracter:
     """Tool to extract sequences from one or more loci and write to a
     concatenated sequence file in phylip or nexus format.
     """
@@ -279,7 +279,7 @@ class WindowExtractor:
         """Read windows from a BED file.
 
         BED uses 0-based, half-open coordinates. These are converted to the
-        extractor's 1-based inclusive region semantics.
+        extracter's 1-based inclusive region semantics.
         """
         windows: List[Tuple[str, int, int]] = []
         with open(bedfile, "r", encoding="utf-8") as infile:
@@ -599,7 +599,7 @@ def count_snps(arr):
     return int(np.sum(multi_cols))
 
 
-def run_window_extractor(**kwargs):
+def run_window_extracter(**kwargs):
     """command line wrapper for window-extracter.
 
     Parameters:
@@ -648,7 +648,7 @@ def run_window_extractor(**kwargs):
     """
     request_table = kwargs.pop("print_scaffold_table")
 
-    tool = WindowExtractor(**kwargs)
+    tool = WindowExtracter(**kwargs)
 
     if request_table:
         tool.scaffold_table.to_csv(sys.stdout, sep="\t")
@@ -681,7 +681,7 @@ if __name__ == "__main__":
         # help(io5.create_dataset)
 
 
-    # tool = WindowExtractor(
+    # tool = WindowExtracter(
     #     data=h5,
     #     name='test',
     #     outdir=Path("/tmp/WEX"),

@@ -10,7 +10,7 @@ import numpy as np
 from loguru import logger
 
 from ....utils.exceptions import IPyradError
-from ...extractors.snp_extractor import SNPExtractor
+from ...extracters.snps_extracter import SNPsExtracter
 from ..common import build_sample_data_summary
 from ..common import calculate_sample_missing_fraction
 from .common import build_pairwise_stats_dataframe
@@ -49,7 +49,7 @@ def run_snp_popgen(
             + ", ".join(unsupported)
         )
 
-    tool = SNPExtractor(
+    tool = SNPsExtracter(
         data=Path(data),
         min_sample_coverage=min_sample_coverage,
         max_sample_missing=max_sample_missing,
