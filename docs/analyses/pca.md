@@ -113,7 +113,7 @@ Users should inspect `sample_data_summary.tsv` after every run and consider drop
 
 The active implementation is:
 
-1. filter the SNP HDF5 with the shared SNP extractor
+1. filter the SNP HDF5 with the shared SNP extracter
 2. select a linked or unlinked SNP view
 3. impute the genotype matrix
 4. run the chosen numerical method on the imputed matrix
@@ -207,7 +207,7 @@ This is a human-readable summary file. It includes:
 - number of axes written
 - imputation algorithm plus imputed SNP and genotype fractions
 - `perplexity`, `max_iter`, or `n_neighbors` when relevant
-- shared SNP-extractor filter statistics
+- shared SNP-extracter filter statistics
 
 ## Method Interpretation Notes
 

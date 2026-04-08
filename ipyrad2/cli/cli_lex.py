@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""Locus extractor command line."""
+"""Locus extracter command line."""
 
 import argparse
 from pathlib import Path
