@@ -7,16 +7,19 @@ import pandas as pd
 from loguru import logger
 from typing import Dict
 
-from .common import CLUSTER_JOINED_SPACER_LEN, infer_record_type, split_joined_sequence
+from .common import (
+    CLUSTER_JOINED_SPACER_LEN,
+    get_arm_boundary,
+    infer_record_type,
+)
 
 
 def get_header_to_seq_dict(consensus_fa: Path) -> Dict[str, str]:
-    """Return dict mapping core name to its raw consensus sequence."""
+    """Return dict mapping core name to its stripped cluster consensus sequence."""
     seqs = {}
-    with open(consensus_fa, "rt") as fh:
+    with open(consensus_fa, "rt", encoding="utf-8") as fh:
         for line in fh:
             if line[0] == ">":
-                # >centroid=1A_0;J16321;size=25;seqs=1
                 prefix, mjid, _, _ = line.strip().rsplit(";", 3)
                 core = f"{prefix.split('=', 1)[-1]};{mjid}"
             else:
@@ -24,27 +27,51 @@ def get_header_to_seq_dict(consensus_fa: Path) -> Dict[str, str]:
     return seqs
 
 
+def get_header_to_metadata_dict(*fasta_paths: Path) -> Dict[str, tuple[str, int]]:
+    """Return record type and arm boundary keyed by raw within-sample input label."""
+    out: Dict[str, tuple[str, int]] = {}
+    for fasta_path in fasta_paths:
+        if not fasta_path.exists():
+            continue
+        header: str | None = None
+        with open(fasta_path, "rt", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith(">"):
+                    header = line[1:].strip()
+                    continue
+                if header is None:
+                    continue
+                record_type = infer_record_type(header)
+                _cluster_sequence, arm_boundary = get_arm_boundary(line)
+                out[header] = (record_type, int(arm_boundary))
+                header = None
+    return out
+
+
 def parse_uc_data(uc_path: Path) -> pd.DataFrame:
     """Parse UC tsv cluster info."""
     rows = []
-    with open(uc_path, "rt") as fh:
+    with open(uc_path, "rt", encoding="utf-8") as fh:
         for line in fh:
-            # S       4       207     *       *       *       *       *       1A_0;J16321;size=25     *
-            cat, cidx, _, _, _, _, _, _, label, _ = line.rstrip().split("\t")
-            if cat not in ("S", "H"):    # ignore C/L/D/U/…
+            cat, cidx, _, _, _, _, _, _, label, _ = line.rstrip().split("	")
+            if cat not in ("S", "H"):
                 continue
             cidx = int(cidx)
-            # e.g., 1A_0;J;14481;size=23
             name, mjid, size = label.rsplit(";", 2)
             size = int(size.split("=", 1)[1])
             core = f"{name};{mjid}"
-            rows.append((cat, cidx, core, size, 1 if mjid[0] == "M" else 0))
-    return pd.DataFrame(rows, columns=["type", "cluster", "core", "size", "merged"])
+            rows.append((cat, cidx, core, size))
+    return pd.DataFrame(rows, columns=["type", "cluster", "core", "size"])
 
 
 def build_sample_summary(
     sname: str,
     outdir: Path,
+    *,
+    seed_to_meta: Dict[str, tuple[str, int]] | None = None,
     joined_spacer: int = CLUSTER_JOINED_SPACER_LEN,
 ) -> pd.DataFrame:
     """Summarize within-sample clusters from vsearch."""
@@ -56,61 +83,56 @@ def build_sample_summary(
         "cluster_length",
         "n_unique",
         "n_reads",
-        "merged",
         "record_type",
-        "consensus",
         "cluster_sequence",
-        "left_arm",
-        "right_arm",
+        "arm_boundary",
     ]
 
-    # paths
     consensus_path = outdir / f"{sname}.consensus.fa"
     uc_path = outdir / f"{sname}.clusters.tsv"
 
-    # get {header: sequence}
     seed_to_seq = get_header_to_seq_dict(consensus_path)
+    if seed_to_meta is None:
+        joined_path = outdir / f"{sname}.joined.fa"
+        merged_path = outdir / f"{sname}.merged.fa"
+        seed_to_meta = get_header_to_metadata_dict(joined_path, merged_path)
 
-    # get df w/ rows ["type", "cluster", "core", "size", "merged"]
-    # example: ['S', 10, '1A_0;M200', 22, 0]
     uc = parse_uc_data(uc_path)
     if uc.empty:
         logger.warning(f"No S/H rows parsed in {uc_path}; summary will be empty.")
         df_empty = pd.DataFrame(columns=columns)
-        df_empty.to_csv(outdir / f"{sname}.summary.tsv", sep="\t", index=False)
+        df_empty.to_csv(outdir / f"{sname}.summary.tsv", sep="	", index=False)
         return df_empty
 
-    # per-cluster totals
     out_rows = []
     grp = uc.groupby("cluster")
     for i, j in grp:
         nu = len(j['core'].unique())
         nr = sum(j['size'])
         seed = j.loc[j['type'] == "S", 'core'].item()
-        consensus = seed_to_seq[seed]
-        cluster_sequence, left_arm, right_arm, _joined = split_joined_sequence(
-            consensus,
-            spacer_len=joined_spacer,
+        cluster_sequence = seed_to_seq[seed]
+        record_type, arm_boundary = seed_to_meta.get(
+            seed,
+            (infer_record_type(seed), len(cluster_sequence)),
         )
-        record_type = infer_record_type(seed)
+        arm_boundary = max(0, min(int(arm_boundary), len(cluster_sequence)))
+        has_right_arm = record_type == "joined" and arm_boundary < len(cluster_sequence)
+        length = len(cluster_sequence) + (joined_spacer if has_right_arm else 0)
         out_rows.append({
             "sample": sname,
             "cluster_id": str(i),
             "seed": seed,
-            "length": len(consensus),
+            "length": length,
             "cluster_length": len(cluster_sequence),
             "n_unique": int(nu),
             "n_reads": int(nr),
-            "merged": seed.rsplit(";", 1)[1][0] == "M",
             "record_type": record_type,
-            "consensus": consensus,
             "cluster_sequence": cluster_sequence,
-            "left_arm": left_arm,
-            "right_arm": right_arm,
+            "arm_boundary": int(arm_boundary),
         })
     df = pd.DataFrame(out_rows, columns=columns)
     out_path = outdir / f"{sname}.summary.tsv"
-    df.to_csv(out_path, sep="\t", index=False)
+    df.to_csv(out_path, sep="	", index=False)
     logger.debug(f"Wrote {len(df)} clusters → {out_path}")
     return df
 
@@ -121,7 +143,7 @@ def concat_summaries(outdir: Path) -> pd.DataFrame:
     tsvs = sorted(outdir.glob("*.summary.tsv"))
     dfs = []
     for p in tsvs:
-        df = pd.read_csv(p, sep="\t", dtype={
+        df = pd.read_csv(p, sep="	", dtype={
             "sample": "string",
             "cluster_id": "string",
             "length": "Int64",
@@ -129,28 +151,13 @@ def concat_summaries(outdir: Path) -> pd.DataFrame:
             "seed": "string",
             "n_unique": "Int64",
             "n_reads": "Int64",
-            "merged": "boolean",
             "record_type": "string",
-            "consensus": "string",
             "cluster_sequence": "string",
-            "left_arm": "string",
-            "right_arm": "string",
+            "arm_boundary": "Int64",
         })
         dfs.append(df)
     all_df = pd.concat(dfs, ignore_index=True)
     if out_tsv:
-        all_df.to_csv(out_tsv, sep="\t", index=False)
+        all_df.to_csv(out_tsv, sep="	", index=False)
         logger.info(f"Wrote concatenated summaries → {out_tsv}")
     return all_df
-
-
-if __name__ == "__main__":
-
-    pd.set_option('display.max_columns', None)
-    DIR = Path("/home/deren/Documents/ipyrad-tests/WMERGE_DENOVO/")
-    # df = build_sample_summary("1A_0", DIR)
-    # print(df)
-
-    uc = parse_uc_data(DIR / "1A_0.clusters.tsv")
-    for i, j in uc.groupby("cluster"):
-        print(f"{i}\n{j}")
