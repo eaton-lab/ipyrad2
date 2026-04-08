@@ -245,38 +245,32 @@ def collect_single_end_bam_stats(job_result: MappingJobResult) -> dict:
     read_soft_clip_mean, read_soft_clip_median, read_soft_clip_stdev = _histogram_summary(soft_hist)
     read_nm_mean, read_nm_median, read_nm_stdev = _histogram_summary(nm_hist)
     return {
-        "nreads_processed": int(job_result.nreads_processed),
-        "nreads_filtered_before_bam_by_unmapped_or_nonprimary": int(
+        "input_reads": int(job_result.nreads_processed),
+        "reads_removed_unmapped_or_nonprimary": int(
             job_result.nreads_filtered_before_bam_by_unmapped_or_nonprimary
         ),
-        "nreads_filtered_before_bam_by_mate_unmapped_or_cross_scaffold": int(
-            job_result.nreads_filtered_before_bam_by_mate_unmapped_or_cross_scaffold
-        ),
-        "nreads_written_before_duplicate_removal": int(
-            job_result.nreads_written_before_duplicate_removal
-        ),
-        "nreads_in_final_bam": int(nreads_in_final_bam),
-        "proportion_retained_in_final_bam": _safe_ratio(
+        "reads_in_final_bam": int(nreads_in_final_bam),
+        "fraction_input_reads_retained_in_final_bam": _safe_ratio(
             nreads_in_final_bam,
             job_result.nreads_processed,
         ),
-        "reads_below_mapq_20": int(reads_below_mapq_20),
-        "reads_above_soft_clip_25": int(reads_above_soft_clip_25),
-        "reads_at_or_above_nm_50": int(reads_at_or_above_nm_50),
-        "reads_passing_reporting_thresholds": int(reads_passing_reporting_thresholds),
-        "proportion_reads_passing_reporting_thresholds": _safe_ratio(
+        "reads_failing_min_mapq_20": int(reads_below_mapq_20),
+        "reads_failing_max_softclip_25": int(reads_above_soft_clip_25),
+        "reads_failing_max_nm_50": int(reads_at_or_above_nm_50),
+        "reads_passing_all_preview_filters": int(reads_passing_reporting_thresholds),
+        "fraction_reads_passing_all_preview_filters": _safe_ratio(
             reads_passing_reporting_thresholds,
             nreads_in_final_bam,
         ),
-        "read_mapq_mean": float(read_mapq_mean),
-        "read_mapq_median": float(read_mapq_median),
-        "read_mapq_stdev": float(read_mapq_stdev),
-        "read_soft_clip_mean": float(read_soft_clip_mean),
-        "read_soft_clip_median": float(read_soft_clip_median),
-        "read_soft_clip_stdev": float(read_soft_clip_stdev),
-        "read_nm_mean": float(read_nm_mean),
-        "read_nm_median": float(read_nm_median),
-        "read_nm_stdev": float(read_nm_stdev),
+        "mapq_mean": float(read_mapq_mean),
+        "mapq_median": float(read_mapq_median),
+        "mapq_stdev": float(read_mapq_stdev),
+        "softclip_mean": float(read_soft_clip_mean),
+        "softclip_median": float(read_soft_clip_median),
+        "softclip_stdev": float(read_soft_clip_stdev),
+        "nm_mean": float(read_nm_mean),
+        "nm_median": float(read_nm_median),
+        "nm_stdev": float(read_nm_stdev),
     }
 
 
@@ -358,74 +352,48 @@ def collect_paired_bam_stats(job_result: MappingJobResult) -> dict:
     pair_max_nm_mean, pair_max_nm_median, pair_max_nm_stdev = _histogram_summary(max_nm_hist)
     pair_abs_tlen_mean, pair_abs_tlen_median, pair_abs_tlen_stdev = _histogram_summary(abs_tlen_hist)
     return {
-        "npairs_processed": int(job_result.nreads_processed // 2),
-        "nreads_processed": int(job_result.nreads_processed),
-        "nreads_filtered_before_bam_by_unmapped_or_nonprimary": int(
+        "input_templates": int(job_result.nreads_processed // 2),
+        "reads_removed_unmapped_or_nonprimary": int(
             job_result.nreads_filtered_before_bam_by_unmapped_or_nonprimary
         ),
-        "nreads_filtered_before_bam_by_mate_unmapped_or_cross_scaffold": int(
+        "reads_removed_same_scaffold_pairing": int(
             job_result.nreads_filtered_before_bam_by_mate_unmapped_or_cross_scaffold
         ),
-        "npairs_written_before_duplicate_removal": int(
-            job_result.nreads_written_before_duplicate_removal // 2
+        "templates_in_final_bam": int(npairs_evaluated_in_final_bam),
+        "fraction_input_templates_retained_in_final_bam": _safe_ratio(
+            npairs_evaluated_in_final_bam,
+            job_result.nreads_processed // 2,
         ),
-        "nreads_written_before_duplicate_removal": int(
-            job_result.nreads_written_before_duplicate_removal
-        ),
-        "npairs_evaluated_in_final_bam": int(npairs_evaluated_in_final_bam),
-        "npairs_with_both_mates_in_final_bam": int(npairs_with_both_mates_in_final_bam),
-        "nsingletons_in_final_bam": int(nsingletons_in_final_bam),
-        "duplicate_records_removed_total": _duplicate_stat(
+        "duplicate_records_removed": _duplicate_stat(
             job_result.duplicate_stats,
             "duplicate_total",
         ),
-        "duplicate_pairs_removed": _duplicate_stat(
-            job_result.duplicate_stats,
-            "duplicate_pair",
-            "duplicate_pairs",
-        ),
-        "duplicate_singletons_removed": _duplicate_stat(
-            job_result.duplicate_stats,
-            "duplicate_single",
-            "duplicate_singleton",
-            "duplicate_singletons",
-        ),
-        "pairs_with_a_read_below_mapq_20": int(pairs_with_a_read_below_mapq_20),
-        "pairs_with_a_read_above_soft_clip_25": int(pairs_with_a_read_above_soft_clip_25),
-        "pairs_with_a_read_at_or_above_nm_50": int(pairs_with_a_read_at_or_above_nm_50),
-        "pairs_failing_same_reference_pairing": int(pairs_failing_same_reference_pairing),
-        "pairs_above_abs_tlen_2000": int(pairs_above_abs_tlen_2000),
-        "pairs_passing_reporting_thresholds": int(pairs_passing_reporting_thresholds),
-        "proportion_pairs_with_both_mates_in_final_bam": _safe_ratio(
-            npairs_with_both_mates_in_final_bam,
-            npairs_evaluated_in_final_bam,
-        ),
-        "proportion_pairs_passing_reporting_thresholds": _safe_ratio(
+        "templates_failing_min_mapq_20": int(pairs_with_a_read_below_mapq_20),
+        "templates_failing_max_softclip_25": int(pairs_with_a_read_above_soft_clip_25),
+        "templates_failing_max_nm_50": int(pairs_with_a_read_at_or_above_nm_50),
+        "templates_failing_max_abs_tlen_2000": int(pairs_above_abs_tlen_2000),
+        "templates_passing_all_preview_filters": int(pairs_passing_reporting_thresholds),
+        "fraction_templates_passing_all_preview_filters": _safe_ratio(
             pairs_passing_reporting_thresholds,
             npairs_evaluated_in_final_bam,
         ),
-        "pair_min_mapq_mean": float(pair_min_mapq_mean),
-        "pair_min_mapq_median": float(pair_min_mapq_median),
-        "pair_min_mapq_stdev": float(pair_min_mapq_stdev),
-        "pair_max_soft_clip_mean": float(pair_max_soft_clip_mean),
-        "pair_max_soft_clip_median": float(pair_max_soft_clip_median),
-        "pair_max_soft_clip_stdev": float(pair_max_soft_clip_stdev),
-        "pair_max_nm_mean": float(pair_max_nm_mean),
-        "pair_max_nm_median": float(pair_max_nm_median),
-        "pair_max_nm_stdev": float(pair_max_nm_stdev),
-        "pair_abs_tlen_mean": float(pair_abs_tlen_mean),
-        "pair_abs_tlen_median": float(pair_abs_tlen_median),
-        "pair_abs_tlen_stdev": float(pair_abs_tlen_stdev),
+        "min_mapq_mean": float(pair_min_mapq_mean),
+        "min_mapq_median": float(pair_min_mapq_median),
+        "min_mapq_stdev": float(pair_min_mapq_stdev),
+        "max_softclip_mean": float(pair_max_soft_clip_mean),
+        "max_softclip_median": float(pair_max_soft_clip_median),
+        "max_softclip_stdev": float(pair_max_soft_clip_stdev),
+        "max_nm_mean": float(pair_max_nm_mean),
+        "max_nm_median": float(pair_max_nm_median),
+        "max_nm_stdev": float(pair_max_nm_stdev),
+        "abs_tlen_mean": float(pair_abs_tlen_mean),
+        "abs_tlen_median": float(pair_abs_tlen_median),
+        "abs_tlen_stdev": float(pair_abs_tlen_stdev),
     }
 
 
 def _report_header(is_paired: bool) -> str:
     """Return a short header block describing map reporting semantics."""
-    mode_text = (
-        "pair-level thresholds for paired-end datasets"
-        if is_paired
-        else "read-level thresholds for single-end datasets"
-    )
     paired_note = (
         "# Paired-end final BAMs keep only mapped mates on the same scaffold.\n"
         if is_paired
@@ -434,23 +402,17 @@ def _report_header(is_paired: bool) -> str:
     return (
         "# ipyrad2 map stats\n"
         "# Final BAMs are coordinate sorted and indexed.\n"
-        "# The thresholds below are reporting only and are not applied during mapping.\n"
         f"{paired_note}"
-        f"# Reporting mode: {mode_text}\n"
-        f"# MAPQ threshold: {MAPQ_REPORT_THRESHOLD}\n"
-        f"# Soft-clipped bases threshold: {SOFT_CLIP_REPORT_THRESHOLD}\n"
-        f"# NM threshold: {NM_REPORT_THRESHOLD}\n"
-        f"# Absolute TLEN threshold: {ABS_TLEN_REPORT_THRESHOLD}\n\n"
+        "\n"
     )
 
 
-def render_map_stats_report(stats: dict[str, dict], is_paired: bool) -> str:
-    """Render the final mapper stats report."""
-    df = pd.DataFrame({name: stats[name] for name in sorted(stats)}).T
+def _format_frame(df: pd.DataFrame) -> str:
+    """Format one stats table for display."""
     float_columns = {
         column
         for column in df.columns
-        if column.startswith("proportion_")
+        if column.startswith("fraction_")
         or column.endswith("_mean")
         or column.endswith("_median")
         or column.endswith("_stdev")
@@ -461,4 +423,114 @@ def render_map_stats_report(stats: dict[str, dict], is_paired: bool) -> str:
             formatted[column] = formatted[column].map(lambda x: f"{float(x):.3f}")
         else:
             formatted[column] = formatted[column].map(lambda x: f"{int(x)}")
-    return _report_header(is_paired) + formatted.to_string() + "\n"
+    return formatted.to_string() + "\n"
+
+
+def _section_frame(
+    stats: dict[str, dict],
+    columns: list[str],
+    *,
+    float_defaults: set[str] | None = None,
+) -> pd.DataFrame:
+    """Build a frame for one report section with stable columns and defaults."""
+    float_defaults = float_defaults or set()
+    rows = {}
+    for sname in sorted(stats):
+        sample_stats = stats[sname]
+        rows[sname] = {
+            column: sample_stats.get(column, float("nan") if column in float_defaults else 0)
+            for column in columns
+        }
+    return pd.DataFrame.from_dict(rows, orient="index", columns=columns)
+
+
+def render_map_stats_report(stats: dict[str, dict], is_paired: bool) -> str:
+    """Render the final mapper stats report."""
+    if is_paired:
+        applied_columns = [
+            "input_templates",
+            "reads_removed_unmapped_or_nonprimary",
+            "reads_removed_same_scaffold_pairing",
+            "duplicate_records_removed",
+            "templates_in_final_bam",
+            "fraction_input_templates_retained_in_final_bam",
+        ]
+        preview_effect_columns = [
+            "templates_failing_min_mapq_20",
+            "templates_failing_max_softclip_25",
+            "templates_failing_max_nm_50",
+            "templates_failing_max_abs_tlen_2000",
+            "templates_passing_all_preview_filters",
+            "fraction_templates_passing_all_preview_filters",
+        ]
+        preview_summary_columns = [
+            "min_mapq_mean",
+            "min_mapq_median",
+            "min_mapq_stdev",
+            "max_softclip_mean",
+            "max_softclip_median",
+            "max_softclip_stdev",
+            "max_nm_mean",
+            "max_nm_median",
+            "max_nm_stdev",
+            "abs_tlen_mean",
+            "abs_tlen_median",
+            "abs_tlen_stdev",
+        ]
+        preview_flags = "-qm/--min-map-q, -ms/--max-softclip, -me/--max-nm, -mt/--max-tlen"
+        preview_mode_note = "# Preview mode: pair-level thresholds evaluated on final BAM templates.\n"
+    else:
+        applied_columns = [
+            "input_reads",
+            "reads_removed_unmapped_or_nonprimary",
+            "reads_in_final_bam",
+            "fraction_input_reads_retained_in_final_bam",
+        ]
+        preview_effect_columns = [
+            "reads_failing_min_mapq_20",
+            "reads_failing_max_softclip_25",
+            "reads_failing_max_nm_50",
+            "reads_passing_all_preview_filters",
+            "fraction_reads_passing_all_preview_filters",
+        ]
+        preview_summary_columns = [
+            "mapq_mean",
+            "mapq_median",
+            "mapq_stdev",
+            "softclip_mean",
+            "softclip_median",
+            "softclip_stdev",
+            "nm_mean",
+            "nm_median",
+            "nm_stdev",
+        ]
+        preview_flags = "-qm/--min-map-q, -ms/--max-softclip, -me/--max-nm"
+        preview_mode_note = "# Preview mode: read-level thresholds evaluated on final BAM reads.\n"
+
+    applied_frame = _section_frame(stats, applied_columns, float_defaults={
+        column for column in applied_columns if column.startswith("fraction_")
+    })
+    preview_effect_frame = _section_frame(stats, preview_effect_columns, float_defaults={
+        column for column in preview_effect_columns if column.startswith("fraction_")
+    })
+    preview_summary_frame = _section_frame(stats, preview_summary_columns, float_defaults=set(preview_summary_columns))
+
+    return (
+        _report_header(is_paired)
+        + "## Applied mapping summary\n"
+        + "# These counts describe filters already applied during ipyrad2 map.\n\n"
+        + _format_frame(applied_frame)
+        + "\n## Assemble read-filter preview (not applied during mapping)\n"
+        + "# These preview thresholds were not applied during mapping.\n"
+        + f"# Use them to guide ipyrad2 assemble read filters: {preview_flags}.\n"
+        + preview_mode_note
+        + f"# MAPQ threshold: {MAPQ_REPORT_THRESHOLD}\n"
+        + f"# Soft-clipped bases threshold: {SOFT_CLIP_REPORT_THRESHOLD}\n"
+        + f"# NM threshold: {NM_REPORT_THRESHOLD}\n"
+        + (f"# Absolute TLEN threshold: {ABS_TLEN_REPORT_THRESHOLD}\n" if is_paired else "")
+        + "\n### Preview filter effects\n"
+        + _format_frame(preview_effect_frame)
+        + "\n### Preview metric summaries\n"
+        + _format_frame(preview_summary_frame)
+        + "\n"
+    )
