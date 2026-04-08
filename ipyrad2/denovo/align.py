@@ -10,7 +10,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 import time
-from typing import Any, Dict, Iterator, List, Sequence, Tuple
+from typing import Iterator, Sequence, TextIO
 
 from loguru import logger
 
@@ -20,11 +20,9 @@ from ipyrad2.utils.parallel import pipeline as pipeline_module
 from ipyrad2.utils.seqs import IUPAC
 
 from .common import (
-    CLUSTER_JOINED_SPACER_LEN,
+    DENOVO_MAPPING_FILENAME,
     OUTPUT_JOINED_SPACER_LEN,
-    infer_record_type,
-    split_joined_sequence,
-    strip_joined_spacer,
+    split_cluster_sequence_at_boundary,
 )
 
 
@@ -56,9 +54,7 @@ class SummaryRecord:
 
     seed: str
     sample: str
-    merged: bool
     record_type: str
-    consensus: str
     cluster_sequence: str
     left_arm: str
     right_arm: str
@@ -114,12 +110,29 @@ class _ThreadJobInfo:
     started_at: float
 
 
-def fasta_text(record: Sequence[Tuple[str, str]]) -> str:
+@dataclass(frozen=True)
+class _PlannedAlignment:
+    """Alignment plan plus the summary counters derived from it."""
+
+    plans: tuple[_AlignmentPlanItem, ...]
+    single_sequence_loci: int
+    identical_sequence_loci: int
+    joined_spacer_loci: int
+    mixed_reconciled_spacer_loci: int
+    stripped_output_loci: int
+
+
+LegacyRecord = Sequence[tuple[str, str]]
+ConsensusRecord = Sequence[LocusMember] | LegacyRecord
+ThreadedConsensusResult = tuple[int, str, str, bool]
+
+
+def fasta_text(record: LegacyRecord) -> str:
     """Render a FASTA string from `(name, seq)` pairs with no line wrapping."""
     return "".join(f">{header}\n{seq}\n" for header, seq in record)
 
 
-def choose_longest_sequence(record: Sequence[Tuple[str, str]]) -> str:
+def choose_longest_sequence(record: LegacyRecord) -> str:
     """Return the longest sequence in input order, using first-seen tie breaks."""
     if not record:
         raise RuntimeError("record is empty.")
@@ -132,7 +145,7 @@ def choose_longest_sequence(record: Sequence[Tuple[str, str]]) -> str:
     return best_seq
 
 
-def consensus_from_aligned(aligned: Sequence[Tuple[str, str]], min_prop: float = 0.5) -> str:
+def consensus_from_aligned(aligned: LegacyRecord, min_prop: float = 0.5) -> str:
     """Build a simple gap-aware consensus from an alignment."""
     if not aligned:
         return ""
@@ -159,20 +172,20 @@ def consensus_from_aligned(aligned: Sequence[Tuple[str, str]], min_prop: float =
     return "".join(out)
 
 
-def _record_length_summary(record: Sequence[Tuple[str, str]]) -> tuple[int, int, int]:
+def _record_length_summary(record: LegacyRecord) -> tuple[int, int, int]:
     """Return `(nseq, min_len, max_len)` for one sequence record."""
     lengths = [len(seq) for _name, seq in record]
     return len(lengths), min(lengths), max(lengths)
 
 
 def mafft_align_one(
-    record: Sequence[Tuple[str, str]],
+    record: LegacyRecord,
     mafft_binary: str,
     threads: int = 1,
     *,
     locus_id: int | None = None,
     timeout_s: float = DEFAULT_MAFFT_TIMEOUT_SECONDS,
-) -> list[Tuple[str, str]]:
+) -> list[tuple[str, str]]:
     """Run MAFFT on one record via stdin and return aligned sequences."""
     if not record:
         raise RuntimeError("record is empty.")
@@ -223,7 +236,7 @@ def _validate_alignment_mode(alignment_mode: str) -> str:
     return alignment_mode
 
 
-def _all_sequences_identical(record: Sequence[Tuple[str, str]]) -> bool:
+def _all_sequences_identical(record: LegacyRecord) -> bool:
     """Return True when every sequence in one record is identical."""
     if not record:
         return False
@@ -232,7 +245,7 @@ def _all_sequences_identical(record: Sequence[Tuple[str, str]]) -> bool:
 
 
 def _collapse_sequence_record_without_mafft(
-    record: Sequence[Tuple[str, str]],
+    record: LegacyRecord,
 ) -> str | None:
     """Return a sequence only when MAFFT is provably unnecessary."""
     if not record:
@@ -245,7 +258,7 @@ def _collapse_sequence_record_without_mafft(
 
 
 def _collapse_sequence_record(
-    record: Sequence[Tuple[str, str]],
+    record: LegacyRecord,
     *,
     locus_id: int,
     mafft_binary: str,
@@ -271,31 +284,29 @@ def _collapse_sequence_record(
     return consensus_from_aligned(aligned, min_prop=min_prop)
 
 
-def _load_summary_records(summary_tsv: Path) -> Dict[str, SummaryRecord]:
+def _load_summary_records(summary_tsv: Path) -> dict[str, SummaryRecord]:
     """Return summary records keyed by seed/core name."""
-    out: Dict[str, SummaryRecord] = {}
+    out: dict[str, SummaryRecord] = {}
     with open(summary_tsv, "rt", encoding="utf-8", newline="") as infile:
         reader = csv.DictReader(infile, delimiter="\t")
-        if reader.fieldnames is None or "seed" not in reader.fieldnames or "consensus" not in reader.fieldnames:
-            raise RuntimeError("concat.summary.tsv is missing required columns: seed, consensus")
+        required = {"seed", "sample", "record_type", "cluster_sequence", "arm_boundary"}
+        if reader.fieldnames is None or not required.issubset(reader.fieldnames):
+            joined = ", ".join(sorted(required))
+            raise RuntimeError(f"concat.summary.tsv is missing required columns: {joined}")
         for row in reader:
             seed = str(row["seed"])
-            sample = str(row.get("sample", seed.rsplit(";", 1)[0]))
-            consensus = str(row["consensus"]).upper()
-            merged = str(row.get("merged", "")).strip().lower() in {"1", "true", "t", "yes"}
-            record_type = str(row.get("record_type") or infer_record_type(seed))
-            cluster_sequence = str(row.get("cluster_sequence") or strip_joined_spacer(consensus))
-            left_arm = row.get("left_arm")
-            right_arm = row.get("right_arm")
-            if left_arm is None or right_arm is None:
-                _cluster_sequence, left_arm, right_arm, _joined = split_joined_sequence(consensus)
+            sample = str(row["sample"])
+            record_type = str(row["record_type"])
+            cluster_sequence = str(row["cluster_sequence"]).upper()
+            left_arm, right_arm = split_cluster_sequence_at_boundary(
+                cluster_sequence,
+                int(row["arm_boundary"]),
+            )
             out[seed] = SummaryRecord(
                 seed=seed,
                 sample=sample,
-                merged=merged,
                 record_type=record_type,
-                consensus=consensus,
-                cluster_sequence=str(cluster_sequence).upper(),
+                cluster_sequence=cluster_sequence,
                 left_arm=str(left_arm).upper(),
                 right_arm=str(right_arm).upper(),
             )
@@ -304,7 +315,7 @@ def _load_summary_records(summary_tsv: Path) -> Dict[str, SummaryRecord]:
 
 def _iter_locus_members(
     mapping_tsv: Path,
-    summary_records: Dict[str, SummaryRecord],
+    summary_records: dict[str, SummaryRecord],
 ) -> Iterator[tuple[int, str, list[LocusMember]]]:
     """Yield one enriched locus at a time in mapping order."""
     current_locus: int | None = None
@@ -314,7 +325,9 @@ def _iter_locus_members(
     with open(mapping_tsv, "rt", encoding="utf-8", newline="") as infile:
         reader = csv.DictReader(infile, delimiter="\t")
         if reader.fieldnames is None or "locus" not in reader.fieldnames or "core" not in reader.fieldnames:
-            raise RuntimeError("loci.mapping.tsv is missing required columns: locus, core")
+            raise RuntimeError(
+                f"{DENOVO_MAPPING_FILENAME} is missing required columns: locus, core"
+            )
         for row in reader:
             locus_id = int(row["locus"])
             core = str(row["core"])
@@ -506,7 +519,7 @@ def _aligned_breakpoint_column(aligned_seq: str, left_len: int) -> int:
 
 def _infer_mixed_locus_boundary(
     members: Sequence[LocusMember],
-    aligned_map: Dict[str, str],
+    aligned_map: dict[str, str],
 ) -> int | None:
     """Infer one coherent arm boundary for a mixed spaced locus."""
     boundaries = [
@@ -526,7 +539,7 @@ def _strip_alignment_segment(segment: str) -> str:
 
 
 def _collapse_optional_sequence_record(
-    record: Sequence[Tuple[str, str]],
+    record: LegacyRecord,
     *,
     locus_id: int,
     mafft_binary: str,
@@ -766,7 +779,7 @@ def _consensus_for_locus_members(
 
 
 def _consensus_for_legacy_record(
-    record: Sequence[Tuple[str, str]],
+    record: LegacyRecord,
     *,
     locus_id: int,
     mafft_binary: str,
@@ -792,7 +805,7 @@ def _consensus_for_legacy_record(
 
 def worker_build_consensus(
     locus_id: int,
-    record: Any,
+    record: ConsensusRecord,
     mafft_binary: str,
     min_prop: float = 0.5,
     threads: int = 1,
@@ -800,7 +813,7 @@ def worker_build_consensus(
     timeout_s: float = DEFAULT_MAFFT_TIMEOUT_SECONDS,
     locus_name: str | None = None,
     output_spacer_len: int = OUTPUT_JOINED_SPACER_LEN,
-) -> Tuple[int, str, str, bool]:
+) -> tuple[int, str, str, bool]:
     """Build one final locus sequence for the denovo reference."""
     if record and isinstance(record[0], LocusMember):
         consensus, uses_output_spacer = _consensus_for_locus_members(
@@ -828,13 +841,13 @@ def worker_build_consensus(
 
 def _plan_alignment(
     mapping_tsv: Path,
-    summary_records: Dict[str, SummaryRecord],
+    summary_records: dict[str, SummaryRecord],
     *,
     alignment_mode: str,
     output_spacer_len: int,
-) -> tuple[List[_AlignmentPlanItem], int, int, int, int, int]:
+) -> _PlannedAlignment:
     """Plan how each locus will be handled and count trivial cases."""
-    plans: List[_AlignmentPlanItem] = []
+    plans: list[_AlignmentPlanItem] = []
     single_sequence_loci = 0
     identical_sequence_loci = 0
     mixed_reconciled_spacer_loci = 0
@@ -905,20 +918,20 @@ def _plan_alignment(
                 uses_output_spacer=planned_output_spacer,
             )
         )
-    return (
-        plans,
-        single_sequence_loci,
-        identical_sequence_loci,
-        joined_spacer_loci,
-        mixed_reconciled_spacer_loci,
-        stripped_output_loci,
+    return _PlannedAlignment(
+        plans=tuple(plans),
+        single_sequence_loci=single_sequence_loci,
+        identical_sequence_loci=identical_sequence_loci,
+        joined_spacer_loci=joined_spacer_loci,
+        mixed_reconciled_spacer_loci=mixed_reconciled_spacer_loci,
+        stripped_output_loci=stripped_output_loci,
     )
 
 
 def _iter_alignment_jobs_from_plan(
     mapping_tsv: Path,
-    summary_records: Dict[str, SummaryRecord],
-    plans: List[_AlignmentPlanItem],
+    summary_records: dict[str, SummaryRecord],
+    plans: Sequence[_AlignmentPlanItem],
     *,
     mafft_binary: str,
     min_prop: float,
@@ -926,7 +939,7 @@ def _iter_alignment_jobs_from_plan(
     alignment_mode: str,
     mafft_timeout_s: float,
     output_spacer_len: int,
-) -> Iterator[Tuple[int, Dict[str, Any]]]:
+) -> Iterator[tuple[int, dict[str, object]]]:
     """Yield per-locus MAFFT jobs reusing a previously computed plan."""
     if _validate_alignment_mode(alignment_mode) == "none":
         return
@@ -935,7 +948,9 @@ def _iter_alignment_jobs_from_plan(
     for locus_id, locus_name, members in _iter_locus_members(mapping_tsv, summary_records):
         plan = next(plan_iter)
         if plan.locus_id != locus_id:
-            raise RuntimeError("alignment plan drifted from loci.mapping.tsv order")
+            raise RuntimeError(
+                f"alignment plan drifted from {DENOVO_MAPPING_FILENAME} order"
+            )
         if not plan.requires_mafft:
             continue
         yield plan.submit_idx, dict(
@@ -955,17 +970,15 @@ def iter_alignment_jobs(
     mapping_tsv: Path,
     summary_tsv: Path,
     mafft_binary: str,
-    spacer_len: int = CLUSTER_JOINED_SPACER_LEN,
     min_prop: float = 0.5,
     threads: int = 1,
     alignment_mode: str = "mafft",
     mafft_timeout_s: float = DEFAULT_MAFFT_TIMEOUT_SECONDS,
     output_spacer_len: int = OUTPUT_JOINED_SPACER_LEN,
-) -> Iterator[Tuple[int, Dict[str, Any]]]:
+) -> Iterator[tuple[int, dict[str, object]]]:
     """Yield ordered per-locus MAFFT jobs for loci that require alignment."""
-    del spacer_len  # retained for API compatibility
     summary_records = _load_summary_records(summary_tsv)
-    plans, _single, _identical, _joined, _mixed, _stripped = _plan_alignment(
+    planned = _plan_alignment(
         mapping_tsv,
         summary_records,
         alignment_mode=alignment_mode,
@@ -974,7 +987,7 @@ def iter_alignment_jobs(
     yield from _iter_alignment_jobs_from_plan(
         mapping_tsv,
         summary_records,
-        plans,
+        planned.plans,
         mafft_binary=mafft_binary,
         min_prop=min_prop,
         threads=threads,
@@ -985,13 +998,13 @@ def iter_alignment_jobs(
 
 
 def _iter_threaded_alignment_results(
-    jobs_iter: Iterator[Tuple[int, Dict[str, Any]]],
+    jobs_iter: Iterator[tuple[int, dict[str, object]]],
     *,
     max_workers: int,
     heartbeat_s: float,
-) -> Iterator[Tuple[int, Tuple[int, str, str, bool]]]:
+) -> Iterator[tuple[int, ThreadedConsensusResult]]:
     """Yield completed threaded locus results."""
-    inflight: Dict[Future[Tuple[int, str, str, bool]], _ThreadJobInfo] = {}
+    inflight: dict[Future[ThreadedConsensusResult], _ThreadJobInfo] = {}
     job_it = iter(jobs_iter)
     executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="denovo-align")
     close_wait = True
@@ -1061,59 +1074,39 @@ def _choose_mafft_runtime(
     return workers, threads
 
 
-def write_ordered_consensus_stream_to_file(
-    mapping_tsv: Path,
-    summary_tsv: Path,
-    out_fa: Path,
-    mafft_binary: str,
-    log_level: str = "INFO",
-    cores: int = 1,
-    spacer_len: int = CLUSTER_JOINED_SPACER_LEN,
-    min_prop: float = 0.5,
-    alignment_mode: str = "mafft",
-    mafft_timeout_s: float = DEFAULT_MAFFT_TIMEOUT_SECONDS,
-    output_spacer_len: int = OUTPUT_JOINED_SPACER_LEN,
+def _build_alignment_run_summary(
+    planned: _PlannedAlignment,
+    *,
+    alignment_mode: str,
+    mafft_required_loci: int,
+    mafft_workers: int,
+    mafft_threads: int,
+    mafft_timeout_s: float,
+    output_spacer_len: int,
 ) -> AlignmentRunSummary:
-    """Write the denovo reference FASTA in mapping order and return runtime summary."""
-    del log_level
-    del spacer_len
-    alignment_mode = _validate_alignment_mode(alignment_mode)
-    if cores < 1:
-        raise ValueError("cores must be >= 1")
-    out_fa.parent.mkdir(parents=True, exist_ok=True)
-
-    summary_records = _load_summary_records(summary_tsv)
-    (
-        plans,
-        single_sequence_loci,
-        identical_sequence_loci,
-        joined_spacer_loci,
-        mixed_reconciled_spacer_loci,
-        stripped_output_loci,
-    ) = _plan_alignment(
-        mapping_tsv,
-        summary_records,
-        alignment_mode=alignment_mode,
-        output_spacer_len=output_spacer_len,
-    )
-    total_loci = len(plans)
-    mafft_required_loci = sum(1 for plan in plans if plan.requires_mafft)
-    mafft_workers, mafft_threads = _choose_mafft_runtime(cores, mafft_required_loci)
-    summary = AlignmentRunSummary(
-        total_loci=total_loci,
-        single_sequence_loci=single_sequence_loci,
-        identical_sequence_loci=identical_sequence_loci,
+    """Return the final alignment scheduling summary."""
+    return AlignmentRunSummary(
+        total_loci=len(planned.plans),
+        single_sequence_loci=planned.single_sequence_loci,
+        identical_sequence_loci=planned.identical_sequence_loci,
         mafft_required_loci=mafft_required_loci,
         mafft_threads_per_job=mafft_threads,
         mafft_worker_processes=mafft_workers,
         alignment_mode=alignment_mode,
         mafft_timeout_seconds=int(mafft_timeout_s) if mafft_required_loci else 0,
-        joined_spacer_loci=joined_spacer_loci,
-        mixed_reconciled_spacer_loci=mixed_reconciled_spacer_loci,
-        stripped_output_loci=stripped_output_loci,
-        output_spacer_length=output_spacer_len if (joined_spacer_loci or mixed_reconciled_spacer_loci) else 0,
+        joined_spacer_loci=planned.joined_spacer_loci,
+        mixed_reconciled_spacer_loci=planned.mixed_reconciled_spacer_loci,
+        stripped_output_loci=planned.stripped_output_loci,
+        output_spacer_length=(
+            output_spacer_len
+            if (planned.joined_spacer_loci or planned.mixed_reconciled_spacer_loci)
+            else 0
+        ),
     )
 
+
+def _log_alignment_summary(summary: AlignmentRunSummary) -> None:
+    """Log the alignment scheduling summary in one compact line."""
     logger.info(
         "alignment scheduling: "
         f"total_loci={summary.total_loci} "
@@ -1128,23 +1121,71 @@ def write_ordered_consensus_stream_to_file(
         f"stripped_output_loci={summary.stripped_output_loci}"
     )
 
-    if total_loci == 0:
+
+def _progress_message(total_loci: int, alignment_mode: str) -> str:
+    """Return the progress-bar label for final reference writing."""
+    action = "Writing loci" if alignment_mode == "none" else "Aligning loci"
+    return f"{action} - total jobs: {total_loci}"
+
+
+def _write_planned_locus(
+    fh: TextIO,
+    *,
+    locus_name: str,
+    consensus: str,
+) -> None:
+    """Write one FASTA record for the final denovo reference."""
+    fh.write(f">{locus_name}\n{consensus}\n")
+
+
+def write_ordered_consensus_stream_to_file(
+    mapping_tsv: Path,
+    summary_tsv: Path,
+    out_fa: Path,
+    mafft_binary: str,
+    cores: int = 1,
+    min_prop: float = 0.5,
+    alignment_mode: str = "mafft",
+    mafft_timeout_s: float = DEFAULT_MAFFT_TIMEOUT_SECONDS,
+    output_spacer_len: int = OUTPUT_JOINED_SPACER_LEN,
+) -> AlignmentRunSummary:
+    """Write the denovo reference FASTA in mapping order and return runtime summary."""
+    alignment_mode = _validate_alignment_mode(alignment_mode)
+    if cores < 1:
+        raise ValueError("cores must be >= 1")
+    out_fa.parent.mkdir(parents=True, exist_ok=True)
+    summary_records = _load_summary_records(summary_tsv)
+    planned = _plan_alignment(
+        mapping_tsv,
+        summary_records,
+        alignment_mode=alignment_mode,
+        output_spacer_len=output_spacer_len,
+    )
+    mafft_required_loci = sum(1 for plan in planned.plans if plan.requires_mafft)
+    mafft_workers, mafft_threads = _choose_mafft_runtime(cores, mafft_required_loci)
+    summary = _build_alignment_run_summary(
+        planned,
+        alignment_mode=alignment_mode,
+        mafft_required_loci=mafft_required_loci,
+        mafft_workers=mafft_workers,
+        mafft_threads=mafft_threads,
+        mafft_timeout_s=mafft_timeout_s,
+        output_spacer_len=output_spacer_len,
+    )
+    _log_alignment_summary(summary)
+
+    if summary.total_loci == 0:
         out_fa.write_text("", encoding="utf-8")
         logger.info(f"wrote denovo reference to {out_fa}")
         return summary
 
     with open(out_fa, "wt", encoding="utf-8") as fh:
-        progress_message = (
-            f"Writing loci - total jobs: {total_loci}"
-            if alignment_mode == "none"
-            else f"Aligning loci - total jobs: {total_loci}"
-        )
-        prog = ProgressBar(total_loci, None, progress_message)
+        prog = ProgressBar(summary.total_loci, None, _progress_message(summary.total_loci, alignment_mode))
         prog.update()
         try:
             if alignment_mode == "none" or mafft_required_loci == 0:
-                for plan in plans:
-                    fh.write(f">{plan.locus_name}\n{plan.consensus}\n")
+                for plan in planned.plans:
+                    _write_planned_locus(fh, locus_name=plan.locus_name, consensus=plan.consensus)
                     prog.finished += 1
                     prog.update()
                 logger.info(f"wrote denovo reference to {out_fa}")
@@ -1153,7 +1194,7 @@ def write_ordered_consensus_stream_to_file(
             jobs_it = _iter_alignment_jobs_from_plan(
                 mapping_tsv=mapping_tsv,
                 summary_records=summary_records,
-                plans=plans,
+                plans=planned.plans,
                 mafft_binary=mafft_binary,
                 min_prop=min_prop,
                 threads=mafft_threads,
@@ -1161,15 +1202,17 @@ def write_ordered_consensus_stream_to_file(
                 mafft_timeout_s=mafft_timeout_s,
                 output_spacer_len=output_spacer_len,
             )
-            result_buffer: Dict[int, Tuple[int, str, str, bool]] = {}
+            result_buffer: dict[int, ThreadedConsensusResult] = {}
             next_idx = 0
 
             def _flush_ready() -> None:
                 nonlocal next_idx
-                while next_idx < len(plans):
-                    plan = plans[next_idx]
+                # MAFFT results can finish out of order; buffer them until every
+                # earlier locus has been written so the final FASTA stays stable.
+                while next_idx < len(planned.plans):
+                    plan = planned.plans[next_idx]
                     if not plan.requires_mafft:
-                        fh.write(f">{plan.locus_name}\n{plan.consensus}\n")
+                        _write_planned_locus(fh, locus_name=plan.locus_name, consensus=plan.consensus)
                         next_idx += 1
                         prog.finished += 1
                         prog.update()
@@ -1177,7 +1220,7 @@ def write_ordered_consensus_stream_to_file(
                     if next_idx not in result_buffer:
                         break
                     _locus_id, locus_name, consensus, _uses_output_spacer = result_buffer.pop(next_idx)
-                    fh.write(f">{locus_name}\n{consensus}\n")
+                    _write_planned_locus(fh, locus_name=locus_name, consensus=consensus)
                     next_idx += 1
                     prog.finished += 1
                     prog.update()

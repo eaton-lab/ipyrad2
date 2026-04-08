@@ -14,7 +14,7 @@ Examples
 --------
 $ ipyrad2 denovo -d DATA/*.fastq.gz -o output-denovo
 $ ipyrad2 denovo -d DATA/*.fastq.gz -o OUT -s 0.95 -S 0.85 -c 12 -t 3
-$ ipyrad2 denovo -d DATA/*.fastq.gz -o OUT --graph-splitter constrained
+$ ipyrad2 denovo -d DATA/*.fastq.gz -o OUT --imap denovo.imap.tsv
 $ ipyrad2 denovo -d DATA/*.fastq.gz -o OUT --no-alignment
 $ ipyrad2 denovo -d DATA/*.fastq.gz -o OUT -dx _R -di 1 --keep-intermediates
 """
@@ -64,9 +64,10 @@ def _setup_denovo_subparser(subparsers: argparse._SubParsersAction, header: str 
     )
 
     core = tool.add_argument_group("Core inputs")
+    selection = tool.add_argument_group("Sample selection")
     clustering = tool.add_argument_group("Clustering and consensus")
     naming = tool.add_argument_group("Sample naming and library type")
-    runtime = tool.add_argument_group("Runtime and binaries")
+    runtime = tool.add_argument_group("Runtime")
     logging = tool.add_argument_group("Logging")
 
     core.add_argument(
@@ -82,6 +83,18 @@ def _setup_denovo_subparser(subparsers: argparse._SubParsersAction, header: str 
         help="Overwrite denovo outputs created by this command.",
     )
 
+    selection.add_argument(
+        "--imap", metavar="Path", type=Path,
+        help=(
+            "Optional IMAP file used to select one representative sample per group "
+            "for denovo pseudoreference construction."
+        ),
+    )
+    selection.add_argument(
+        "--use-all-samples", action="store_true",
+        help="Disable automatic sample downselection and use every parsed input sample.",
+    )
+
     clustering.add_argument(
         "-s", "--within-similarity", metavar="float", type=float, default=0.95,
         help="Sequence similarity threshold for clustering within samples. [default=%(default)s]",
@@ -91,7 +104,7 @@ def _setup_denovo_subparser(subparsers: argparse._SubParsersAction, header: str 
         help="Sequence similarity threshold for clustering across samples. [default=%(default)s]",
     )
     clustering.add_argument(
-        "-m", "--min-derep-size", metavar="int", type=int, default=2,
+        "-m", "--min-derep-size", metavar="int", type=int, default=5,
         help="Minimum duplicate count retained during dereplication. [default=%(default)s]",
     )
     clustering.add_argument(
@@ -109,18 +122,6 @@ def _setup_denovo_subparser(subparsers: argparse._SubParsersAction, header: str 
     clustering.add_argument(
         "--no-alignment", action="store_true",
         help="Skip MAFFT in the final locus step and use the longest stripped sequence per locus.",
-    )
-    clustering.add_argument(
-        "--graph-splitter",
-        metavar="str",
-        choices=("threshold", "constrained"),
-        default="constrained",
-        help=(
-            "Graph refinement algorithm used after automatic duplicated-component reconciliation: "
-            "'threshold' (legacy ascending-PID sweep) or "
-            "'constrained' (sample-constrained maximum-spanning forest). "
-            "[default=%(default)s]"
-        ),
     )
 
     naming.add_argument(
@@ -147,14 +148,6 @@ def _setup_denovo_subparser(subparsers: argparse._SubParsersAction, header: str 
     runtime.add_argument(
         "--keep-intermediates", action="store_true",
         help="Retain the denovo working directory instead of cleaning it on success.",
-    )
-    runtime.add_argument(
-        "--vsearch-binary", metavar="Path", type=Path,
-        help="Path to the vsearch executable. Defaults to the active environment, then PATH.",
-    )
-    runtime.add_argument(
-        "--mafft-binary", metavar="Path", type=Path,
-        help="Path to the mafft executable. Defaults to the active environment, then PATH.",
     )
 
     logging.add_argument(
