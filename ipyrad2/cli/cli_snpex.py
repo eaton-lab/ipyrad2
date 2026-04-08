@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""SNP extractor command line."""
+"""SNPs extracter command line."""
 
 import argparse
 from pathlib import Path
