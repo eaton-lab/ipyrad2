@@ -105,7 +105,6 @@ def new_params(name: str = None, force: bool = False):
             _ = args.pop("threads", None)
             _ = args.pop("force", None)
             _ = args.pop("log_level", None)
-            _ = args.pop("log_file", None)
             doc = tomlkit.document()
             doc.update(args)
 

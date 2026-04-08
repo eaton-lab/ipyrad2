@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""Window extractor command line."""
+"""Window extracter command line."""
 
 import argparse
 from pathlib import Path

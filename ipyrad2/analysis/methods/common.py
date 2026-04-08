@@ -13,8 +13,8 @@ import numpy as np
 import pandas as pd
 
 from ...utils.exceptions import IPyradError
-from ..extractors.snp_extractor import SNPExportView, SNPExtractor
-from .snp_imputer import _MISSING_GENO, SNPImputer
+from ..extracters.snps_extracter import SNPExportView, SNPsExtracter
+from .snps_imputer import _MISSING_GENO, SNPsImputer
 
 
 @dataclass
@@ -34,7 +34,7 @@ class ImputationSummary:
 class NumericalInput:
     """Filtered SNP data prepared for a numerical analysis method."""
 
-    extractor: SNPExtractor
+    extracter: SNPsExtracter
     view: SNPExportView
     matrix: np.ndarray
     imputation: ImputationSummary
@@ -84,7 +84,7 @@ def ensure_output_paths(paths: Iterable[Path], force: bool) -> None:
         )
 
 
-def run_snp_extractor_for_method(
+def run_snps_extracter_for_method(
     *,
     data: Path | str,
     min_sample_coverage: float,
@@ -96,9 +96,9 @@ def run_snp_extractor_for_method(
     include_reference: bool,
     cores: int,
     log_level: str,
-) -> SNPExtractor:
-    """Run the canonical SNP extractor once for a phase-2 method."""
-    tool = SNPExtractor(
+) -> SNPsExtracter:
+    """Run the canonical SNP extracter once for a phase-2 method."""
+    tool = SNPsExtracter(
         data=Path(data),
         min_sample_coverage=min_sample_coverage,
         max_sample_missing=max_sample_missing,
@@ -114,7 +114,7 @@ def run_snp_extractor_for_method(
 
 
 def get_numerical_input(
-    extractor: SNPExtractor,
+    extracter: SNPsExtracter,
     *,
     subsample: bool,
     random_seed: int | None,
@@ -123,20 +123,20 @@ def get_numerical_input(
 ) -> NumericalInput:
     """Return linked/unlinked SNP views and an analysis-ready matrix."""
     method = normalize_impute_method(impute_method)
-    view = extractor.get_view(
+    view = extracter.get_view(
         subsample=subsample,
         random_seed=random_seed,
-        log_level=log_level,
+        log_level="DEBUG",
     )
     imputation = summarize_imputation(view.genos, method)
     matrix = impute_genotype_matrix(
         view.genos,
-        extractor,
+        extracter,
         impute_method=method,
         random_seed=random_seed,
     )
     return NumericalInput(
-        extractor=extractor,
+        extracter=extracter,
         view=view,
         matrix=matrix,
         imputation=imputation,
@@ -144,17 +144,17 @@ def get_numerical_input(
 
 
 def summarize_prepared_snp_view(
-    extractor: SNPExtractor,
+    extracter: SNPsExtracter,
     view: SNPExportView,
     *,
     subsample: bool,
 ) -> PreparedSNPViewSummary:
     """Return stable linked and selected SNP counts for one prepared view."""
     return PreparedSNPViewSummary(
-        samples_retained=len(extractor.snames),
-        linked_post_filter_snps=int(extractor.stats["post_filter_snps"]),
+        samples_retained=len(extracter.snames),
+        linked_post_filter_snps=int(extracter.stats["post_filter_snps"]),
         linked_post_filter_snp_containing_linkage_blocks=int(
-            extractor.stats["post_filter_snp_containing_linkage_blocks"]
+            extracter.stats["post_filter_snp_containing_linkage_blocks"]
         ),
         selected_snps=int(view.snpsmap.shape[0]),
         selected_snp_containing_linkage_blocks=count_linkage_blocks(view),
@@ -308,7 +308,7 @@ def summarize_imputation(matrix: np.ndarray, impute_method: str | None) -> Imput
 
 def impute_genotype_matrix(
     matrix: np.ndarray,
-    extractor: SNPExtractor,
+    extracter: SNPsExtracter,
     *,
     impute_method: str | None,
     random_seed: int | None,
@@ -319,10 +319,10 @@ def impute_genotype_matrix(
     if random_seed is not None:
         np.random.seed(random_seed)
     try:
-        result = SNPImputer(
+        result = SNPsImputer(
             matrix.astype(np.uint8, copy=True),
-            extractor.snames,
-            imap=extractor.imap,
+            extracter.snames,
+            imap=extracter.imap,
             impute_method=method,
             quiet=True,
         ).run()
@@ -495,25 +495,25 @@ def write_stats_file(
     path: Path,
     *,
     tool: str,
-    extractor: SNPExtractor,
+    extracter: SNPsExtracter,
     subsample: bool,
     random_seed: int | None,
     impute_method: str | None,
     summary: Dict[str, object],
     filter_stats: bool = True,
 ) -> None:
-    """Write a human-readable stats file with shared SNP-extractor context."""
+    """Write a human-readable stats file with shared SNP-extracter context."""
     with open(path, "w", encoding="utf-8") as out:
         out.write("Summary\n")
         out.write("-------\n")
         out.write(f"tool: {tool}\n")
-        out.write(f"infile: {extractor.data}\n")
-        out.write(f"samples_selected_initial: {extractor.initial_snames}\n")
-        out.write(f"samples_dropped_by_max_missing: {extractor.dropped_samples_by_missing}\n")
-        out.write(f"samples_final: {extractor.snames}\n")
-        out.write(f"imap: {extractor.imap}\n")
-        out.write(f"minmap: {extractor.minmap}\n")
-        out.write(f"include_reference: {extractor.include_reference}\n")
+        out.write(f"infile: {extracter.data}\n")
+        out.write(f"samples_selected_initial: {extracter.initial_snames}\n")
+        out.write(f"samples_dropped_by_max_missing: {extracter.dropped_samples_by_missing}\n")
+        out.write(f"samples_final: {extracter.snames}\n")
+        out.write(f"imap: {extracter.imap}\n")
+        out.write(f"minmap: {extracter.minmap}\n")
+        out.write(f"include_reference: {extracter.include_reference}\n")
         out.write(f"subsample: {subsample}\n")
         out.write(f"random_seed: {random_seed}\n")
         out.write(f"impute_method: {normalize_impute_method(impute_method)}\n")
@@ -523,8 +523,8 @@ def write_stats_file(
             out.write("\n")
             out.write("Filter statistics\n")
             out.write("-----------------\n")
-            for key in extractor.stats.index:
-                out.write(f"{key}: {extractor.stats[key]}\n")
+            for key in extracter.stats.index:
+                out.write(f"{key}: {extracter.stats[key]}\n")
 
 
 def count_linkage_blocks(view: SNPExportView) -> int:

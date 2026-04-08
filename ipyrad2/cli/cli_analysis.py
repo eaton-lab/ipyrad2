@@ -18,9 +18,9 @@ from .cli_snmf import _setup_snmf_subparser
 from .cli_dapc import _setup_dapc_subparser
 from .cli_admixture import _setup_admixture_subparser
 from .cli_popgen import _setup_popgen_subparser
-from ..analysis.extractors.window_extractor import run_window_extractor
-from ..analysis.extractors.locus_extractor import run_locus_extractor
-from ..analysis.extractors.snp_extractor import run_snp_extractor
+from ..analysis.extracters.window_extracter import run_window_extracter
+from ..analysis.extracters.locus_extracter import run_locus_extracter
+from ..analysis.extracters.snps_extracter import run_snps_extracter
 from ..analysis.converters.vcf_to_hdf5 import run_vcf_to_hdf5
 from ..analysis.methods.pca import run_pca_method
 from ..analysis.methods.snmf import run_snmf_method
@@ -114,7 +114,7 @@ def run_analysis_tool(args):
         logger.info("----- ipyrad2 analysis wex: extract alignments from windows -----")
         logger.info("-------------------------------------------------------")
         logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
-        run_window_extractor(
+        run_window_extracter(
             data=args.data,
             name=args.name,
             outdir=args.out,
@@ -137,7 +137,7 @@ def run_analysis_tool(args):
         logger.info("---- ipyrad2 analysis lex: extract delimited loci from HDF5 database ----")
         logger.info("-------------------------------------------------------")
         logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
-        run_locus_extractor(
+        run_locus_extracter(
             data=args.data,
             name=args.name,
             outdir=args.out,
@@ -163,7 +163,7 @@ def run_analysis_tool(args):
         logger.info("---- ipyrad2 analysis snpex: extract filtered SNP matrices ----")
         logger.info("------------------------------------------------------------")
         logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
-        run_snp_extractor(
+        run_snps_extracter(
             data=args.data,
             name=args.name,
             outdir=args.out,

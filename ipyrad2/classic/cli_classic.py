@@ -26,7 +26,7 @@ HEADER = f"""
 -------------------------------------------------------------
 ipyrad [v.{VERSION}]
 Interactive assembly and analysis of RAD-seq data
--------------------------------------------------------------
+-------------------------------------------------------------\
 """
 
 DESCRIPTION = "ipyrad2 classic command line tool."
@@ -59,11 +59,7 @@ def setup_parsers() -> argparse.ArgumentParser:
         "-l", "--log-level", metavar="str", type=str, default="SUCCESS",
         help="Log level (DEBUG, INFO, SUCCESS, WARN, ERROR) [default=SUCCESS]",
     )
-    parser.add_argument(
-        "-L", "--log-file", metavar="Path", type=Path,
-        help="Log file. Logging to stdout is also appended to this file. [default=None]."
-    )
-    parser.add_argument("-f", "--force", action="count", default=0, help="force overwrite of existing data")
+    parser.add_argument("-f", "--force", action="store_true", help="force overwrite of existing data")
     parser.add_argument("-d", "--debug", action="store_true", help="Print debug information")
     parser.add_argument("-v", "--version", action='version', version=f"ipyrad {VERSION}")
     parser.add_argument('-h', '--help', action='help', help=argparse.SUPPRESS)
@@ -92,8 +88,6 @@ def command_line():
     parser = setup_parsers()
     args = parser.parse_args()
 
-    print(HEADER)
-
     if args.new:
         _flagnew(args.new)
         sys.exit(0)
@@ -107,7 +101,7 @@ def command_line():
 
     # LOGGING: -----------------------------------------------------
     if hasattr(args, "log_level"):
-        set_log_level(args.log_level, args.log_file)
+        set_log_level(args.log_level)
 
     # DEMUX: -------------------------------------------------------
     if "1" in args.steps:
@@ -175,12 +169,14 @@ def command_line():
             # Try to parse pops file to subsample fastqs for building pseudo-reference
             pops_file = Path(params.main.pop_assign_file)
             if pops_file.exists() and not (str(pops_file) == '.'):
-                s3_args.imap = pops_file
-            elif not pops_file.exists():
-                raise IPyradError(f"pop_assign_file does not exist: {str(pops_file.absolute())}")
+                logger.info("pop_assign_file does not exist, skipping subsample selection.")
+                # Defaults to using all sample edits files
+                # TODO: Could be better to randomly select a handful, but this might be
+                #       better to implement inside the denovo.py code, so it works for CLI as well
+                s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
             else:
-                s3_args.imap = None
-            s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
+                # TODO: Maybe this isn't necessary here 
+                s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
             # TODO: Add something to test the number of .gz files and complain if there are too many.
             #       Might be good to recommend using an imap file, and then sampling 2-3 individuals per pop
             ip.cli.cli_main.run_subcommand(s3_args, _exit=False)

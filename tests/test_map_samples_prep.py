@@ -1,0 +1,77 @@
+from __future__ import annotations
+
+import gzip
+from pathlib import Path
+
+import pytest
+
+from ipyrad2.mapper.map_samples_prep import apply_imap_to_samples
+from ipyrad2.mapper.map_samples_prep import prepare_map_samples
+from ipyrad2.utils.exceptions import IPyradError
+
+
+FASTQ_RECORD = b"@r1\nACGT\n+\n!!!!\n"
+
+
+def _write_fastq(path: Path, data: bytes = FASTQ_RECORD) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.suffix == ".gz":
+        with gzip.open(path, "wb") as out:
+            out.write(data)
+    else:
+        path.write_bytes(data)
+
+
+def test_prepare_map_samples_merges_plain_and_gz_replicates(tmp_path: Path) -> None:
+    fastqs = [
+        tmp_path / "sampleA_R1.fastq",
+        tmp_path / "sampleA_R2.fastq",
+        tmp_path / "sampleB_R1.fastq.gz",
+        tmp_path / "sampleB_R2.fastq.gz",
+    ]
+    _write_fastq(fastqs[0], b"@a1\nAAAA\n+\n!!!!\n")
+    _write_fastq(fastqs[1], b"@a1\nTTTT\n+\n!!!!\n")
+    _write_fastq(fastqs[2], b"@b1\nCCCC\n+\n!!!!\n")
+    _write_fastq(fastqs[3], b"@b1\nGGGG\n+\n!!!!\n")
+
+    imap = tmp_path / "imap.tsv"
+    imap.write_text("sampleA merged\nsampleB merged\n", encoding="utf-8")
+
+    fastq_dict, is_paired = prepare_map_samples(
+        fastqs=fastqs,
+        delim_str=None,
+        delim_idx=1,
+        imap=imap,
+        tmpdir=tmp_path / "tmpdir",
+    )
+
+    assert is_paired is True
+    assert list(fastq_dict) == ["merged"]
+    merged_r1, merged_r2 = fastq_dict["merged"]
+    assert merged_r1.suffix == ".gz"
+    assert merged_r2 is not None and merged_r2.suffix == ".gz"
+    with gzip.open(merged_r1, "rb") as infile:
+        assert infile.read() == b"@a1\nAAAA\n+\n!!!!\n@b1\nCCCC\n+\n!!!!\n"
+    with gzip.open(merged_r2, "rb") as infile:
+        assert infile.read() == b"@a1\nTTTT\n+\n!!!!\n@b1\nGGGG\n+\n!!!!\n"
+
+
+def test_prepare_map_samples_rejects_mixed_se_pe_merge(tmp_path: Path) -> None:
+    sample_a_r1 = tmp_path / "sampleA_R1.fastq.gz"
+    sample_a_r2 = tmp_path / "sampleA_R2.fastq.gz"
+    sample_b = tmp_path / "sampleB.fastq.gz"
+    for path in (sample_a_r1, sample_a_r2, sample_b):
+        _write_fastq(path)
+
+    imap = tmp_path / "imap.tsv"
+    imap.write_text("sampleA merged\nsampleB merged\n", encoding="utf-8")
+
+    with pytest.raises(IPyradError, match="mixed SE and PE"):
+        apply_imap_to_samples(
+            imap=imap,
+            tmpdir=tmp_path / "tmpdir",
+            fastq_dict={
+                "sampleA": (sample_a_r1, sample_a_r2),
+                "sampleB": (sample_b, None),
+            },
+        )

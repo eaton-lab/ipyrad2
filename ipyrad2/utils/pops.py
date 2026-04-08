@@ -95,7 +95,38 @@ def parse_minmap(path: Path) -> Dict[str, int]:
     group\tsize
     group\tsize
     """
-    pass
+    minmap: Dict[str, int] = {}
+
+    try:
+        with open(path, "r", encoding="utf-8") as infile:
+            for lineno, line in enumerate(infile, start=1):
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+
+                parts = line.split()
+                if len(parts) != 2:
+                    raise IPyradError(
+                        f"Minmap file malformed at line {lineno}: {path}"
+                    )
+
+                group, size = parts
+                if group in minmap:
+                    raise IPyradError(
+                        f"Minmap file contains duplicate group '{group}': {path}"
+                    )
+
+                minmap[group] = int(size)
+
+    except ValueError as exc:
+        raise IPyradError(f"Minmap file malformed - {path}") from exc
+    except OSError as exc:
+        raise IPyradError(f"Failed to read minmap file - {path}") from exc
+
+    if not minmap:
+        raise IPyradError(f"Minmap file is empty - {path}")
+
+    return minmap
 
 IMAP_MINMAP_DISAGREE = """\n
     The populations specified in the main body of the populations file do

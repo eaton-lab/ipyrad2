@@ -1,37 +1,22 @@
 #!/usr/bin/env python
 
-"""Logger for ipyrad to STDERR and optionally also to a LOGFILE.
+"""Logger for ipyrad to stderr.
 
-logging to STDERR
+logging to stderr
 -----------------
 DEBUG: used by developers to examine extra details.
 INFO: info reported to users, including progress bars. (DEFAULT)
 WARNING: warnings to users, if set to default then progress bars are not shown.
 ERROR: sometimes printed along with raised errors.
 
-logging to LOGFILE
-------------------
-DEBUG: developer stuff
-INFO: same as above, w/ some extra info, but not progress bars. (DEFAULT)
-same
-same
-
 Examples
 --------
 >>> import ipyrad as ip
 >>> ip.set_log_level("DEBUG")
->>> ip.set_log_level("DEBUG", log_file="/tmp/ip-log.txt")
-
-Note
-----
-Exceptions written to the logfile have color support, which
-can be viewed using `less -R logfile.txt`
 """
 
 from __future__ import annotations
-from typing import Optional
 import sys
-from pathlib import Path
 from loguru import logger
 
 
@@ -81,55 +66,37 @@ def is_log_level_enabled(level: str) -> bool:
     return requested_no >= current_no
 
 
-def set_log_level(log_level: str = "DEBUG", log_file: Optional[Path] = None):
-    """Add logger for ipyrad to stderr and optionally to file.
+def set_log_level(log_level: str = "DEBUG"):
+    """Add the shared ipyrad logger to stderr.
 
     logger.info("...")
-    logger.bind(to_file=True).info("...")
     """
     global _CURRENT_LOG_LEVEL
     _CURRENT_LOG_LEVEL = normalize_log_level(log_level)
     logger.remove()
 
-    # always log to stderr
     logger.add(
         sink=sys.stderr,
         level=_CURRENT_LOG_LEVEL,
         colorize=color_support(),
         format=formatter,
         enqueue=False,
-        # traceback=True,
     )
-    # optionally log to file
-    if log_file:
-        log_file = Path(log_file)
-        log_file.parent.mkdir(exist_ok=True)
-        log_file.touch(exist_ok=True)
-        logger.add(
-            sink=str(log_file),
-            level=_CURRENT_LOG_LEVEL,
-            colorize=False,
-            format=formatter,
-            enqueue=True,
-            rotation="50 MB",
-        )
     return logger
 
 
 def setup_loguru_worker(log_level: str) -> None:
     """initialized on parallel Worker processes."""
-    from loguru import logger
-    import sys
-
     global _CURRENT_LOG_LEVEL
     _CURRENT_LOG_LEVEL = normalize_log_level(log_level)
+
     logger.remove()
     logger.add(
         sys.stderr,
         level=_CURRENT_LOG_LEVEL,
         colorize=color_support(),
         format=formatter,
-        enqueue=True,
+        enqueue=False,
     )
 
 

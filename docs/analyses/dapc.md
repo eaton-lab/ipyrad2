@@ -111,7 +111,7 @@ If `--n-pcs` is provided, it must be:
 
 The active implementation is:
 
-1. filter the SNP HDF5 with the shared SNP extractor
+1. filter the SNP HDF5 with the shared SNP extracter
 2. select a linked or unlinked SNP view
 3. impute the genotype matrix
 4. run PCA on the imputed matrix
@@ -204,7 +204,7 @@ This is a human-readable summary file. It includes:
 - requested `K` range or `NA`
 - retained number of PCs
 - counts of filtered and exported SNPs or linkage blocks
-- shared SNP-extractor filter statistics
+- shared SNP-extracter filter statistics
 
 ## Command Patterns
 

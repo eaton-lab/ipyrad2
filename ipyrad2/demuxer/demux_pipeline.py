@@ -681,7 +681,7 @@ def _compress_demux_outputs_with_pigz(
         jobs,
         log_level=log_level,
         max_workers=min(cores, len(temp_fastqs)),
-        msg="Compressing demultiplexed FASTQs",
+        msg="Pigz FASTQs",
     )
 
 

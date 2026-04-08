@@ -1,56 +1,37 @@
 # trim
 
-## Summary
-
-`ipyrad2 trim` prepares sample-level FASTQ files for the rest of the assembly workflow. It uses [`fastp`](https://github.com/OpenGene/fastp) for quality and adapter trimming, but it adds behavior that is specific to RAD-style data and to ipyrad2's workflow: sample discovery from filenames, paired-read grouping, empty-file preflight checks, restriction-junction trimming, optional manual cutsite control, UMI handling in i5/index2, and a run-level trim summary.
+`ipyrad2 trim` prepares sample-level FASTQ files for the rest of the assembly workflow by trimming and filtering reads, including behavior that is specific to RAD-style data and to ipyrad2's workflow: sample naming from filenames, paired-read grouping, restriction-junction trimming, optional manual cutsite control, UMI handling in i5/index2, and a run-level trim summary.
 
 In a typical workflow, `trim` comes after [`demux`](./demux.md) and before [`denovo`](./denovo.md) or [`map`](./map.md).
+
+## Overview
+Read trimming and filtering is an optional preprocessing step in ipyrad2 that removes technical sequence and low-quality data prior to assembly. Trimming and quality filtering are implemented via a wrapper around [`fastp`](https://github.com/OpenGene/fastp) (Chen et al. 2018). The step can (i) trim adapter sequence using fastp’s automatic adapter detection, and for paired-end data additionally uses overlap-aware adapter trimming and base correction in the overlapping region; (ii) trim low-quality bases and filter reads failing user-defined quality/length thresholds; and (iii) trim restriction enzyme cutsite/overhang sequence from read termini.
+
+Restriction overhang motifs may be provided by the user or inferred from the data using motif counting, and the inferred motif is used to trim the appropriate number of bases from read starts. During library preparation unique molecular identifiers (UMIs) can be incorporated in the Illumina i5 index of paired-end reads to allow for duplicate marking for improved variant calling. If present, the i5 tags can be moved to the read name/header in this step for downstream use. Trimmed reads are written as gzipped per-sample FASTQ files (R1 or R1/R2), and a summary statistics report records counts and reasons for trimmed bases and filtered reads.
+
 
 ## When to Use
 
 Use `trim` when your reads still need quality filtering, adapter trimming, or restriction-junction trimming before mapping or pseudoreference construction.
 
-This is the default path for most ipyrad2 workflows because it is aware of the read structure common in RAD, ddRAD, GBS, 3RAD, and related reduced-representation libraries. It is also the simplest way to keep trimming behavior, logs, and reports consistent with the rest of the pipeline.
-
-If your sequencing provider or another workflow has already produced trusted trimmed sample FASTQs, you can start later in the pipeline. But external trimming should be used carefully, because over-trimming at the 5' end or inconsistent restriction-junction handling can make later steps harder to interpret.
+This is the default path for most ipyrad2 workflows because it is aware of the read structure common in RAD, ddRAD, GBS, 3RAD, and related reduced-representation libraries. If your sequencing provider or another workflow has already produced trusted trimmed sample FASTQs, you can start later in the pipeline. But external trimming should be used carefully, because over-trimming at the 5' end or inconsistent restriction-junction handling can make later steps harder to interpret.
 
 ## Prerequisites
 
-- Sample-level FASTQ files. These can come from [`demux`](./demux.md) or from an external demultiplexing workflow.
-- An activated ipyrad2 environment with an executable `fastp` binary.
-- Plain FASTQ or `.gz`-compressed FASTQ input. `.bz2` is not supported.
-- A filename pattern that lets ipyrad2 recognize which files belong to each sample and, for paired data, which mates belong together.
-
-If your library uses unusual restriction motifs or a multi-enzyme design, it helps to know those motifs in advance so you can override automatic inference when needed.
+Sample-level FASTQ files. These can come from [`demux`](./demux.md) or an external demultiplexer.
 
 ## Inputs and Naming
 
 Use `-d/--fastqs` with one or more FASTQ paths or shell-expanded globs. Inputs can be single-end or paired-end, and ipyrad2 will try to group them into samples automatically.
 
-Sample names are parsed from filenames. In many datasets the default parsing is enough, but if filenames contain repeated delimiters or custom suffixes you can control parsing with:
+Sample names are parsed from filenames. In many datasets the default parsing is enough, but if filenames contain repeated delimiters or custom suffixes you can control parsing using explicit delimiter-based pairing and sample naming, see [Using -dx and -di to pair and name samples](../recipes/sample-name-parsing.md).
 
 - `-dx, --delim-str`: delimiter substring used to split the filename
 - `-di, --delim-idx`: which side of the delimiter to keep, default `1`
 - `-s, --suffix`: suffix to append to the parsed sample name before writing outputs
 
-These naming controls matter because `trim` groups files into sample units before it launches any `fastp` jobs. If parsing is wrong, paired reads can be grouped incorrectly or multiple files can collapse into one sample unexpectedly.
-
 `trim` also accepts optional controls for quality thresholds, minimum read length, cutsite motifs, phred64 input, UMI placement, and parallelism. Those are described below in grouped command patterns.
 
-For a worked example of explicit delimiter-based pairing and sample naming, see [Using -dx and -di to pair and name samples](../recipes/sample-name-parsing.md).
-
-## Why This Is Not Just a Plain `fastp` Run
-
-ipyrad2 uses `fastp` underneath, but `trim` is not a bare pass-through.
-
-- ipyrad2 first discovers and groups FASTQ files into sample units.
-- It skips empty FASTQ files before launching jobs and reports skipped samples clearly.
-- It can infer restriction-junction motifs from a kmer sample of the reads, then trim those motifs from the 5' end.
-- It lets you override inference with explicit `--cutsite-1` and `--cutsite-2` motifs.
-- It supports `--umi-tag-in-i5` for workflows where the UMI is stored in index2/i5.
-- It writes per-sample HTML and JSON reports plus a run-level `ipyrad_trim_stats_N.txt` summary.
-
-That extra layer is the main reason ipyrad2 recommends its own trimming step instead of treating preprocessing as a generic external task.
 
 ## Command Patterns
 
@@ -141,6 +122,21 @@ For the run as a whole, it also writes:
 
 The summary text file is numbered so repeated trim runs in the same output directory do not overwrite older summaries. It includes per-sample before-and-after read totals, mean read lengths, Q20/Q30 rates, reads filtered for low quality, too many `N` bases, low complexity, reads filtered for being too short, and adapter-trimming counts where available.
 
+
+## Why This Is Not Just a Plain `fastp` Run
+
+ipyrad2 uses `fastp` underneath, but `trim` is not a bare pass-through.
+
+- ipyrad2 first discovers and groups FASTQ files into sample units.
+- It skips empty FASTQ files before launching jobs and reports skipped samples clearly.
+- It can infer restriction-junction motifs from a kmer sample of the reads, then trim those motifs from the 5' end.
+- It lets you override inference with explicit `--cutsite-1` and `--cutsite-2` motifs.
+- It supports `--umi-tag-in-i5` for workflows where the UMI is stored in index2/i5.
+- It writes per-sample HTML and JSON reports plus a run-level `ipyrad_trim_stats_N.txt` summary.
+
+That extra layer is the main reason ipyrad2 recommends its own trimming step instead of treating preprocessing as a generic external task.
+
+
 ## Common Failures and Interpretation Notes
 
 ### No files match the input glob
@@ -222,6 +218,6 @@ ipyrad2 trim -d DATA/*.gz -o TRIMMED/ --phred64 -U
 
 - [Quick Guide](./index.md)
 - [demux](./demux.md)
-- [Denovo](./denovo.md)
+- [denovo](./denovo.md)
 - [map](./map.md)
 - [Files and Data Types](../getting-started/files-and-data-types.md)

@@ -1,38 +1,17 @@
 # demux
 
-## Summary
+`ipyrad2 demux` splits pooled reads into per-sample FASTQ files by barcode or index. If your sequencing provider already delivered sample-specific FASTQ files, this step is unnecessary and you can proceed to [trim](./trim.md).
 
-`ipyrad2 demux` splits pooled reads into per-sample FASTQ files by barcode or index. It supports inline barcode demultiplexing, `--i7` index demultiplexing, optional barcode mismatches, technical-replicate merging, and automatic or manual restriction-motif handling for inline demux.
+## Overview
+Demultiplexing is an optional step in ipyrad2 used to separate reads among samples that were pooled on a sequencing lane. We support demultiplexing using inline (internal) barcodes of fixed or variable length, including single-inline designs (barcode on one read) and dual-inline designs (barcodes on both reads), and we also support demultiplexing using external Illumina i7 index reads. Barcode mismatches can be tolerated up to an “off-by-n” limit, but only while the off-by-n barcode set remains unique (i.e., increasing n is disallowed once distinct barcodes become identical under the off-by-n expansion, typically at n ≥ 2).
 
-Use `demux` only when your reads are still pooled. If your data already arrive as sample-level FASTQ files, skip this step and begin at [trim](./trim.md).
-
-## When to Use
-
-Run `demux` when a sequencing run contains multiple samples combined in one or more raw FASTQ files and you need to recover per-sample read files before trimming and mapping.
-
-The most common use cases are:
-
-- inline barcodes at the start of R1
-- combinatorial inline barcodes across R1 and R2
-- i7 index demultiplexing with `--i7`
-- multiple lanes or files that should be merged into the same sample output
-
-If your sequencing provider already delivered sample-specific FASTQ files, this step is unnecessary.
+Restriction cutsite motifs at the 5′ or 3′ end of single- or paired-end reads are auto-detected using fast k-mer analysis. Inline barcodes are parsed relative to the detected motif, and paired reads are evaluated jointly to improve sorting accuracy. Users can override the auto-detected motifs and will receive a warning if user-specified motifs disagree with the dominant patterns in the data. Reads that do not perfectly match one of the enumerated keys defined by the off-by-n map are assigned to an unassigned category. Demultiplexed reads are written as gzipped per-sample FASTQ files (R1 or R1/R2), and a summary statistics report counts reads assigned per sample and key.
 
 ## Prerequisites
 
 - Pooled raw FASTQ files.
 - A barcode or index table.
 - A clear understanding of whether your run uses inline barcodes or `i7` indices.
-- For inline demux, either known cutsite motifs or enough read data to let ipyrad2 infer them.
-
-The barcode table is whitespace-delimited, has no header, and should use:
-
-```text
-sample  barcode1  [barcode2]
-```
-
-`barcode2` is optional. If it is present, ipyrad2 treats the table as combinatorial inline barcodes and requires paired-end reads.
 
 ## Inputs
 
@@ -48,11 +27,13 @@ Multiple raw input files can be listed in one run. That is useful when a sample 
 
 ### Barcode table
 
-Use `-b/--barcodes` to supply the barcode/index table. The required columns are:
+The barcode table is whitespace-delimited, has no header, and should use:
 
-- `sample`
-- `barcode1`
-- optional `barcode2`
+```output
+sample  barcode1  barcode2
+```
+
+`barcode2` is optional. If it is present, ipyrad2 treats the table as combinatorial inline barcodes and requires paired-end reads. If barcodes are only present on read1 the second barcode column can be absent.
 
 For `--i7` demux, only `barcode1` is used. If extra barcode columns are present, ipyrad2 ignores them in that mode.
 
@@ -96,8 +77,6 @@ If you do not supply cutsite motifs, ipyrad2 tries to infer them from barcoded r
 - you have a multi-enzyme design such as 3RAD
 - inference is unstable on a small pilot dataset
 
-For combinatorial inline barcodes, R2 cutsite motifs are required. If they are not supplied and cannot be inferred, demux stops.
-
 ### Performance and testing
 
 - `-c, --cores`: maximum parallel workers, default `4`
@@ -105,7 +84,7 @@ For combinatorial inline barcodes, R2 cutsite motifs are required. If they are n
 - `-x, --max_reads`: stop after N reads per file for a test run
 - `--pigz`: use `pigz` for final FASTQ compression
 
-`--pigz` changes the write backend, but the final output files are still per-sample FASTQs in the demux output directory.
+`--pigz` leads to big speed improvements, but larger disk usage temporarily before the FASTQs are ultimately compressed.
 
 ### Logging
 
