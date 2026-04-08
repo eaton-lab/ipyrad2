@@ -9,9 +9,10 @@
 
 
 # TODO
-- cli: subcommand splash messages should show the ipyrad version.
+- trim: collect and summarize trim stats files into one file.
+- denovo: test on real data.
 - map: add checks in concat_tech_reps_into_tmpdir for bad names.
-- [...] assemble: replace numba code to be pure numpy and remove numba as a dependency.
+- map: collect stats from stats files into write_stats
 - assemble: need to bring back a max-H consensus filter.
 - assemble: max_snps filter is not working. Consider variant quality with this...?
 - assemble: allow imap to group samples for joint variant calls.
@@ -19,30 +20,21 @@
 - assemble: accept a loci.bed file and skip locus delimiting. Allow WGS only data in this case.
 - assemble: instead of warning about UMI tags on -U it could check for them.
 - assemble: check filters again, why so few shared het hitting?
-- wex: check that alignments are correct when using -r or other exclude methods.
-- parallel: stderr writes temporarily to $TMPDIR. Instead set to outdir/tmpdir?
-- variants: check that snps are being removed from indel regions, and that we want that (in func: get_vcf_with_indels_resolved)
-- wex: better format for stats. Write missing per sample to stats.
-- map: collect stats from stats files into write_stats
-- assemble: accept a loci.bed file and skip locus delimiting. Allow WGS only data in this case.
-- denovo: test on real data.
-- trim: collect and summarize trim stats files into one file.
-- variants: try bcf is faster than vcf for intermediates.
-- variants: check that snps are being removed from indel regions, and that we want that.
-- pops: imap for population variant calls in assemble.
-- pops: imap for combining technical-reps in assemble [easy for variants, harder for beds?]
-- wex: better format for stats. Write missing per sample to stats.
-- assemble: instead of warning about UMI tags on -u it could check for them.
-- assemble: check filters again, why no shared het hitting?
+- assemble: imap for combining technical-reps in assemble [easy for variants, harder for beds?]
 - assemble: organize and write assemble stats
+- variants: check that snps are being removed from indel regions, and that we want that (in func: get_vcf_with_indels_resolved)
+- variants: try bcf is faster than vcf for intermediates.
+- parallel: stderr writes temporarily to $TMPDIR. Instead set to outdir/tmpdir?
+- wex: check that alignments are correct when using -r or other exclude methods.
+- wex: better format for stats. Write missing per sample to stats.
 - analysis:
-    - test api with logger
-    - pca
-    - structure
-    - bpp
-    - raxml-ng
-    - treeslider
-    - more converters like wex?
+    - [ ] test api with logger
+    - [x] pca
+    - [ ] structure
+    - [ ] bpp - Done but not tested
+    - [ ] raxml-ng
+    - [ ] treeslider
+    - [ ] more converters like wex?
 
 
 # TODO Low priority
@@ -112,3 +104,5 @@ ipyrad2 analysis pca -d HDF5 ... --scaffolds [defaults to all] -n name-prefix -o
 - [x] denovo: develop SE pipeline.
 - [x] analysis: add analysis tools (wex/lex/treeslider) as 'analysis' subcommand
 - [x] map: handle SE
+- [x] assemble: replace numba code to be pure numpy and remove numba as a dependency.
+- [x] cli: subcommand splash messages should show the ipyrad version.
