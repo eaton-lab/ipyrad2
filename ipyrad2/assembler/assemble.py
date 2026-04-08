@@ -24,10 +24,11 @@ from .loci import (
     get_reference_in_loci_beds,
     make_lowdepth_mask,
     make_paralog_mask,
+    merge_final_vcf_mask_beds,
     merge_sample_mask_beds,
     get_consensus,
     build_locus_fasta_database,
-    write_loci_and_stats_files,
+    write_final_outputs,
     write_assemble_stats_report,
 )
 from .paralogs import (
@@ -47,10 +48,10 @@ from .variants import (
     summarize_variant_support_by_sample_type,
     get_vcf_with_indels_resolved,
     apply_sample_region_masks_to_resolved_vcf,
+    compact_resolved_vcf_to_final_loci_contigs,
     load_variant_resolution_stats,
     write_vcf,
 )
-from .write_seqs import write_seqs_hdf5
 from .write_snps import write_snps_hdf5
 from ..utils.parallel import run_with_pool
 from ..utils.exceptions import IPyradError
@@ -818,10 +819,12 @@ def _write_consensus_and_outputs(
     min_locus_length: int,
     max_locus_hetero_frequency: float,
     max_locus_variant_frequency: float,
+    max_sample_hetero_frequency: float,
     consensus_workers: int,
     workers: int,
     threads: int,
     log_level: str,
+    cores: int | None = None,
     rad_samples: list[str] | None = None,
     wgs_samples: list[str] | None = None,
 ) -> None:
@@ -860,55 +863,49 @@ def _write_consensus_and_outputs(
     build_locus_fasta_database(name, snames, reference, tmpdir, masks)
 
     logger.info("writing outfiles (.loci, .hdf5, .bed, .stats.txt)")
-
-    # Write the trimmed final loci outputs first so assemble can fail clearly
-    # if no loci survive the last round of trimming/filtering.
-    loci_summary = write_loci_and_stats_files(
+    loci_summary = write_final_outputs(
         snames=snames,
         name=name,
         outdir=outdir,
         tmpdir=tmpdir,
+        reference=reference,
         min_locus_sample_coverage=min_locus_sample_coverage,
         min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
         min_locus_length=min_locus_length,
         max_locus_hetero_frequency=max_locus_hetero_frequency,
         max_locus_variant_frequency=max_locus_variant_frequency,
+        max_sample_hetero_frequency=max_sample_hetero_frequency,
+        cores=max(1, int(cores or workers)),
+        log_level=log_level,
     )
     if loci_summary["nloci_after_filtering"] == 0:
         raise IPyradError("No loci passed final trimming/filtering.")
-
-    # The sequence HDF5 writer is now called directly instead of via a
-    # single-job process pool. That old pool call no longer provided any real
-    # parallelism after the loci writer was pulled out for the early zero-locus
-    # guard.
-    logger.info("writing sequences database (.hdf5)")
-    with _profile_stage("sequence HDF5 writing"):
-        write_seqs_hdf5(
-            snames=snames,
-            name=name,
-            outdir=outdir,
-            tmpdir=tmpdir,
-            reference=reference,
-            nsites_after_filtering=loci_summary["nsites_after_filtering"],
-            nloci_after_filtering=loci_summary["nloci_after_filtering"],
-            min_locus_sample_coverage=min_locus_sample_coverage,
-            min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
-            min_locus_length=min_locus_length,
-            max_locus_hetero_frequency=max_locus_hetero_frequency,
-            max_locus_variant_frequency=max_locus_variant_frequency,
-        )
+    final_loci_bed = outdir / f"{name}.bed"
 
     # The final VCF is filtered to the trimmed/retained outdir BED, then the
     # SNP dataset is appended to the same output HDF5 for downstream analyses.
     logger.info("writing variants file (.vcf.gz)")
     with _profile_stage("final VCF writing"):
+        compact_resolved_vcf_to_final_loci_contigs(tmpdir, reference, final_loci_bed)
         final_vcf = write_vcf(name, outdir, tmpdir, threads)
 
         # Consensus already sees the merged per-sample BED masks directly, so keep
         # the larger resolved VCF untouched during the memory-heavy middle stages.
         # Apply the per-sample genotype masking only once here on the final SNP VCF.
-        if sample_masks:
-            apply_sample_region_masks_to_resolved_vcf(tmpdir, sample_masks, vcf_gz=final_vcf)
+        final_vcf_masks = {}
+        if snames:
+            jobs = {
+                sname: (merge_final_vcf_mask_beds, dict(sname=sname, tmpdir=tmpdir))
+                for sname in snames
+            }
+            final_vcf_masks = run_with_pool(
+                jobs,
+                log_level,
+                workers,
+                msg="Merging final VCF masks",
+            )
+        if final_vcf_masks:
+            apply_sample_region_masks_to_resolved_vcf(tmpdir, final_vcf_masks, vcf_gz=final_vcf)
 
     mixed_run_summary: dict[str, int] | None = None
     rad_samples = sorted(rad_samples or [])
@@ -948,7 +945,7 @@ def _write_consensus_and_outputs(
 
     logger.info("computing final sample depth summary")
     jobs = {}
-    loci_bed = outdir / f"{name}.bed"
+    loci_bed = final_loci_bed
     for sname in snames:
         jobs[sname] = (
             get_sample_depth_stats_in_final_loci,
@@ -998,6 +995,7 @@ def run_assembler(
     min_locus_merge_distance: int,        # merge loci within this distance
     max_locus_hetero_frequency: float,
     max_locus_variant_frequency: float,
+    max_sample_hetero_frequency: float,
     softclip_len_threshold: int,
     softclip_frac_max: float,
     depth_z_max: float,
@@ -1031,6 +1029,8 @@ def run_assembler(
         raise IPyradError("max_softclip must be >= 0 when provided.")
     if max_nm is not None and max_nm < 0:
         raise IPyradError("max_nm must be >= 0 when provided.")
+    if not 0 <= max_sample_hetero_frequency <= 1:
+        raise IPyradError("max_sample_hetero_frequency must be between 0 and 1.")
     if min_3allele_sites < 0:
         raise IPyradError("min_3allele_sites must be >= 0.")
     if max_sites_above_maf < 0:
@@ -1281,10 +1281,12 @@ def run_assembler(
         min_locus_length=min_locus_length,
         max_locus_hetero_frequency=max_locus_hetero_frequency,
         max_locus_variant_frequency=max_locus_variant_frequency,
+        max_sample_hetero_frequency=max_sample_hetero_frequency,
         consensus_workers=consensus_workers,
         workers=workers,
         threads=threads,
         log_level=log_level,
+        cores=cores,
         rad_samples=sorted(bam_dict),
         wgs_samples=sorted(wgs_dict),
     )

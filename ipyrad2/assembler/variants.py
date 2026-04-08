@@ -20,6 +20,7 @@ from pathlib import Path
 from loguru import logger
 from ..utils.parallel import run_pipeline
 from ..utils.exceptions import IPyradError
+from .hdf5_utils import write_retained_fai
 from .loci import get_indel_overlap_mask_path
 
 BIN = Path(sys.prefix) / "bin"
@@ -924,6 +925,30 @@ def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) ->
     # into per-sample BED masks for downstream consensus masking.
     _write_overlapping_indel_cluster_masks(tmpdir)
     return out_vcf_gz
+
+
+def compact_resolved_vcf_to_final_loci_contigs(tmpdir: Path, reference: Path, loci_bed: Path) -> Path:
+    """Trim resolved-VCF contig headers down to the final retained locus scaffolds."""
+    loci_bed = _require_nonempty_file(loci_bed, "Final loci BED")
+    resolved_vcf = _require_nonempty_file(tmpdir / "vcfs" / "variants.resolved.vcf.gz", "Resolved project VCF")
+    current_index = resolved_vcf.with_suffix(resolved_vcf.suffix + ".csi")
+    vcf_dir = tmpdir / "vcfs"
+    subset_fai = write_retained_fai(reference, loci_bed, vcf_dir / "variants.resolved.contigs.fai")
+    tmp_vcf = vcf_dir / "variants.resolved.reheadered.vcf.gz"
+    tmp_index = tmp_vcf.with_suffix(tmp_vcf.suffix + ".csi")
+
+    cmd = [
+        BIN_BCF, "reheader",
+        "-f", str(subset_fai),
+        "-o", str(tmp_vcf),
+        str(resolved_vcf),
+    ]
+    run_pipeline([cmd])
+    run_pipeline([[BIN_BCF, "index", "-f", "-c", str(tmp_vcf)]])
+    os.replace(tmp_vcf, resolved_vcf)
+    if tmp_index.exists():
+        os.replace(tmp_index, current_index)
+    return resolved_vcf
 
 
 def write_vcf(name: str, outdir: Path, tmpdir: Path, threads: int) -> Path:

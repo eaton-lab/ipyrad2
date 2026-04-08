@@ -158,6 +158,10 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         "--paralog-fail-frac-max", metavar="float", type=float, default=0.10,
         help="Max frac. samples with data allowed to fail before a locus is dropped globally. [default=%(default)s]",
     )
+    paralogs.add_argument(
+        "--max-sample-hetero-frequency", metavar="float", type=float, default=0.10,
+        help="Mask a sample for a locus when its heterozygous/IUPAC plus masked-N-at-variable-site fraction exceeds this value. [default=%(default)s]",
+    )
 
     naming.add_argument(
         "-p", "--populations", metavar="Path", type=Path,
