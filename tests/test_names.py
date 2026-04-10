@@ -2,9 +2,23 @@ from pathlib import Path
 
 import pytest
 
+import ipyrad2.utils.names as names_module
 from ipyrad2.utils.exceptions import IPyradError
 from ipyrad2.utils.names import get_name_to_fastq_dict
 from ipyrad2.utils.names import get_paths_list_from_fastq_str
+
+
+class _StubLogger:
+    def __init__(self) -> None:
+        self.warnings = []
+
+    def info(self, *args, **kwargs) -> None:
+        pass
+
+    def warning(self, message, *args, **kwargs) -> None:
+        if args:
+            message = message.format(*args)
+        self.warnings.append(message)
 
 
 def test_fastq_globs_expand_env_vars(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -95,7 +109,76 @@ def test_ambiguous_single_end_fastqs_are_not_collapsed_into_a_pair(tmp_path: Pat
     }
 
 
-def test_incomplete_split_pairs_fall_back_to_single_end_names(tmp_path: Path) -> None:
+def test_terminal_r2_in_single_end_name_warns_and_falls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = _StubLogger()
+    monkeypatch.setattr(names_module, "logger", logger)
+    fastq = tmp_path / "Larkspur2.fastq.gz"
+    fastq.touch()
+
+    result = names_module.get_name_to_fastq_dict([fastq], None, None)
+
+    assert result == {"Larkspur2": (fastq, None)}
+    assert any(
+        "Larkspu: missing R1" in warning
+        and "Proceeding as single-end" in warning
+        for warning in logger.warnings
+    )
+
+
+def test_r1_only_single_end_outputs_warn_and_fall_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = _StubLogger()
+    monkeypatch.setattr(names_module, "logger", logger)
+    fastqs = []
+    for idx in range(1, 5):
+        fastq = tmp_path / f"barbeyi-CO1-{idx:02d}_R1.fastq.gz"
+        fastq.touch()
+        fastqs.append(fastq)
+
+    result = names_module.get_name_to_fastq_dict(fastqs, None, None)
+
+    assert result == {
+        f"barbeyi-CO1-{idx:02d}_R1": (fastqs[idx - 1], None)
+        for idx in range(1, 5)
+    }
+    assert any("missing R2" in warning for warning in logger.warnings)
+    assert any("complete auto-detected pairs cover 0/4" in warning for warning in logger.warnings)
+
+
+def test_low_complete_pair_ratio_warns_and_falls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = _StubLogger()
+    monkeypatch.setattr(names_module, "logger", logger)
+    fastqs = [
+        tmp_path / "sample_R1.fastq.gz",
+        tmp_path / "sample_R2.fastq.gz",
+        tmp_path / "alpha.fastq.gz",
+        tmp_path / "beta.fastq.gz",
+        tmp_path / "gamma.fastq.gz",
+    ]
+    for fastq in fastqs:
+        fastq.touch()
+
+    result = names_module.get_name_to_fastq_dict(fastqs, None, None)
+
+    assert result == {
+        "alpha": (fastqs[2], None),
+        "beta": (fastqs[3], None),
+        "gamma": (fastqs[4], None),
+        "sample_R1": (fastqs[0], None),
+        "sample_R2": (fastqs[1], None),
+    }
+    assert any("complete auto-detected pairs cover 2/5" in warning for warning in logger.warnings)
+
+
+def test_majority_complete_split_pairs_still_raise(tmp_path: Path) -> None:
     fastq1a = tmp_path / "sample_R1_001-sub.fastq.gz"
     fastq2a = tmp_path / "sample_R2_001-sub.fastq.gz"
     fastq1b = tmp_path / "sample_R1_002-sub.fastq.gz"

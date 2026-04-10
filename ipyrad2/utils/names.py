@@ -257,21 +257,23 @@ def _format_group_examples(groups: Dict[str, List[Path]], limit: int = 5) -> str
     """Render a short sample-to-files summary for user-facing parse errors."""
     examples = []
     for sample_name in sorted(groups)[:limit]:
-        files = ", ".join(path.name for path in sorted(groups[sample_name], key=lambda item: str(item)))
+        files = ", ".join(
+            path.name for path in sorted(groups[sample_name], key=lambda item: str(item))
+        )
         examples.append(f"{sample_name}: {files}")
     if len(groups) > limit:
         examples.append(f"... and {len(groups) - limit} more")
     return "; ".join(examples)
 
 
-def _raise_paired_name_error(
+def _paired_name_error_message(
     fastqs: List[Path],
     groups: Dict[str, List[Path]],
     parsed_count: int,
     parser,
     source: str,
-) -> None:
-    """Raise a detailed error for incomplete or inconsistent paired-name evidence."""
+) -> str:
+    """Return a detailed error for incomplete or inconsistent paired-name evidence."""
     details = []
     for sample_name in sorted(groups):
         paths = sorted(groups[sample_name], key=lambda item: str(item))
@@ -287,9 +289,15 @@ def _raise_paired_name_error(
             continue
         if mate_counts.get(1, 0) == 0 or mate_counts.get(2, 0) == 0:
             missing = "R1" if mate_counts.get(1, 0) == 0 else "R2"
-            details.append(f"{sample_name}: missing {missing} ({', '.join(parsed_names)})")
+            details.append(
+                f"{sample_name}: missing {missing} ({', '.join(parsed_names)})"
+            )
             continue
-        duplicates = [f"R{mate} x{count}" for mate, count in sorted(mate_counts.items()) if count > 1]
+        duplicates = [
+            f"R{mate} x{count}"
+            for mate, count in sorted(mate_counts.items())
+            if count > 1
+        ]
         if duplicates:
             details.append(f"{sample_name}: duplicate mates ({', '.join(duplicates)})")
 
@@ -303,9 +311,69 @@ def _raise_paired_name_error(
     if len(details) > 5:
         detail_text += f"; and {len(details) - 5} more"
 
-    raise IPyradError(
+    return (
         f"Cannot safely pair files by {source}. Some filenames look paired-end "
         f"but do not form complete consistent R1/R2 pairs. {detail_text}"
+    )
+
+
+def _raise_paired_name_error(
+    fastqs: List[Path],
+    groups: Dict[str, List[Path]],
+    parsed_count: int,
+    parser,
+    source: str,
+) -> None:
+    """Raise a detailed error for incomplete or inconsistent paired-name evidence."""
+    raise IPyradError(
+        _paired_name_error_message(fastqs, groups, parsed_count, parser, source)
+    )
+
+
+def _count_complete_pair_files(groups: Dict[str, List[Path]]) -> int:
+    """Return the number of files in groups that form valid complete pairs."""
+    complete = 0
+    for sample_name, paths in groups.items():
+        if len(paths) != 2:
+            continue
+        try:
+            _pair_group(paths, sample_name)
+        except IPyradError:
+            continue
+        complete += len(paths)
+    return complete
+
+
+def _warn_or_raise_incomplete_pair_evidence(
+    fastqs: List[Path],
+    evidences,
+) -> None:
+    """Warn or raise for failed pair evidence based on complete-pair support."""
+    scored = []
+    for groups, parsed_count, parser, source in evidences:
+        complete_pair_files = _count_complete_pair_files(groups)
+        scored.append((complete_pair_files, parsed_count, groups, parser, source))
+
+    complete_pair_files, parsed_count, groups, parser, source = max(
+        scored,
+        key=lambda item: (item[0], item[1]),
+    )
+    message = _paired_name_error_message(
+        fastqs=fastqs,
+        groups=groups,
+        parsed_count=parsed_count,
+        parser=parser,
+        source=source,
+    )
+    if complete_pair_files / len(fastqs) >= 0.5:
+        raise IPyradError(message)
+
+    logger.warning(
+        "{} Proceeding as single-end; complete auto-detected pairs cover {}/{} "
+        "input files (<50% threshold for a hard error).",
+        message,
+        complete_pair_files,
+        len(fastqs),
     )
 
 
@@ -459,22 +527,27 @@ def get_pairs_or_single_by_trim(
     if paired is not None:
         logger.info("paired files by secondary mate-token fallback")
         return paired
+    evidences = []
     if parsed_count:
-        _raise_paired_name_error(
-            fastqs=fastqs,
-            groups=names_to_paths,
-            parsed_count=parsed_count,
-            parser=_parse_mate_token,
-            source="auto-detected mate tokens",
+        evidences.append(
+            (
+                names_to_paths,
+                parsed_count,
+                _parse_mate_token,
+                "auto-detected mate tokens",
+            )
         )
     if literal_parsed_count:
-        _raise_paired_name_error(
-            fastqs=fastqs,
-            groups=literal_names_to_paths,
-            parsed_count=literal_parsed_count,
-            parser=_parse_literal_mate_token,
-            source="secondary mate-token fallback",
+        evidences.append(
+            (
+                literal_names_to_paths,
+                literal_parsed_count,
+                _parse_literal_mate_token,
+                "secondary mate-token fallback",
+            )
         )
+    if evidences:
+        _warn_or_raise_incomplete_pair_evidence(fastqs, evidences)
 
     # --------------------------------------------------------------
     logger.info("failed to pair files, assuming data in single-end")
