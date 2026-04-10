@@ -74,6 +74,11 @@ def _manual_junction_set(
     )
 
 
+def _format_motif_tuple(motifs: Tuple[str, ...]) -> str:
+    """Return motifs in the same bracketed style used by demux logging."""
+    return f"[{', '.join(motifs) if motifs else '<none>'}]"
+
+
 def _expand_cuts(motifs: Tuple[str, ...]) -> List[bytes]:
     """Expand motifs by IUPAC resolution and one-mismatch barcode-style mutation."""
     expanded = set()
@@ -267,8 +272,12 @@ class Demux:
     _re2_motifs: Tuple[str, ...] = field(default_factory=tuple)
     _re1_inference: InferredJunctionSet | None = None
     _re2_inference: InferredJunctionSet | None = None
+    _re1_detected_inference: InferredJunctionSet | None = None
+    _re2_detected_inference: InferredJunctionSet | None = None
     _re1_source: str | None = None
     _re2_source: str | None = None
+    _re1_motif_decision: str | None = None
+    _re2_motif_decision: str | None = None
     _barcode_boundary_collisions: List[Dict[str, str]] = field(default_factory=list)
 
     def __post_init__(self):
@@ -654,6 +663,7 @@ class Demux:
             self._re1_motifs = validate_named_motif_list(self.cutsite_1, "R1 cutsite motif")
             self._re1_inference = _manual_junction_set(self._re1_motifs)
             self._re1_source = "manual"
+            self._re1_motif_decision = "inference disabled; using manual motifs"
         if self.cutsite_2:
             self._re2_motifs = validate_named_motif_list(
                 self.cutsite_2,
@@ -662,6 +672,7 @@ class Demux:
             )
             self._re2_inference = _manual_junction_set(self._re2_motifs)
             self._re2_source = "manual"
+            self._re2_motif_decision = "inference disabled; using manual motifs"
 
     def _ensure_cutsite_motifs_available(self) -> None:
         """Ensure required cutsite motifs are available before matching."""
@@ -676,47 +687,130 @@ class Demux:
                 "Provide --cutsite-2 or enable cutsite motif inference."
             )
 
+    def _infer_cutsite_motifs(
+        self,
+        read_end: str,
+        fastqs: List[Path],
+        barcode_index: int,
+    ) -> InferredJunctionSet:
+        """Run barcode-aware kmer inference for one read end."""
+        return get_overhangs_from_barcoded_reads(
+            fastqs,
+            _barcode_patterns_by_length(self._names_to_barcodes, barcode_index),
+            20,
+            self.max_reads_kmer,
+            self.cores,
+            self.log_level,
+            label=f"{read_end} cutsite motif inference",
+            max_barcode_boundary_slack=self.barcode_boundary_slack,
+        )
+
+    def _record_manual_motif_decision(
+        self,
+        read_end: str,
+        manual_motifs: Tuple[str, ...],
+        detected: InferredJunctionSet,
+    ) -> str:
+        """Log whether user-entered motifs agree with kmer-detected motifs."""
+        logger.info(
+            "{} cutsite motif inference detected {}",
+            read_end,
+            format_logged_motif_set(detected),
+        )
+        manual_text = _format_motif_tuple(manual_motifs)
+        detected_text = _format_motif_tuple(detected.motifs)
+        if set(manual_motifs) == set(detected.motifs):
+            logger.info(
+                "{} user-defined cutsite motifs {} match detected motifs {}; using user-defined motifs.",
+                read_end,
+                manual_text,
+                detected_text,
+            )
+            return "manual motifs match detected motifs; using manual motifs"
+        logger.warning(
+            "{} user-defined cutsite motifs {} do not match detected motifs {}; "
+            "letting the user-defined motif overrule the detected motif.",
+            read_end,
+            manual_text,
+            detected_text,
+        )
+        return "manual motifs override detected motifs"
+
+    def _resolve_read_end_cutsite_motifs(
+        self,
+        *,
+        read_end: str,
+        fastqs: List[Path],
+        barcode_index: int,
+        manual_motifs: Tuple[str, ...],
+    ) -> Tuple[Tuple[str, ...], InferredJunctionSet, str, InferredJunctionSet | None, str]:
+        """Infer, compare, and select cutsite motifs for one read end."""
+        try:
+            detected = self._infer_cutsite_motifs(read_end, fastqs, barcode_index)
+        except IPyradError as exc:
+            if not manual_motifs:
+                raise
+            logger.warning(
+                "{} cutsite motif inference failed while user-defined motifs were provided: {}. "
+                "Using user-defined motifs.",
+                read_end,
+                exc,
+            )
+            return (
+                manual_motifs,
+                _manual_junction_set(manual_motifs),
+                "manual",
+                None,
+                "inference failed; using manual motifs",
+            )
+
+        if manual_motifs:
+            decision = self._record_manual_motif_decision(read_end, manual_motifs, detected)
+            return (
+                manual_motifs,
+                _manual_junction_set(manual_motifs),
+                "manual",
+                detected,
+                decision,
+            )
+
+        warn_multi_motif_inference(read_end, detected, self.max_reads_kmer)
+        return detected.motifs, detected, "auto", detected, "auto-selected"
+
     def _resolve_cutsite_motifs(self) -> None:
         """Use kmer analysis to detect cutsite motifs in sequences."""
-        if self._re1_motifs:
-            self._re1_inference = _manual_junction_set(self._re1_motifs)
-            self._re1_source = "manual"
-        else:
-            self._re1_inference = get_overhangs_from_barcoded_reads(
-                [i[0] for i in self._filenames_to_fastqs.values()],
-                _barcode_patterns_by_length(self._names_to_barcodes, 0),
-                20,
-                self.max_reads_kmer,
-                self.cores,
-                self.log_level,
-                label="R1 cutsite motif inference",
-                max_barcode_boundary_slack=self.barcode_boundary_slack,
-            )
-            self._re1_motifs = self._re1_inference.motifs
-            self._re1_source = "auto"
-            warn_multi_motif_inference("R1", self._re1_inference, self.max_reads_kmer)
+        (
+            self._re1_motifs,
+            self._re1_inference,
+            self._re1_source,
+            self._re1_detected_inference,
+            self._re1_motif_decision,
+        ) = self._resolve_read_end_cutsite_motifs(
+            read_end="R1",
+            fastqs=[i[0] for i in self._filenames_to_fastqs.values()],
+            barcode_index=0,
+            manual_motifs=self._re1_motifs,
+        )
 
         read2s = [i[1] for i in self._filenames_to_fastqs.values() if i[1] is not None]
-        if self._re2_motifs:
-            self._re2_inference = _manual_junction_set(self._re2_motifs)
-            self._re2_source = "manual"
-        elif read2s and self._barcode_lengths2:
-            self._re2_inference = get_overhangs_from_barcoded_reads(
-                read2s,
-                _barcode_patterns_by_length(self._names_to_barcodes, 1),
-                20,
-                self.max_reads_kmer,
-                self.cores,
-                self.log_level,
-                label="R2 cutsite motif inference",
-                max_barcode_boundary_slack=self.barcode_boundary_slack,
+        if read2s and self._barcode_lengths2:
+            (
+                self._re2_motifs,
+                self._re2_inference,
+                self._re2_source,
+                self._re2_detected_inference,
+                self._re2_motif_decision,
+            ) = self._resolve_read_end_cutsite_motifs(
+                read_end="R2",
+                fastqs=read2s,
+                barcode_index=1,
+                manual_motifs=self._re2_motifs,
             )
-            self._re2_motifs = self._re2_inference.motifs
-            self._re2_source = "auto"
-            warn_multi_motif_inference("R2", self._re2_inference, self.max_reads_kmer)
         else:
             self._re2_inference = _manual_junction_set(self._re2_motifs)
             self._re2_source = "manual" if self._re2_motifs else None
+            if self._re2_motifs:
+                self._re2_motif_decision = "R2 inference not required; using manual motifs"
 
         logger.info(
             "cutsite motifs set to R1={}",
@@ -946,8 +1040,12 @@ class Demux:
             i7=self.i7,
             re1_source=self._re1_source,
             re1_inference=self._re1_inference,
+            re1_detected_inference=self._re1_detected_inference,
+            re1_motif_decision=self._re1_motif_decision,
             re2_source=self._re2_source,
             re2_inference=self._re2_inference,
+            re2_detected_inference=self._re2_detected_inference,
+            re2_motif_decision=self._re2_motif_decision,
             barcode_boundary_collisions=self._barcode_boundary_collisions,
         )
 

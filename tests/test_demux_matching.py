@@ -606,6 +606,199 @@ def test_demux_pipeline_accepts_multiple_manual_r1_motifs(tmp_path: Path) -> Non
     )
 
 
+def test_demux_manual_r1_motif_still_runs_matching_inference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _write_fastq(tmp_path / "lane.fastq.gz", ["ACGTATCGGAAAA"])
+    barcodes = tmp_path / "barcodes.tsv"
+    barcodes.write_text("sample1 ACGT\n", encoding="utf-8")
+    calls = []
+    logger = _DemuxLoggerStub()
+
+    def fake_barcode_aware_inference(*args, **kwargs):
+        calls.append((args, kwargs))
+        return _junction_set(("ATCGG",), counts=(10,), candidate_offsets=(0,))
+
+    monkeypatch.setattr(demux_module, "get_overhangs_from_barcoded_reads", fake_barcode_aware_inference)
+    monkeypatch.setattr(demux_module, "logger", logger)
+
+    tool = Demux(
+        fastqs=[raw],
+        barcodes=barcodes,
+        cutsite_1="ATCGG",
+        cutsite_2=None,
+        max_mismatch=0,
+        cores=1,
+        chunksize=10,
+        merge_technical_replicates=False,
+        outdir=tmp_path / "out",
+        i7=False,
+        disable_infer_cutsite_motifs=False,
+        max_reads=100,
+        max_reads_kmer=100,
+        log_level="WARNING",
+    )
+    tool.run()
+
+    assert len(calls) == 1
+    assert tool._re1_motifs == ("ATCGG",)
+    assert tool._re1_source == "manual"
+    assert any("match detected motifs" in message for message in logger.messages)
+    assert _read_fastq_sequences(tmp_path / "out" / "sample1_R1.fastq.gz") == ["ATCGGAAAA"]
+
+
+def test_demux_manual_r1_motif_overrides_different_detected_motif(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _write_fastq(tmp_path / "lane.fastq.gz", ["ACGTATCGGAAAA"])
+    barcodes = tmp_path / "barcodes.tsv"
+    barcodes.write_text("sample1 ACGT\n", encoding="utf-8")
+    logger = _DemuxLoggerStub()
+
+    monkeypatch.setattr(
+        demux_module,
+        "get_overhangs_from_barcoded_reads",
+        lambda *args, **kwargs: _junction_set(("GGGGG",), counts=(10,), candidate_offsets=(0,)),
+    )
+    monkeypatch.setattr(demux_module, "logger", logger)
+
+    tool = Demux(
+        fastqs=[raw],
+        barcodes=barcodes,
+        cutsite_1="ATCGG",
+        cutsite_2=None,
+        max_mismatch=0,
+        cores=1,
+        chunksize=10,
+        merge_technical_replicates=False,
+        outdir=tmp_path / "out",
+        i7=False,
+        disable_infer_cutsite_motifs=False,
+        max_reads=100,
+        max_reads_kmer=100,
+        log_level="WARNING",
+    )
+    tool.run()
+
+    stats_text = (tmp_path / "out" / "ipyrad_demux_stats_0.txt").read_text(encoding="utf-8")
+
+    assert any("do not match" in message and "overrule" in message for message in logger.messages)
+    assert _read_fastq_sequences(tmp_path / "out" / "sample1_R1.fastq.gz") == ["ATCGGAAAA"]
+    assert "detected" in stats_text
+    assert "selected" in stats_text
+    assert "GGGGG" in stats_text
+    assert "ATCGG" in stats_text
+    assert "manual motifs override detected motifs" in stats_text
+
+
+def test_demux_manual_r1_motif_warns_and_proceeds_when_inference_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _write_fastq(tmp_path / "lane.fastq.gz", ["ACGTATCGGAAAA"])
+    barcodes = tmp_path / "barcodes.tsv"
+    barcodes.write_text("sample1 ACGT\n", encoding="utf-8")
+    logger = _DemuxLoggerStub()
+
+    def fake_barcode_aware_inference(*args, **kwargs):
+        raise IPyradError("no motifs found")
+
+    monkeypatch.setattr(demux_module, "get_overhangs_from_barcoded_reads", fake_barcode_aware_inference)
+    monkeypatch.setattr(demux_module, "logger", logger)
+
+    tool = Demux(
+        fastqs=[raw],
+        barcodes=barcodes,
+        cutsite_1="ATCGG",
+        cutsite_2=None,
+        max_mismatch=0,
+        cores=1,
+        chunksize=10,
+        merge_technical_replicates=False,
+        outdir=tmp_path / "out",
+        i7=False,
+        disable_infer_cutsite_motifs=False,
+        max_reads=100,
+        max_reads_kmer=100,
+        log_level="WARNING",
+    )
+    tool.run()
+
+    stats_text = (tmp_path / "out" / "ipyrad_demux_stats_0.txt").read_text(encoding="utf-8")
+
+    assert any("inference failed" in message and "Using user-defined motifs" in message for message in logger.messages)
+    assert _read_fastq_sequences(tmp_path / "out" / "sample1_R1.fastq.gz") == ["ATCGGAAAA"]
+    assert "inference failed; using manual motifs" in stats_text
+
+
+def test_demux_disable_infer_with_manual_motif_does_not_run_kmer_inference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _write_fastq(tmp_path / "lane.fastq.gz", ["ACGTATCGGAAAA"])
+    barcodes = tmp_path / "barcodes.tsv"
+    barcodes.write_text("sample1 ACGT\n", encoding="utf-8")
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("kmer inference should not run")
+
+    monkeypatch.setattr(demux_module, "get_overhangs_from_barcoded_reads", fail_if_called)
+
+    tool = Demux(
+        fastqs=[raw],
+        barcodes=barcodes,
+        cutsite_1="ATCGG",
+        cutsite_2=None,
+        max_mismatch=0,
+        cores=1,
+        chunksize=10,
+        merge_technical_replicates=False,
+        outdir=tmp_path / "out",
+        i7=False,
+        disable_infer_cutsite_motifs=True,
+        max_reads=100,
+        max_reads_kmer=100,
+        log_level="WARNING",
+    )
+    tool.run()
+
+    assert _read_fastq_sequences(tmp_path / "out" / "sample1_R1.fastq.gz") == ["ATCGGAAAA"]
+
+
+def test_demux_without_manual_motif_still_fails_when_inference_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _write_fastq(tmp_path / "lane.fastq.gz", ["ACGTATCGGAAAA"])
+    barcodes = tmp_path / "barcodes.tsv"
+    barcodes.write_text("sample1 ACGT\n", encoding="utf-8")
+
+    def fake_barcode_aware_inference(*args, **kwargs):
+        raise IPyradError("no motifs found")
+
+    monkeypatch.setattr(demux_module, "get_overhangs_from_barcoded_reads", fake_barcode_aware_inference)
+
+    with pytest.raises(IPyradError, match="no motifs found"):
+        Demux(
+            fastqs=[raw],
+            barcodes=barcodes,
+            cutsite_1=None,
+            cutsite_2=None,
+            max_mismatch=0,
+            cores=1,
+            chunksize=10,
+            merge_technical_replicates=False,
+            outdir=tmp_path / "out",
+            i7=False,
+            disable_infer_cutsite_motifs=False,
+            max_reads=100,
+            max_reads_kmer=100,
+            log_level="WARNING",
+        )
+
+
 def test_demux_writes_multi_motif_inference_stats_and_demuxes_both_classes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

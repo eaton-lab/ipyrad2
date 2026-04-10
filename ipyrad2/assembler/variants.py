@@ -67,7 +67,9 @@ def _get_sorted_chunk_vcfs(vcf_dir: Path) -> list[Path]:
         if match:
             chunk_vcfs.append((int(match.group(1)), path))
     if not chunk_vcfs:
-        raise IPyradError(f"No chunk VCFs found in {vcf_dir}. Expected files like chunk-0.vcf.gz.")
+        raise IPyradError(
+            f"No chunk VCFs found in {vcf_dir}. Expected files like chunk-0.vcf.gz."
+        )
     return [path for _, path in sorted(chunk_vcfs)]
 
 
@@ -137,7 +139,9 @@ def load_variant_postfilter_stats(tmpdir: Path) -> dict[str, int]:
     return stats
 
 
-def _merge_sorted_intervals(intervals: list[tuple[str, int, int]]) -> list[tuple[str, int, int]]:
+def _merge_sorted_intervals(
+    intervals: list[tuple[str, int, int]],
+) -> list[tuple[str, int, int]]:
     """Merge sorted BED intervals using bedtools-like book-ended semantics."""
     merged: list[tuple[str, int, int]] = []
     for chrom, start, end in intervals:
@@ -263,7 +267,8 @@ def apply_wgs_het_allele_balance_mask(
 
                     stats["wgs_het_genotypes_examined_for_allele_balance"] += 1
                     if any(
-                        (ad_counts[allele] / called_depth) < low or (ad_counts[allele] / called_depth) > high
+                        (ad_counts[allele] / called_depth) < low
+                        or (ad_counts[allele] / called_depth) > high
                         for allele in alleles
                     ):
                         parts[gt_idx] = "./."
@@ -276,14 +281,19 @@ def apply_wgs_het_allele_balance_mask(
             return stats
 
         cmd1 = [
-            BIN_BCF, "+fill-tags",
+            BIN_BCF,
+            "+fill-tags",
             str(tmp_plain),
             "--",
-            "-t", "AC,AN,AF,MAF,F_MISSING",
+            "-t",
+            "AC,AN,AF,MAF,F_MISSING",
         ]
         cmd2 = [
-            BIN_BCF, "view",
-            "-Oz", "-o", str(tmp_gz),
+            BIN_BCF,
+            "view",
+            "-Oz",
+            "-o",
+            str(tmp_gz),
             "-",
         ]
         run_pipeline([cmd1, cmd2])
@@ -351,7 +361,9 @@ def summarize_variant_support_by_sample_type(
     return stats
 
 
-def _get_indel_alt_spans(pos1: int, ref: str, alts: list[str]) -> dict[int, tuple[int, int]]:
+def _get_indel_alt_spans(
+    pos1: int, ref: str, alts: list[str]
+) -> dict[int, tuple[int, int]]:
     """Return exact reference spans for indel ALT alleles in one VCF record."""
     pos0 = pos1 - 1
     spans: dict[int, tuple[int, int]] = {}
@@ -368,7 +380,9 @@ def _get_indel_alt_spans(pos1: int, ref: str, alts: list[str]) -> dict[int, tupl
 def _write_overlapping_indel_cluster_masks(tmpdir: Path) -> dict[str, Path]:
     """Prune overlapping-indel clusters and write affected-sample mask BEDs."""
     vcf_dir = tmpdir / "vcfs"
-    resolved_vcf = _require_nonempty_file(vcf_dir / "variants.resolved.vcf.gz", "Resolved project VCF")
+    resolved_vcf = _require_nonempty_file(
+        vcf_dir / "variants.resolved.vcf.gz", "Resolved project VCF"
+    )
     resolved_index = resolved_vcf.with_suffix(resolved_vcf.suffix + ".csi")
     pre_overlap_vcf = vcf_dir / "variants.resolved.pre_overlap_clusters.vcf.gz"
     pre_overlap_index = pre_overlap_vcf.with_suffix(pre_overlap_vcf.suffix + ".csi")
@@ -454,7 +468,10 @@ def _write_overlapping_indel_cluster_masks(tmpdir: Path) -> dict[str, Path]:
         # across the cluster keep the reference-coincident sequence.
         for sample_idx, sname in enumerate(sample_names):
             if any(
-                any(allele in record["indel_alt_indexes"] for allele in _parse_gt_alleles(record["sample_fields"][sample_idx]))
+                any(
+                    allele in record["indel_alt_indexes"]
+                    for allele in _parse_gt_alleles(record["sample_fields"][sample_idx])
+                )
                 for record in records
             ):
                 per_sample_intervals[sname].append((chrom, start0, end0))
@@ -497,9 +514,13 @@ def _write_overlapping_indel_cluster_masks(tmpdir: Path) -> dict[str, Path]:
     # Drop the ambiguous overlap-cluster records from the canonical resolved VCF
     # before consensus so bcftools never has to arbitrate between them.
     cmd = [
-        BIN_BCF, "view",
-        "-T", f"^{str(overlap_bed)}",
-        "-Oz", "-o", str(tmp_vcf),
+        BIN_BCF,
+        "view",
+        "-T",
+        f"^{str(overlap_bed)}",
+        "-Oz",
+        "-o",
+        str(tmp_vcf),
         str(pre_overlap_vcf),
     ]
     run_pipeline([cmd])
@@ -530,9 +551,16 @@ def _write_overlapping_indel_cluster_masks(tmpdir: Path) -> dict[str, Path]:
     return sample_mask_paths
 
 
-def get_chunked_loci_beds(tmpdir: Path, nchunks: int) -> list[Path]:
-    """Split the canonical loci BED into approximately even chunk BEDs."""
-    loci_bed = _require_nonempty_file(tmpdir / "beds" / "loci.bed", "Canonical loci BED")
+def get_chunked_loci_beds(
+    tmpdir: Path,
+    nchunks: int,
+    source_bed: Path | None = None,
+) -> list[Path]:
+    """Split the selected loci BED into approximately even chunk BEDs."""
+    loci_bed = _require_nonempty_file(
+        Path(source_bed) if source_bed is not None else tmpdir / "beds" / "loci.bed",
+        "Callable loci BED" if source_bed is not None else "Canonical loci BED",
+    )
     lines = [line for line in loci_bed.read_text().splitlines() if line.strip()]
     if not lines:
         raise ValueError(f"No loci found in {loci_bed}.")
@@ -544,8 +572,8 @@ def get_chunked_loci_beds(tmpdir: Path, nchunks: int) -> list[Path]:
     for k in range(nchunks):
         chunk_bed = tmpdir / "beds" / f"chunk-{i}.bed"
         size = q + (1 if k < r else 0)
-        chunk = lines[i: i+size]
-        with open(chunk_bed, 'w', encoding="utf-8") as out:
+        chunk = lines[i : i + size]
+        with open(chunk_bed, "w", encoding="utf-8") as out:
             out.write("\n".join(chunk))
         paths.append(chunk_bed)
         i += size
@@ -564,7 +592,11 @@ def apply_sample_region_masks_to_resolved_vcf(
     genotype-missing semantics without repeatedly rewriting the larger project
     VCF earlier in the assemble workflow.
     """
-    current_vcf = Path(vcf_gz) if vcf_gz is not None else tmpdir / "vcfs" / "variants.resolved.vcf.gz"
+    current_vcf = (
+        Path(vcf_gz)
+        if vcf_gz is not None
+        else tmpdir / "vcfs" / "variants.resolved.vcf.gz"
+    )
     current_index = current_vcf.with_suffix(current_vcf.suffix + ".csi")
     vcf_dir = tmpdir / "vcfs"
 
@@ -602,9 +634,15 @@ def apply_sample_region_masks_to_resolved_vcf(
             handle.write(f"{sname}\n")
             sample_list = Path(handle.name)
         masked_subset_vcf = vcf_dir / f"variants.resolved.{sname}.masked.region.vcf.gz"
-        masked_subset_index = masked_subset_vcf.with_suffix(masked_subset_vcf.suffix + ".csi")
-        unmasked_subset_vcf = vcf_dir / f"variants.resolved.{sname}.unmasked.region.vcf.gz"
-        unmasked_subset_index = unmasked_subset_vcf.with_suffix(unmasked_subset_vcf.suffix + ".csi")
+        masked_subset_index = masked_subset_vcf.with_suffix(
+            masked_subset_vcf.suffix + ".csi"
+        )
+        unmasked_subset_vcf = (
+            vcf_dir / f"variants.resolved.{sname}.unmasked.region.vcf.gz"
+        )
+        unmasked_subset_index = unmasked_subset_vcf.with_suffix(
+            unmasked_subset_vcf.suffix + ".csi"
+        )
         tmp_vcf = vcf_dir / f"variants.resolved.{sname}.masked.vcf.gz"
         tmp_index = tmp_vcf.with_suffix(tmp_vcf.suffix + ".csi")
         sample_expr = f'GT[@{sample_list}]="mis" | GT[@{sample_list}]!="mis"'
@@ -613,42 +651,58 @@ def apply_sample_region_masks_to_resolved_vcf(
             # Split into masked and unmasked subsets, rewrite only the targeted
             # sample inside the masked subset, then reassemble one sorted VCF.
             cmd1 = [
-                BIN_BCF, "view",
-                "-T", str(mask_bed),
+                BIN_BCF,
+                "view",
+                "-T",
+                str(mask_bed),
                 str(current_vcf),
                 "-Ou",
             ]
             cmd2 = [
-                BIN_BCF, "+setGT",
+                BIN_BCF,
+                "+setGT",
                 "-",
-                "-Oz", "-o", str(masked_subset_vcf),
+                "-Oz",
+                "-o",
+                str(masked_subset_vcf),
                 "--",
-                "-t", "q",
-                "-n", ".",
-                "-i", sample_expr,
+                "-t",
+                "q",
+                "-n",
+                ".",
+                "-i",
+                sample_expr,
             ]
             run_pipeline([cmd1, cmd2])
             run_pipeline([[BIN_BCF, "index", "-f", "-c", str(masked_subset_vcf)]])
 
             cmd = [
-                BIN_BCF, "view",
-                "-T", f"^{str(mask_bed)}",
-                "-Oz", "-o", str(unmasked_subset_vcf),
+                BIN_BCF,
+                "view",
+                "-T",
+                f"^{str(mask_bed)}",
+                "-Oz",
+                "-o",
+                str(unmasked_subset_vcf),
                 str(current_vcf),
             ]
             run_pipeline([cmd])
             run_pipeline([[BIN_BCF, "index", "-f", "-c", str(unmasked_subset_vcf)]])
 
             cmd1 = [
-                BIN_BCF, "concat",
+                BIN_BCF,
+                "concat",
                 "-a",
                 str(masked_subset_vcf),
                 str(unmasked_subset_vcf),
                 "-Ou",
             ]
             cmd2 = [
-                BIN_BCF, "sort",
-                "-Oz", "-o", str(tmp_vcf),
+                BIN_BCF,
+                "sort",
+                "-Oz",
+                "-o",
+                str(tmp_vcf),
             ]
             run_pipeline([cmd1, cmd2])
             run_pipeline([[BIN_BCF, "index", "-f", "-c", str(tmp_vcf)]])
@@ -693,31 +747,49 @@ def get_group_called_variants_in_vcf_chunks(
     # Compute genotype likelihoods only inside this chunk BED, then call and
     # keep just SNP and indel records in one per-chunk compressed VCF.
     cmd1 = [
-        BIN_BCF, "mpileup",
-        "-f", str(reference),
-        "-q", str(min_map_q),
-        "-Q", str(min_base_q),
-        "-d", str(5000),
-        "-a", "FMT/DP,FMT/AD",
-        "-R", str(locus_chunk),
-        "--threads", str(threads_mpileup),
+        BIN_BCF,
+        "mpileup",
+        "-f",
+        str(reference),
+        "-q",
+        str(min_map_q),
+        "-Q",
+        str(min_base_q),
+        "-d",
+        str(5000),
+        "-a",
+        "FMT/DP,FMT/AD",
+        "-R",
+        str(locus_chunk),
+        "--threads",
+        str(threads_mpileup),
         "-Ou",
     ] + [str(i) for i in bam_files]
 
     cmd2 = [
-        BIN_BCF, "call",
+        BIN_BCF,
+        "call",
         "-m",
-        "-a", "GQ",
-        "-G", str(group_samples_file) if group_samples_file is not None else "-",
-        "--ploidy", "2",
+        "-a",
+        "GQ",
+        "-G",
+        str(group_samples_file) if group_samples_file is not None else "-",
+        "--ploidy",
+        "2",
         "-Ou",
-        "--threads", "1",
+        "--threads",
+        "1",
     ]
     cmd3 = [
-        BIN_BCF, "view",
-        "-v", "snps,indels",
-        "--threads", "1",
-        "-Oz", "-o", str(out_vcf_gz),
+        BIN_BCF,
+        "view",
+        "-v",
+        "snps,indels",
+        "--threads",
+        "1",
+        "-Oz",
+        "-o",
+        str(out_vcf_gz),
     ]
     run_pipeline([cmd1, cmd2, cmd3])
     return out_vcf_gz
@@ -732,18 +804,26 @@ def get_concat_chunk_vcfs(tmpdir: Path, threads: int):
         _require_existing_file(chunk_vcf, "Chunk VCF")
 
     cmd = [
-        BIN_BCF, "concat",
-        "--threads", str(threads),
-        "-Oz", "-o", str(out_vcf_gz),
+        BIN_BCF,
+        "concat",
+        "--threads",
+        str(threads),
+        "-Oz",
+        "-o",
+        str(out_vcf_gz),
         "-W",
     ] + [str(i) for i in sorted_vcfs]
     run_pipeline([cmd])
     return out_vcf_gz
 
 
-def get_filtered_vcf(tmpdir: Path, min_read_depth: int, min_geno_q: int, min_site_q: int, threads: int) -> Path:
+def get_filtered_vcf(
+    tmpdir: Path, min_read_depth: int, min_geno_q: int, min_site_q: int, threads: int
+) -> Path:
     """Mask low-confidence genotypes and annotate the filtered project VCF."""
-    in_vcf_gz = _require_nonempty_file(tmpdir / "vcfs" / "loci.raw.vcf.gz", "Raw project VCF")
+    in_vcf_gz = _require_nonempty_file(
+        tmpdir / "vcfs" / "loci.raw.vcf.gz", "Raw project VCF"
+    )
     out_vcf_gz = tmpdir / "vcfs" / "loci.filtered.vcf.gz"
     out_vcf_tmp = out_vcf_gz.with_suffix(out_vcf_gz.suffix + ".tmp")
 
@@ -754,34 +834,54 @@ def get_filtered_vcf(tmpdir: Path, min_read_depth: int, min_geno_q: int, min_sit
 
     expr_gt_mask = f"FMT/DP<{dp_min} | FMT/GQ<{gq_min}"
     cmd1 = [
-        BIN_BCF, "+setGT", str(in_vcf_gz),
+        BIN_BCF,
+        "+setGT",
+        str(in_vcf_gz),
         "--",
-        "-t", "q",
-        "-n", ".",
-        "-i", expr_gt_mask,
+        "-t",
+        "q",
+        "-n",
+        ".",
+        "-i",
+        expr_gt_mask,
     ]
 
     expr_site_mask = f"QUAL<{qual_min}"
     cmd2 = [
-        BIN_BCF, "filter",
-        "-S", ".",
-        "-s", "lowQual",
-        "-e", expr_site_mask,
-        "--threads", str(threads),
-        "-Ou", "-",
+        BIN_BCF,
+        "filter",
+        "-S",
+        ".",
+        "-s",
+        "lowQual",
+        "-e",
+        expr_site_mask,
+        "--threads",
+        str(threads),
+        "-Ou",
+        "-",
     ]
 
     cmd3 = [
-        BIN_BCF, "+fill-tags", "-",
+        BIN_BCF,
+        "+fill-tags",
+        "-",
         "--",
-        "-t", "AC,AN,AF,MAF,F_MISSING",
+        "-t",
+        "AC,AN,AF,MAF,F_MISSING",
     ]
 
     remove_tags = "FORMAT/PL,FORMAT/GQ,INFO/RPBZ,INFO/SCBZ,INFO/MQBZ,INFO/BQBZ,INFO/MQSBZ,INFO/DP4,INFO/VDB,INFO/MQ0F,INFO/SGB"
-    cmd4 = [BIN_BCF, "annotate",
-        "-x", remove_tags,
-        "-Oz", "-o", str(out_vcf_tmp),
-        "--threads", str(threads),
+    cmd4 = [
+        BIN_BCF,
+        "annotate",
+        "-x",
+        remove_tags,
+        "-Oz",
+        "-o",
+        str(out_vcf_tmp),
+        "--threads",
+        str(threads),
         "-",
     ]
 
@@ -795,22 +895,30 @@ def get_filtered_vcf(tmpdir: Path, min_read_depth: int, min_geno_q: int, min_sit
 
 def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) -> Path:
     """Build the canonical resolved VCF used by consensus and final outputs."""
-    in_vcf_gz = _require_nonempty_file(tmpdir / "vcfs" / "loci.filtered.vcf.gz", "Filtered project VCF")
+    in_vcf_gz = _require_nonempty_file(
+        tmpdir / "vcfs" / "loci.filtered.vcf.gz", "Filtered project VCF"
+    )
     _require_existing_file(reference, "Reference FASTA")
     out_vcf_gz = tmpdir / "vcfs" / "variants.resolved.vcf.gz"
     vcf_dir = tmpdir / "vcfs"
     bed_dir = tmpdir / "beds"
-    indel_beds = bed_dir / 'indel.regions.bed'
+    indel_beds = bed_dir / "indel.regions.bed"
 
     # Normalize into one-record-per-ALT form so SNP/indel separation and
     # span-based masking are based on explicit, stable records.
     cmd1 = [
-        BIN_BCF, "norm",
-        "-f", str(reference),
-        "-m", "-both",
-        "--threads", str(threads),
+        BIN_BCF,
+        "norm",
+        "-f",
+        str(reference),
+        "-m",
+        "-both",
+        "--threads",
+        str(threads),
         "-W",
-        "-Oz", "-o", str(vcf_dir / "norm.vcf.gz"),
+        "-Oz",
+        "-o",
+        str(vcf_dir / "norm.vcf.gz"),
         str(in_vcf_gz),
     ]
     run_pipeline([cmd1])
@@ -818,20 +926,30 @@ def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) ->
     # Split the normalized records so simple SNP cleanup can happen without
     # losing the original indel records.
     cmd1 = [
-        BIN_BCF, "view",
-        "-v", "snps",
-        "-Oz", "-o", str(vcf_dir / "snps.vcf.gz"),
-        "--threads", str(threads),
+        BIN_BCF,
+        "view",
+        "-v",
+        "snps",
+        "-Oz",
+        "-o",
+        str(vcf_dir / "snps.vcf.gz"),
+        "--threads",
+        str(threads),
         "-W",
         str(vcf_dir / "norm.vcf.gz"),
     ]
     run_pipeline([cmd1])
 
     cmd1 = [
-        BIN_BCF, "view",
-        "-v", "indels",
-        "-Oz", "-o", str(vcf_dir / "indels.vcf.gz"),
-        "--threads", str(threads),
+        BIN_BCF,
+        "view",
+        "-v",
+        "indels",
+        "-Oz",
+        "-o",
+        str(vcf_dir / "indels.vcf.gz"),
+        "--threads",
+        str(threads),
         "-W",
         str(vcf_dir / "norm.vcf.gz"),
     ]
@@ -842,14 +960,16 @@ def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) ->
     awk_prog = (
         r'BEGIN{OFS="\t"}'
         r'{chrom=$1; pos0=$2; ref=$4; n=split($5,alts,",");'
-        r' for(i=1;i<=n;i++){alt=alts[i];'
-        r'  if(length(ref)>length(alt)){print chrom, pos0, pos0+length(ref);} '
-        r'  else if(length(alt)>length(ref)){print chrom, pos0, pos0+1;} '
-        r' }}'
+        r" for(i=1;i<=n;i++){alt=alts[i];"
+        r"  if(length(ref)>length(alt)){print chrom, pos0, pos0+length(ref);} "
+        r"  else if(length(alt)>length(ref)){print chrom, pos0, pos0+1;} "
+        r" }}"
     )
     cmd1 = [
-        BIN_BCF, "query",
-        "-f", r"%CHROM\t%POS0\t%POS\t%REF\t%ALT\n",
+        BIN_BCF,
+        "query",
+        "-f",
+        r"%CHROM\t%POS0\t%POS\t%REF\t%ALT\n",
         str(vcf_dir / "indels.vcf.gz"),
     ]
     cmd2 = ["awk", awk_prog]
@@ -860,14 +980,20 @@ def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) ->
     if indel_beds.stat().st_size == 0:
         logger.info("no indels found after filtering; resolved VCF remains SNP-only")
         cmd1 = [
-            BIN_BCF, "norm",
-            "-m", "+snps",
-            "--threads", str(threads),
+            BIN_BCF,
+            "norm",
+            "-m",
+            "+snps",
+            "--threads",
+            str(threads),
             str(vcf_dir / "snps.vcf.gz"),
         ]
         cmd2 = [
-            BIN_BCF, "sort",
-            "-Oz", "-o", str(out_vcf_gz),
+            BIN_BCF,
+            "sort",
+            "-Oz",
+            "-o",
+            str(out_vcf_gz),
             "-W",
         ]
         run_pipeline([cmd1, cmd2])
@@ -877,10 +1003,15 @@ def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) ->
 
     # Drop only SNPs whose reference spans overlap indel-affected intervals.
     cmd1 = [
-        BIN_BCF, "view",
-        "-T", f"^{str(indel_beds)}",
-        "-Oz", "-o", str(vcf_dir / "snps.clean.vcf.gz"),
-        "--threads", str(threads),
+        BIN_BCF,
+        "view",
+        "-T",
+        f"^{str(indel_beds)}",
+        "-Oz",
+        "-o",
+        str(vcf_dir / "snps.clean.vcf.gz"),
+        "--threads",
+        str(threads),
         "-W",
         str(vcf_dir / "snps.vcf.gz"),
     ]
@@ -889,17 +1020,25 @@ def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) ->
     # Recombine cleaned SNPs with indels, then collapse same-position biallelic
     # records back to multiallelic form for the canonical resolved VCF.
     cmd1 = [
-        BIN_BCF, "concat",
+        BIN_BCF,
+        "concat",
         "-a",
-        "-Oz", "-o", str(vcf_dir / "combined.vcf.gz"),
-        "--threads", str(threads),
+        "-Oz",
+        "-o",
+        str(vcf_dir / "combined.vcf.gz"),
+        "--threads",
+        str(threads),
         str(vcf_dir / "snps.clean.vcf.gz"),
         str(vcf_dir / "indels.vcf.gz"),
     ]
     cmd2 = [
-        BIN_BCF, "sort",
-        "-Oz", "-o", str(vcf_dir / "combined.sorted.vcf.gz"),
-        "-T", str(vcf_dir),
+        BIN_BCF,
+        "sort",
+        "-Oz",
+        "-o",
+        str(vcf_dir / "combined.sorted.vcf.gz"),
+        "-T",
+        str(vcf_dir),
         "-W",
         str(vcf_dir / "combined.vcf.gz"),
     ]
@@ -907,14 +1046,20 @@ def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) ->
     run_pipeline([cmd2])
 
     cmd1 = [
-        BIN_BCF, "norm",
-        "-m", "+both",
-        "--threads", str(threads),
+        BIN_BCF,
+        "norm",
+        "-m",
+        "+both",
+        "--threads",
+        str(threads),
         str(vcf_dir / "combined.sorted.vcf.gz"),
     ]
     cmd2 = [
-        BIN_BCF, "sort",
-        "-Oz", "-o", str(out_vcf_gz),
+        BIN_BCF,
+        "sort",
+        "-Oz",
+        "-o",
+        str(out_vcf_gz),
         "-W",
     ]
     run_pipeline([cmd1, cmd2])
@@ -927,20 +1072,29 @@ def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) ->
     return out_vcf_gz
 
 
-def compact_resolved_vcf_to_final_loci_contigs(tmpdir: Path, reference: Path, loci_bed: Path) -> Path:
+def compact_resolved_vcf_to_final_loci_contigs(
+    tmpdir: Path, reference: Path, loci_bed: Path
+) -> Path:
     """Trim resolved-VCF contig headers down to the final retained locus scaffolds."""
     loci_bed = _require_nonempty_file(loci_bed, "Final loci BED")
-    resolved_vcf = _require_nonempty_file(tmpdir / "vcfs" / "variants.resolved.vcf.gz", "Resolved project VCF")
+    resolved_vcf = _require_nonempty_file(
+        tmpdir / "vcfs" / "variants.resolved.vcf.gz", "Resolved project VCF"
+    )
     current_index = resolved_vcf.with_suffix(resolved_vcf.suffix + ".csi")
     vcf_dir = tmpdir / "vcfs"
-    subset_fai = write_retained_fai(reference, loci_bed, vcf_dir / "variants.resolved.contigs.fai")
+    subset_fai = write_retained_fai(
+        reference, loci_bed, vcf_dir / "variants.resolved.contigs.fai"
+    )
     tmp_vcf = vcf_dir / "variants.resolved.reheadered.vcf.gz"
     tmp_index = tmp_vcf.with_suffix(tmp_vcf.suffix + ".csi")
 
     cmd = [
-        BIN_BCF, "reheader",
-        "-f", str(subset_fai),
-        "-o", str(tmp_vcf),
+        BIN_BCF,
+        "reheader",
+        "-f",
+        str(subset_fai),
+        "-o",
+        str(tmp_vcf),
         str(resolved_vcf),
     ]
     run_pipeline([cmd])
@@ -955,16 +1109,25 @@ def write_vcf(name: str, outdir: Path, tmpdir: Path, threads: int) -> Path:
     """Write the final SNP-only project VCF trimmed to the final loci BED."""
     loci_bed = _require_nonempty_file(outdir / f"{name}.bed", "Final loci BED")
     out_vcf_gz = outdir / f"{name}.vcf.gz"
-    in_vcf_gz = _require_nonempty_file(tmpdir / "vcfs" / "variants.resolved.vcf.gz", "Resolved project VCF")
+    in_vcf_gz = _require_nonempty_file(
+        tmpdir / "vcfs" / "variants.resolved.vcf.gz", "Resolved project VCF"
+    )
 
     cmd = [
-        BIN_BCF, "view",
-        "-T", str(loci_bed),
-        "-Oz", "-o", str(out_vcf_gz),
-        "--threads", str(threads),
-        "-f", "PASS",
-        "-V", "indels",
-         str(in_vcf_gz),
+        BIN_BCF,
+        "view",
+        "-T",
+        str(loci_bed),
+        "-Oz",
+        "-o",
+        str(out_vcf_gz),
+        "--threads",
+        str(threads),
+        "-f",
+        "PASS",
+        "-V",
+        "indels",
+        str(in_vcf_gz),
     ]
     run_pipeline([cmd])
     run_pipeline([[BIN_BCF, "index", "-f", "-c", str(out_vcf_gz)]])

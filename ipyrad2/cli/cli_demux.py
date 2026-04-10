@@ -93,24 +93,20 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
     )
     mode.add_argument(
         "--barcode-boundary-slack", metavar="int", type=int, choices=(0, 1), default=1,
-        help=(
-            "Maximum barcode-boundary offset allowed for inline barcode matching. "
-            "Use 0 to require barcodes at read position 0; 1 also allows a one-base offset. "
-            "[default=%(default)s]"
-        ),
+        help="Position offset allowed for inline barcode matching [default=%(default)s]"
     )
 
     cutsites.add_argument(
         "-e1", "--cutsite-1", metavar="str", type=str,
-        help="5' restriction-site remnant / cutsite motif at the start of R1. Use commas for multiple motifs; overrides inference.",
+        help="5' cutsite motif at the start of R1. Use commas for multiple motifs",
     )
     cutsites.add_argument(
         "-e2", "--cutsite-2", metavar="str", type=str,
-        help="5' restriction-site remnant / cutsite motif at the start of R2. Use commas for multiple motifs; overrides inference.",
+        help="5' cutsite motif at the start of R2. Use commas for multiple motifs",
     )
     cutsites.add_argument(
         "-E", "--disable-infer-cutsite-motifs", action="store_true",
-        help="Skip cutsite motif inference; use with explicit cutsite motifs.",
+        help="Skip cutsite motif inference; explicit motifs are compared to inferred motifs unless -E is set.",
     )
 
     performance.add_argument(

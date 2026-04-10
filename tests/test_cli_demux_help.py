@@ -60,6 +60,8 @@ def test_demux_help_groups_and_examples_are_updated() -> None:
     assert "ipyrad2 demux: demultiplex pooled reads to sample files by barcode or index" in help_text
     assert "$ ipyrad2 demux -d RAW/*.fastq.gz -b BARCODES.csv --log-level DEBUG" in help_text
     assert "Use commas for multiple motifs" in help_text
+    assert "compared to inferred motifs unless -E is set" in help_text
+    assert "overrides inference" not in help_text
     assert "ipyrad demux" not in help_text
     assert "--logger" not in help_text
     assert "*.fastqs.gz" not in help_text

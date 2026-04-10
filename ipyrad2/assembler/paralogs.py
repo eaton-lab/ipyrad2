@@ -44,6 +44,7 @@ BIN_BCF = str(BIN / "bcftools")
 # Variant calling + masking
 # -------------------------
 
+
 def call_vcf_from_bam(
     bam: Path,
     regions_bed: Path,
@@ -59,32 +60,48 @@ def call_vcf_from_bam(
 ) -> Path:
     """Call SNPs/indels in regions_bed for one sample BAM; writes bgzipped VCF + index."""
     mpileup = [
-        BIN_BCF, "mpileup",
-        "-f", str(reference_fasta),
-        "-q", str(min_map_q),
-        "-Q", str(min_base_q),
-        "-d", str(max_depth),
-        "-a", "FMT/DP,FMT/AD",
-        "-R", str(regions_bed),
-        "--threads", str(threads_mpileup),
+        BIN_BCF,
+        "mpileup",
+        "-f",
+        str(reference_fasta),
+        "-q",
+        str(min_map_q),
+        "-Q",
+        str(min_base_q),
+        "-d",
+        str(max_depth),
+        "-a",
+        "FMT/DP,FMT/AD",
+        "-R",
+        str(regions_bed),
+        "--threads",
+        str(threads_mpileup),
         "-Ob",
         str(bam),
     ]
     call = [
-        BIN_BCF, "call",
+        BIN_BCF,
+        "call",
         "-m",
         "-v",
-        "-a", "GQ",
-        "--ploidy", "2",
-        "--threads", str(threads_call),
+        "-a",
+        "GQ",
+        "--ploidy",
+        "2",
+        "--threads",
+        str(threads_call),
         "-Ob",
     ]
     norm = [
-        BIN_BCF, "norm",
-        "-f", str(reference_fasta),
+        BIN_BCF,
+        "norm",
+        "-f",
+        str(reference_fasta),
         "-Oz",
-        "-o", str(out_vcf_gz),
-        "--threads", str(threads_norm),
+        "-o",
+        str(out_vcf_gz),
+        "--threads",
+        str(threads_norm),
         "--write-index",
     ]
     run_pipeline([mpileup, call, norm])
@@ -115,8 +132,10 @@ def extract_snps_table_tsv(vcf_gz: Path, out_tsv: Path) -> Path:
     """Write TSV of SNPs: chrom, pos0, pos, DP, GQ, AD, GT (sorted)."""
     view = [BIN_BCF, "view", "-v", "snps", str(vcf_gz)]
     query = [
-        BIN_BCF, "query",
-        "-f", "%CHROM\t%POS0\t%POS\t[%DP]\t[%GQ]\t[%AD]\t[%GT]\n",
+        BIN_BCF,
+        "query",
+        "-f",
+        "%CHROM\t%POS0\t%POS\t[%DP]\t[%GQ]\t[%AD]\t[%GT]\n",
     ]
     sort_ = ["sort", "-k1,1", "-k2,2n"]
     run_pipeline([view, query, sort_], out_tsv)
@@ -222,7 +241,9 @@ def softclip_fraction_by_region(
 
         denom = merged["all_reads"].to_numpy(dtype=float)
         numer = merged["scl_reads"].to_numpy(dtype=float)
-        merged["scl_frac"] = np.divide(numer, denom, out=np.zeros_like(numer), where=denom > 0)
+        merged["scl_frac"] = np.divide(
+            numer, denom, out=np.zeros_like(numer), where=denom > 0
+        )
 
         merged["rid"] = (
             merged["chrom"].astype(str)
@@ -251,23 +272,33 @@ def softclip_fraction_by_region(
 
 def read_snps_table(path: str | Path) -> pd.DataFrame:
     """Read SNP TSV: chrom, start, end, DP, GQ, AD, GT."""
-    df = pd.read_csv(
-        path,
-        sep="\t",
-        header=None,
-        names=["chrom", "start", "end", "DP", "GQ", "AD", "GT"],
-        dtype={
-            "chrom": "string",
-            "start": "int64",
-            "end": "int64",
-            "DP": "int64",
-            "GQ": "int64",
-            "AD": "string",
-            "GT": "string",
-        },
-    )
+    dtypes = {
+        "chrom": "string",
+        "start": "int64",
+        "end": "int64",
+        "DP": "int64",
+        "GQ": "int64",
+        "AD": "string",
+        "GT": "string",
+    }
+    path = Path(path)
+    if (not path.exists()) or path.stat().st_size == 0:
+        return pd.DataFrame(
+            {key: pd.Series(dtype=value) for key, value in dtypes.items()}
+        )
+    try:
+        df = pd.read_csv(
+            path,
+            sep="\t",
+            header=None,
+            names=["chrom", "start", "end", "DP", "GQ", "AD", "GT"],
+            dtype=dtypes,
+        )
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame(
+            {key: pd.Series(dtype=value) for key, value in dtypes.items()}
+        )
     return df.sort_values(["chrom", "start"]).reset_index(drop=True)
-
 
 
 def read_regions_bed(path: str | Path) -> pd.DataFrame:
@@ -281,9 +312,14 @@ def read_regions_bed(path: str | Path) -> pd.DataFrame:
         dtype={"chrom": "string", "start": "int64", "end": "int64"},
     )
     df = df.reset_index(drop=True)
-    df["rid"] = df["chrom"].astype(str) + ":" + df["start"].astype(str) + "-" + df["end"].astype(str)
+    df["rid"] = (
+        df["chrom"].astype(str)
+        + ":"
+        + df["start"].astype(str)
+        + "-"
+        + df["end"].astype(str)
+    )
     return df
-
 
 
 def compute_dp_z(dp: np.ndarray) -> np.ndarray:
@@ -295,8 +331,9 @@ def compute_dp_z(dp: np.ndarray) -> np.ndarray:
     return (x - mu) / sd
 
 
-
-def allele_depth_metrics(ad_str: str, dp: int, min_allele_depth: int) -> tuple[int, float, float]:
+def allele_depth_metrics(
+    ad_str: str, dp: int, min_allele_depth: int
+) -> tuple[int, float, float]:
     """Return (alleles_ge_min_ad, maf, third_frac) from AD and DP."""
     if dp <= 0 or ad_str is None:
         return 0, 0.0, 0.0
@@ -339,7 +376,9 @@ def add_site_metrics(df_snps: pd.DataFrame, min_allele_depth: int) -> pd.DataFra
     return pd.concat([out, vals], axis=1)
 
 
-def assign_regions_nonoverlap(df_sites: pd.DataFrame, df_regions: pd.DataFrame) -> pd.DataFrame:
+def assign_regions_nonoverlap(
+    df_sites: pd.DataFrame, df_regions: pd.DataFrame
+) -> pd.DataFrame:
     """Assign each SNP row to a non-overlapping region rid; drops rows outside any region."""
     sites = df_sites.copy()
     sites["rid"] = pd.NA
@@ -400,7 +439,10 @@ def summarize_loci(
         .agg(
             n_snps=("rid", "size"),
             max_snp_site_depth=("DP", "max"),
-            max_snp_depth_z=("dp_z", lambda x: float(np.abs(np.asarray(x)).max()) if len(x) else 0.0),
+            max_snp_depth_z=(
+                "dp_z",
+                lambda x: float(np.abs(np.asarray(x)).max()) if len(x) else 0.0,
+            ),
             n_sites_3allele=("is_3allele_site", "sum"),
             n_sites_3allele_strong=("is_third_strong", "sum"),
             max_frac_3allele=("third_frac", "max"),
@@ -460,8 +502,12 @@ def add_softclip_and_pass(
     return out
 
 
-
-def write_outputs(df_sites: pd.DataFrame, df_locus: pd.DataFrame, df_regions: pd.DataFrame, prefix: str) -> None:
+def write_outputs(
+    df_sites: pd.DataFrame,
+    df_locus: pd.DataFrame,
+    df_regions: pd.DataFrame,
+    prefix: str,
+) -> None:
     """Write site/locus TSVs and good/paralog_like 3-col BEDs."""
     prefix = str(prefix)
 
@@ -476,10 +522,10 @@ def write_outputs(df_sites: pd.DataFrame, df_locus: pd.DataFrame, df_regions: pd
     good_bed.to_csv(f"{prefix}.good.bed", sep="\t", header=False, index=False)
 
 
-
 # -------------------------
 # Orchestration
 # -------------------------
+
 
 def get_sample_paralog_tables(
     bam: Path,
@@ -498,6 +544,7 @@ def get_sample_paralog_tables(
     max_sites_above_maf: int = 8,
     softclip_len_threshold: int | None = None,
     softclip_frac_max: float | None = None,
+    callable_regions_bed: Path | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Within-sample workflow returning (site_table, locus_table).
@@ -513,18 +560,26 @@ def get_sample_paralog_tables(
     snps = tmpdir / f"{prefix}.snps.tsv"
     mask = tmpdir / f"{prefix}.indel_mask.bed"
     snps_masked = tmpdir / f"{prefix}.snps.masked.tsv"
-
-    call_vcf_from_bam(
-        bam=bam,
-        regions_bed=regions_bed,
-        reference_fasta=reference_fasta,
-        out_vcf_gz=vcf,
-        min_map_q=min_map_q,
-        min_base_q=min_base_q,
+    variant_regions_bed = (
+        Path(callable_regions_bed) if callable_regions_bed is not None else regions_bed
     )
-    make_indel_mask_bed(vcf, mask, pad_bp=indel_pad_bp)
-    extract_snps_table_tsv(vcf, snps)
-    mask_snps_table_with_bed(snps, mask, snps_masked)
+
+    if variant_regions_bed.exists() and variant_regions_bed.stat().st_size > 0:
+        call_vcf_from_bam(
+            bam=bam,
+            regions_bed=variant_regions_bed,
+            reference_fasta=reference_fasta,
+            out_vcf_gz=vcf,
+            min_map_q=min_map_q,
+            min_base_q=min_base_q,
+        )
+        make_indel_mask_bed(vcf, mask, pad_bp=indel_pad_bp)
+        extract_snps_table_tsv(vcf, snps)
+        mask_snps_table_with_bed(snps, mask, snps_masked)
+    else:
+        mask.write_text("", encoding="utf-8")
+        snps.write_text("", encoding="utf-8")
+        snps_masked.write_text("", encoding="utf-8")
 
     df_regions = read_regions_bed(regions_bed)
     df_snps = read_snps_table(snps_masked)
@@ -569,7 +624,9 @@ def get_sample_paralog_tables(
             df_locus[key] = value
     for flag in ["fail_dp_z", "fail_3allele", "fail_maf"]:
         if flag in df_locus.columns:
-            df_locus[flag] = pd.array(df_locus[flag], dtype="boolean").fillna(False).astype(bool)
+            df_locus[flag] = (
+                pd.array(df_locus[flag], dtype="boolean").fillna(False).astype(bool)
+            )
         else:
             df_locus[flag] = False
 
@@ -633,7 +690,13 @@ def _read_bed_to_rids(path: Path) -> set[str]:
         return set()
     if df.empty:
         return set()
-    rid = df["chrom"].astype(str) + ":" + df["start"].astype(str) + "-" + df["end"].astype(str)
+    rid = (
+        df["chrom"].astype(str)
+        + ":"
+        + df["start"].astype(str)
+        + "-"
+        + df["end"].astype(str)
+    )
     return set(rid.tolist())
 
 
@@ -700,20 +763,37 @@ def aggregate_across_samples(
         out=np.zeros_like(denom),
         where=denom > 0,
     )
-    out["drop_global"] = (out["n_data"] >= min_data_samples) & (out["fail_frac_among_data"] > fail_frac_max)
+    out["drop_global"] = (out["n_data"] >= min_data_samples) & (
+        out["fail_frac_among_data"] > fail_frac_max
+    )
     out["keep_global"] = (out["n_data"] >= min_data_samples) & (~out["drop_global"])
 
     metrics = df_regions.merge(out.reset_index(), on="rid", how="left")
     metrics.to_csv(f"{out_prefix}.shared_metrics.tsv", sep="\t", index=False)
 
     keep_rids = set(out.index[out["keep_global"]].astype(str))
-    keep_bed = df_regions[df_regions["rid"].astype(str).isin(keep_rids)][["chrom", "start", "end"]]
-    keep_bed.to_csv(f"{out_prefix}.shared_good.final.bed", sep="\t", header=False, index=False)
+    keep_bed = df_regions[df_regions["rid"].astype(str).isin(keep_rids)][
+        ["chrom", "start", "end"]
+    ]
+    keep_bed.to_csv(
+        f"{out_prefix}.shared_good.final.bed", sep="\t", header=False, index=False
+    )
 
-    strict = (out["n_data"] >= min_data_samples) & (out["n_fail"] == 0) & (out["n_good"] == out["n_data"])
+    strict = (
+        (out["n_data"] >= min_data_samples)
+        & (out["n_fail"] == 0)
+        & (out["n_good"] == out["n_data"])
+    )
     strict_rids = set(out.index[strict].astype(str))
-    strict_bed = df_regions[df_regions["rid"].astype(str).isin(strict_rids)][["chrom", "start", "end"]]
-    strict_bed.to_csv(f"{out_prefix}.shared_good.strict_all_samples.bed", sep="\t", header=False, index=False)
+    strict_bed = df_regions[df_regions["rid"].astype(str).isin(strict_rids)][
+        ["chrom", "start", "end"]
+    ]
+    strict_bed.to_csv(
+        f"{out_prefix}.shared_good.strict_all_samples.bed",
+        sep="\t",
+        header=False,
+        index=False,
+    )
     return metrics
 
 
@@ -750,9 +830,12 @@ def write_per_sample_final_good(
 
 
 if __name__ == "__main__":
-
-
-    for sname in ["SLH_AL_0072-conte", "SLH_AL_0064-conte", "SLH_AL_0077-conte", "SLH_AL_0080-conte"]:
+    for sname in [
+        "SLH_AL_0072-conte",
+        "SLH_AL_0064-conte",
+        "SLH_AL_0077-conte",
+        "SLH_AL_0080-conte",
+    ]:
         SNAME = sname
 
         REF = "/home/deren/Documents/ipyrad-tests/examples/Atub-genome/AmaTu_v01_no00_renamed.fa"

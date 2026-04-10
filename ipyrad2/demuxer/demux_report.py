@@ -58,6 +58,31 @@ def warn_multi_motif_inference(
     )
 
 
+def _append_motif_report_rows(
+    rows: List[List[object]],
+    *,
+    read_end: str,
+    role: str,
+    source: str,
+    decision: str,
+    inferred: InferredJunctionSet | None,
+) -> None:
+    """Append motif report rows for one selected or detected motif set."""
+    if inferred is None or not inferred.motifs:
+        return
+    for motif, count, fraction in zip(
+        inferred.motifs,
+        inferred.motif_counts,
+        inferred.motif_support_fractions,
+    ):
+        position = (
+            inferred.position_summary
+            if inferred.position_mode == "barcode_boundary"
+            else f"offset {inferred.offset}"
+        )
+        rows.append([read_end, role, source, decision, position, motif, count, fraction])
+
+
 def format_preserved_file_preview(paths: List[Path]) -> str:
     """Return a short deterministic preview of preserved outdir files."""
     preview = [path.name for path in paths[:PRESERVED_WARNING_PREVIEW]]
@@ -106,8 +131,12 @@ def write_demux_stats(
     i7: bool,
     re1_source: str | None,
     re1_inference: InferredJunctionSet | None,
+    re1_detected_inference: InferredJunctionSet | None,
+    re1_motif_decision: str | None,
     re2_source: str | None,
     re2_inference: InferredJunctionSet | None,
+    re2_detected_inference: InferredJunctionSet | None,
+    re2_motif_decision: str | None,
     barcode_boundary_collisions: List[Dict[str, str]],
 ) -> Path:
     """Write the numbered demux stats report and return its path."""
@@ -138,29 +167,48 @@ def write_demux_stats(
         if not i7:
             outfile.write("# Restriction motif inference\n######################\n")
             motif_rows = []
-            for read_end, source, inferred in (
-                ("R1", re1_source, re1_inference),
-                ("R2", re2_source, re2_inference),
+            for read_end, source, selected, detected, decision in (
+                (
+                    "R1",
+                    re1_source,
+                    re1_inference,
+                    re1_detected_inference,
+                    re1_motif_decision,
+                ),
+                (
+                    "R2",
+                    re2_source,
+                    re2_inference,
+                    re2_detected_inference,
+                    re2_motif_decision,
+                ),
             ):
-                if inferred is None or not inferred.motifs:
-                    continue
-                for motif, count, fraction in zip(
-                    inferred.motifs,
-                    inferred.motif_counts,
-                    inferred.motif_support_fractions,
-                ):
-                    position = (
-                        inferred.position_summary
-                        if inferred.position_mode == "barcode_boundary"
-                        else f"offset {inferred.offset}"
+                decision = decision or ""
+                if source == "manual":
+                    _append_motif_report_rows(
+                        motif_rows,
+                        read_end=read_end,
+                        role="detected",
+                        source="auto",
+                        decision=decision,
+                        inferred=detected,
                     )
-                    motif_rows.append([read_end, source or "", position, motif, count, fraction])
+                _append_motif_report_rows(
+                    motif_rows,
+                    read_end=read_end,
+                    role="selected",
+                    source=source or "",
+                    decision=decision,
+                    inferred=selected,
+                )
             if motif_rows:
                 motif_df = pd.DataFrame(
                     motif_rows,
                     columns=[
                         "read_end",
+                        "role",
                         "source",
+                        "decision",
                         "position",
                         "motif",
                         "support",

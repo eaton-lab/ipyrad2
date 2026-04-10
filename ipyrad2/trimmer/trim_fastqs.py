@@ -15,6 +15,7 @@ python trim_fastqs.py FQs ...
 from __future__ import annotations
 
 from typing import Tuple, List, Dict, Any, Sequence
+import shlex
 import os
 import sys
 import json
@@ -124,6 +125,16 @@ def _format_motif_set(junction: InferredJunctionSet) -> str:
     """Return a short human-readable description of a motif set."""
     motifs = ", ".join(junction.motifs) if junction.motifs else "<none>"
     return f"[{motifs}] at offset {junction.offset}"
+
+
+def _format_command(cmd: Sequence[str]) -> str:
+    """Return a shell-readable command string."""
+    return shlex.join(str(arg) for arg in cmd)
+
+
+def _format_fastp_command_template(cmd: Sequence[str], sname: str) -> str:
+    """Return a representative fastp command with sample name placeholders."""
+    return _format_command(str(arg).replace(sname, "{sample}") for arg in cmd)
 
 
 def _warn_multi_motif_inference(
@@ -444,7 +455,6 @@ def trim_sample_with_fastp(
     )
 
     # run the command in subprocess
-    logger.debug(f"CMD: {' '.join(cmd)}")
     input_paths = ", ".join(
         str(path) for path in fastqs
         if path is not None and path.name != "-null-"
@@ -453,7 +463,8 @@ def trim_sample_with_fastp(
         run_pipeline([cmd])
     except Exception as err:
         raise IPyradError(
-            f"fastp failed for sample '{sname}' on input(s) {input_paths}: {err}"
+            f"fastp failed for sample '{sname}' on input(s) {input_paths}; "
+            f"command: {_format_command(cmd)}; error: {err}"
         ) from err
     html_idx = cmd.index("--html") + 1
     html_report = Path(cmd[html_idx])
@@ -630,6 +641,7 @@ def run_trimmer(
     jobs = {}
     logger.info(f"trimming/filtering {len(fastq_dict)} samples with 'fastp' and writing to {outdir}")
     logger.info(f"running up to {workers} parallel jobs each using up to {threads} threads")
+    logged_fastp_command = False
     for sname, fastq_tuple in fastq_dict.items():
         kwargs = dict(
             fastqs=fastq_tuple,
@@ -650,6 +662,10 @@ def run_trimmer(
             umi_tag_in_i5=umi_tag_in_i5,
             threads=threads,  # recommended >=3 since 2 are used for i/o
         )
+        if not logged_fastp_command:
+            cmd = _build_fastp_command(**kwargs)
+            logger.debug("CMD: {}", _format_fastp_command_template(cmd, sname))
+            logged_fastp_command = True
         jobs[sname] = (trim_sample_with_fastp, kwargs)
     results = run_with_pool(jobs, log_level, workers, msg="Trimming")
     write_stats_summary(sorted(results), outdir)

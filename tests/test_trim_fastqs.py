@@ -496,6 +496,83 @@ def test_run_trimmer_logs_preflight_summary(
     )
 
 
+def test_run_trimmer_logs_one_fastp_command_template(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fastp_binary = _write_executable(tmp_path / "fastp")
+    adapters = _write_file(tmp_path / "adapters.fa", ">adapter\nACGT\n")
+    alpha_r1 = _write_fastq(tmp_path / "alpha_R1.fastq.gz", [("r1", "ACGT", "IIII")])
+    alpha_r2 = _write_fastq(tmp_path / "alpha_R2.fastq.gz", [("r1", "TGCA", "IIII")])
+    beta_r1 = _write_fastq(tmp_path / "beta_R1.fastq.gz", [("r1", "ACGT", "IIII")])
+    beta_r2 = _write_fastq(tmp_path / "beta_R2.fastq.gz", [("r1", "TGCA", "IIII")])
+    messages: list[str] = []
+
+    stub_logger = type(
+        "LoggerStub",
+        (),
+        {
+            "info": staticmethod(lambda *args: None),
+            "warning": staticmethod(lambda *args: None),
+            "debug": staticmethod(lambda *args: messages.append(args[0].format(*args[1:]))),
+        },
+    )
+
+    monkeypatch.setattr(trim_fastqs, "FASTP_BINARY", fastp_binary)
+    monkeypatch.setattr(trim_fastqs, "ADAPTERS", adapters)
+    monkeypatch.setattr(trim_fastqs, "logger", stub_logger)
+    monkeypatch.setattr(
+        trim_fastqs,
+        "get_name_to_fastq_dict",
+        lambda fastqs, delim_str, delim_idx, suffix: {
+            "alpha": (alpha_r1, alpha_r2),
+            "beta": (beta_r1, beta_r2),
+        },
+    )
+    monkeypatch.setattr(
+        trim_fastqs,
+        "run_with_pool",
+        lambda jobs, log_level, max_workers=None, max_inflight=None, msg="Processing": {
+            key: None for key in jobs
+        },
+    )
+    monkeypatch.setattr(trim_fastqs, "write_stats_summary", lambda snames, outdir: None)
+
+    trim_fastqs.run_trimmer(
+        fastqs=[alpha_r1, alpha_r2, beta_r1, beta_r2],
+        outdir=tmp_path / "trimmed",
+        cutsite_motifs=("TGCAG", "CGATC"),
+        max_reads=None,
+        min_trimmed_length=1,
+        max_unqualified_percent=15,
+        min_quality=20,
+        min_mean_window_quality=30,
+        cut_window_size=5,
+        phred64=False,
+        max_reads_kmer=100,
+        max_ns=5,
+        disable_infer_cutsite_motifs=True,
+        disable_adapter_trimming=False,
+        disable_quality_filtering=False,
+        cores=2,
+        threads=1,
+        delim_str=None,
+        delim_idx=1,
+        suffix=None,
+        umi_tag_in_i5=False,
+        force=False,
+        log_level="INFO",
+    )
+
+    cmd_messages = [message for message in messages if message.startswith("CMD: ")]
+    assert len(cmd_messages) == 1
+    assert "{sample}" in cmd_messages[0]
+    assert "alpha" not in cmd_messages[0]
+    assert "beta" not in cmd_messages[0]
+    assert "-i" in cmd_messages[0]
+    assert "-I" in cmd_messages[0]
+
+
 def test_run_trimmer_raises_when_stats_artifact_exists_without_force(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -555,10 +632,7 @@ def test_trim_sample_with_fastp_wraps_pipeline_errors_with_sample_context(
         lambda cmds: (_ for _ in ()).throw(RuntimeError("pipeline failed (rc=1): ['fastp']\nboom")),
     )
 
-    with pytest.raises(
-        IPyradError,
-        match="fastp failed for sample 'sample' on input\\(s\\).*sample_R1\\.fastq\\.gz, .*sample_R2\\.fastq\\.gz: pipeline failed",
-    ):
+    with pytest.raises(IPyradError) as excinfo:
         trim_fastqs.trim_sample_with_fastp(
             fastqs=(r1, r2),
             sname="sample",
@@ -578,6 +652,16 @@ def test_trim_sample_with_fastp_wraps_pipeline_errors_with_sample_context(
             umi_tag_in_i5=False,
             threads=1,
         )
+
+    message = str(excinfo.value)
+    assert "fastp failed for sample 'sample'" in message
+    assert str(r1) in message
+    assert str(r2) in message
+    assert "command:" in message
+    assert str(fastp_binary) in message
+    assert str(tmp_path / "sample.R1.trimmed.fastq.gz") in message
+    assert "{sample}" not in message
+    assert "pipeline failed" in message
 
 
 def test_resolve_cutsite_motifs_uses_longest_inferred_motif_length(
