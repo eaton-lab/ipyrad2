@@ -567,6 +567,37 @@ def test_snps_extracter_imap_file_includes_reference_without_flag(tmp_path: Path
     }
 
 
+def test_snps_extracter_expands_glob_imap_entries_from_file(tmp_path: Path) -> None:
+    h5 = _write_snps_h5(tmp_path / "snps.hdf5")
+    imap_path = tmp_path / "imap.tsv"
+    imap_path.write_text(
+        "s*\tpop1\n"
+        "assembly_reference_sequence\tpop2\n",
+        encoding="utf-8",
+    )
+    minmap_path = tmp_path / "minmap.tsv"
+    minmap_path.write_text("pop1\t1\npop2\t1\n", encoding="utf-8")
+
+    tool = SNPsExtracter(
+        data=h5,
+        min_sample_coverage=1,
+        max_sample_missing=1.0,
+        min_minor_allele_frequency=0.0,
+        imap=imap_path,
+        minmap=minmap_path,
+        include_reference=False,
+        cores=1,
+    )
+    tool.run(log_level="INFO")
+
+    assert tool.snames == ["s1", "assembly_reference_sequence", "s3"]
+    assert tool.imap == {
+        "pop1": ["s1", "s3"],
+        "pop2": ["assembly_reference_sequence"],
+    }
+    assert tool.minmap == {"pop1": 1, "pop2": 1}
+
+
 def test_snps_extracter_include_reference_with_imap_requires_reference_assignment(tmp_path: Path) -> None:
     h5 = _write_snps_h5(tmp_path / "snps.hdf5")
     imap_path, minmap_path = _write_imap_files(tmp_path, include_reference=False)

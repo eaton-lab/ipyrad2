@@ -1,18 +1,17 @@
 #!/usr/bin/env python
 
 import pandas as pd
-from typing import Dict, List, Tuple
+from fnmatch import fnmatchcase
 from pathlib import Path
+from typing import Dict, List, Sequence, Tuple
 from .exceptions import IPyradError
 
 
 def parse_pops_file(popfile: Path) -> Tuple[Dict[str, List[str]], Dict[str, int]]:
     """Parse an ipyrad1-style pop_assign_file and return a dictionary
     mapping pop names to tuples of minsamples and a list of sample
-    names. The value of minsamples is used by denovo for selecting
-    the number of samples per population for constructing the
-    pseudo-reference and also by assemble for specifying minsamples
-    per locus per population for filtering.
+    names. The value of minsamples is used by grouped-calling and
+    analysis workflows that enforce per-population coverage rules.
 
     popfile format:
 
@@ -23,8 +22,8 @@ def parse_pops_file(popfile: Path) -> Tuple[Dict[str, List[str]], Dict[str, int]
             indN popN
             # pop1:3 pop2:3 pop3:3
 
-    Returns 2 dictionaries keying populations to minsamples (minmap) and
-    populations to lists of sample names (imap).
+    Returns 2 dictionaries keying populations to minsamples (minmap)
+    and populations to lists of sample names or glob patterns (imap).
     """
     # Offload some of the parsing to the `parse_imap()` function which is used
     # by the new CLI mode and expects a file with _only_ the sample/pop mapping
@@ -56,8 +55,8 @@ def parse_pops_file(popfile: Path) -> Tuple[Dict[str, List[str]], Dict[str, int]
 def parse_imap(popfile: Path) -> Dict[str, List[str]]:
     """Return an imap dict mapping pop names to list of sample names.
 
-    Each line is a unique sample mapped to a str group. Many samples
-    can be mapped to the same group name.
+    Each line is a sample name or glob pattern mapped to a str group.
+    Many samples can be mapped to the same group name.
 
     Format
     ------
@@ -83,6 +82,74 @@ def parse_imap(popfile: Path) -> Dict[str, List[str]]:
         raise IPyradError("  Populations file malformed - {}".format(popfile))
 
     return popdict
+
+
+def _has_glob_magic(value: str) -> bool:
+    """Return True when a sample token should be treated as a glob pattern."""
+    return any(char in value for char in "*?[")
+
+
+def expand_imap_patterns(
+    imap: Dict[str, List[str]],
+    available_names: Sequence[str],
+    *,
+    mapping_name: str = "IMAP",
+    available_name: str = "the available samples",
+    strict_unmatched: bool = True,
+) -> tuple[Dict[str, List[str]], List[str]]:
+    """Expand exact names or globs in an IMAP against available sample names."""
+    available_names = [str(name) for name in available_names]
+    available_set = set(available_names)
+    sample_to_groups: dict[str, set[str]] = {}
+    expanded: Dict[str, List[str]] = {}
+    unmatched: list[str] = []
+
+    for group, entries in imap.items():
+        resolved: list[str] = []
+        seen: set[str] = set()
+        for entry in entries:
+            if _has_glob_magic(entry):
+                matches = [
+                    name for name in available_names
+                    if fnmatchcase(name, entry)
+                ]
+            elif entry in available_set:
+                matches = [entry]
+            else:
+                matches = []
+
+            if not matches:
+                unmatched.append(entry)
+                continue
+
+            for name in matches:
+                if name in seen:
+                    continue
+                seen.add(name)
+                resolved.append(name)
+                sample_to_groups.setdefault(name, set()).add(group)
+
+        if resolved:
+            expanded[group] = resolved
+
+    duplicate_samples = sorted(
+        name for name, groups in sample_to_groups.items()
+        if len(groups) > 1
+    )
+    if duplicate_samples:
+        raise IPyradError(
+            f"{mapping_name} assigns sample(s) multiple times: "
+            + ", ".join(duplicate_samples)
+        )
+
+    unmatched = list(dict.fromkeys(unmatched))
+    if strict_unmatched and unmatched:
+        raise IPyradError(
+            f"{mapping_name} contains sample names or glob patterns that were not found in "
+            f"{available_name}: {', '.join(unmatched[:10])}"
+        )
+
+    return expanded, unmatched
 
 
 def parse_minmap(path: Path) -> Dict[str, int]:

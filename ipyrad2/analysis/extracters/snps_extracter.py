@@ -16,7 +16,7 @@ from loguru import logger
 
 from ...utils.exceptions import IPyradError
 from ...utils.parallel import run_with_pool
-from ...utils.pops import parse_imap, parse_minmap, parse_pops_file
+from ...utils.pops import expand_imap_patterns, parse_imap, parse_minmap, parse_pops_file
 
 # Value of missing data in the snps matrix
 _MISSING_GENO = 255
@@ -188,6 +188,13 @@ class SNPsExtracter:
 
     def _get_snames_and_sidxs_subset(self, imap) -> None:
         if imap:
+            imap, _unmatched = expand_imap_patterns(
+                imap,
+                self.snames,
+                mapping_name="IMAP",
+                available_name=f"data file {self.data}",
+            )
+            self.imap = imap
             imapset = set(itertools.chain(*imap.values()))
             badnames = imapset.difference(self.snames)
             if badnames:

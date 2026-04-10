@@ -75,3 +75,61 @@ def test_prepare_map_samples_rejects_mixed_se_pe_merge(tmp_path: Path) -> None:
                 "sampleB": (sample_b, None),
             },
         )
+
+
+def test_apply_imap_to_samples_supports_glob_merge_rules(tmp_path: Path) -> None:
+    sample_a_r1 = tmp_path / "sampleA_R1.fastq.gz"
+    sample_a_r2 = tmp_path / "sampleA_R2.fastq.gz"
+    sample_b_r1 = tmp_path / "sampleB_R1.fastq.gz"
+    sample_b_r2 = tmp_path / "sampleB_R2.fastq.gz"
+    for path, data in (
+        (sample_a_r1, b"@a1\nAAAA\n+\n!!!!\n"),
+        (sample_a_r2, b"@a1\nTTTT\n+\n!!!!\n"),
+        (sample_b_r1, b"@b1\nCCCC\n+\n!!!!\n"),
+        (sample_b_r2, b"@b1\nGGGG\n+\n!!!!\n"),
+    ):
+        _write_fastq(path, data)
+
+    imap = tmp_path / "imap.tsv"
+    imap.write_text("sample* merged\n", encoding="utf-8")
+
+    fastq_dict = apply_imap_to_samples(
+        imap=imap,
+        tmpdir=tmp_path / "tmpdir",
+        fastq_dict={
+            "sampleA": (sample_a_r1, sample_a_r2),
+            "sampleB": (sample_b_r1, sample_b_r2),
+        },
+    )
+
+    assert list(fastq_dict) == ["merged"]
+    merged_r1, merged_r2 = fastq_dict["merged"]
+    with gzip.open(merged_r1, "rb") as infile:
+        assert infile.read() == b"@a1\nAAAA\n+\n!!!!\n@b1\nCCCC\n+\n!!!!\n"
+    with gzip.open(merged_r2, "rb") as infile:
+        assert infile.read() == b"@a1\nTTTT\n+\n!!!!\n@b1\nGGGG\n+\n!!!!\n"
+
+
+def test_apply_imap_to_samples_one_column_glob_keeps_identity_names(tmp_path: Path) -> None:
+    sample_a = tmp_path / "sampleA.fastq.gz"
+    sample_b = tmp_path / "sampleB.fastq.gz"
+    other = tmp_path / "other.fastq.gz"
+    for path in (sample_a, sample_b, other):
+        _write_fastq(path)
+
+    imap = tmp_path / "imap.tsv"
+    imap.write_text("sample*\n", encoding="utf-8")
+
+    fastq_dict = apply_imap_to_samples(
+        imap=imap,
+        tmpdir=tmp_path / "tmpdir",
+        fastq_dict={
+            "sampleA": (sample_a, None),
+            "sampleB": (sample_b, None),
+            "other": (other, None),
+        },
+    )
+
+    assert list(fastq_dict) == ["sampleA", "sampleB"]
+    assert fastq_dict["sampleA"] == (sample_a, None)
+    assert fastq_dict["sampleB"] == (sample_b, None)

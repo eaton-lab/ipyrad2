@@ -1103,10 +1103,10 @@ def test_select_denovo_samples_prefers_top_half_by_input_size(tmp_path: Path) ->
     assert set(selected).issubset({f"sample_{idx}" for idx in range(15, 30)})
 
 
-def test_select_denovo_samples_imap_picks_largest_per_group(tmp_path: Path) -> None:
+def test_select_denovo_samples_imap_uses_all_glob_matched_samples(tmp_path: Path) -> None:
     imap_path = tmp_path / "denovo.imap.tsv"
     imap_path.write_text(
-        "a1 pop_a\na2 pop_a\nb1 pop_b\nb2 pop_b\n",
+        "a* pop_a\nb* pop_b\n",
         encoding="utf-8",
     )
     a1 = tmp_path / "a1.fastq.gz"
@@ -1131,10 +1131,10 @@ def test_select_denovo_samples_imap_picks_largest_per_group(tmp_path: Path) -> N
     )
 
     assert mode == "imap"
-    assert list(selected) == ["a2", "b1"]
+    assert list(selected) == ["a1", "a2", "b1", "b2"]
 
 
-def test_select_denovo_samples_imap_warns_when_selection_exceeds_cap(
+def test_select_denovo_samples_imap_does_not_cap_or_warn_when_more_than_default_max(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1167,10 +1167,7 @@ def test_select_denovo_samples_imap_warns_when_selection_exceeds_cap(
 
     assert mode == "imap"
     assert len(selected) == 11
-    assert len(warnings) == 1
-    assert "Aim for ~{} maximally diverse samples when possible." in warnings[0][0]
-    assert warnings[0][1] == 11
-    assert warnings[0][2] == denovo_module.DEFAULT_MAX_DENOVO_SAMPLES
+    assert warnings == []
 
 
 def test_write_ordered_consensus_stream_to_file_flushes_in_mapping_order(

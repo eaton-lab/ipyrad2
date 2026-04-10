@@ -52,7 +52,7 @@ def _setup_bpp_subparser(
     )
     core.add_argument(
         "-i", "--imap", metavar="Path", type=Path, required=True,
-        help="Sample-to-population mapping file with `sample<TAB>population` on each line.",
+        help="Sample-to-population mapping file with `sample<TAB>population` or `glob<TAB>population` on each line.",
     )
     core.add_argument(
         "-g", "--minmap", metavar="Path", type=Path, required=True,

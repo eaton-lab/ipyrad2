@@ -34,7 +34,7 @@ from .common import (
 from ..utils.exceptions import IPyradError
 from ..utils.names import get_name_to_fastq_dict
 from ..utils.parallel import run_pipeline, run_with_pool
-from ..utils.pops import parse_imap
+from ..utils.pops import expand_imap_patterns, parse_imap
 from ..utils.progress import ProgressBar
 
 
@@ -145,32 +145,27 @@ def _select_denovo_samples(
 
     if imap_path is not None:
         imap = parse_imap(imap_path)
-        declared = set().union(*(set(names) for names in imap.values())) if imap else set()
-        missing = sorted(declared.difference(fastq_dict))
-        if missing:
-            joined = ", ".join(missing[:10])
-            raise IPyradError(
-                "IMAP contains sample names that were not found in the denovo inputs: "
-                f"{joined}"
-            )
-        selected_names: list[str] = []
+        imap, _unmatched = expand_imap_patterns(
+            imap,
+            fastq_dict,
+            mapping_name="IMAP",
+            available_name="the denovo inputs",
+        )
+        selected_names: set[str] = set()
         for group, names in sorted(imap.items()):
-            available = [name for name in names if name in fastq_dict]
-            if not available:
-                continue
-            chosen = max(available, key=lambda name: (size_map[name], name))
-            selected_names.append(chosen)
-            logger.info(f"denovo IMAP group '{group}' -> selected sample '{chosen}'")
+            logger.info(
+                "denovo IMAP group '{}' -> matched {} sample(s)",
+                group,
+                len(names),
+            )
+            selected_names.update(names)
         if not selected_names:
             raise IPyradError("IMAP did not yield any denovo input samples.")
-        selected = {name: fastq_dict[name] for name in sorted(set(selected_names))}
-        if len(selected) > DEFAULT_MAX_DENOVO_SAMPLES:
-            logger.warning(
-                "denovo IMAP selection retained {} samples. Aim for ~{} maximally "
-                "diverse samples when possible.",
-                len(selected),
-                DEFAULT_MAX_DENOVO_SAMPLES,
-            )
+        selected = {
+            name: fastq_dict[name]
+            for name in fastq_dict
+            if name in selected_names
+        }
         return selected, "imap"
 
     if len(fastq_dict) <= DEFAULT_MAX_DENOVO_SAMPLES:

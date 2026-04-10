@@ -14,6 +14,7 @@ from loguru import logger
 
 from ..utils.exceptions import IPyradError
 from ..utils.names import get_name_to_fastq_dict
+from ..utils.pops import expand_imap_patterns
 
 
 def _require(condition: bool, message: str) -> None:
@@ -81,23 +82,41 @@ def apply_imap_to_samples(
     original_total = len(source_fastqs)
     pname_to_path_tuples: dict[str, list[Tuple[Path, Path | None]]] = defaultdict(list)
     pname_to_snamelist: dict[str, list[str]] = defaultdict(list)
-    warn_list = []
+    raw_imap: dict[str, list[str]] = defaultdict(list)
+    identity_prefix = "__imap_identity__"
 
-    with open(imap, "r") as infile:
-        for line in infile:
-            if not line.strip():
+    with open(imap, "r", encoding="utf-8") as infile:
+        for lineno, line in enumerate(infile, start=1):
+            line = line.strip()
+            if not line or line.startswith("#"):
                 continue
-            sname, *data = line.strip().split()
-            pname = data[0] if data else sname
-            if sname in source_fastqs:
-                pname_to_path_tuples[pname].append(source_fastqs[sname])
-                pname_to_snamelist[pname].append(sname)
+            sname, *data = line.split()
+            pname = data[0] if data else None
+            if pname is None:
+                raw_imap[f"{identity_prefix}{lineno}"].append(sname)
             else:
-                warn_list.append(sname)
+                raw_imap[pname].append(sname)
+
+    expanded_imap, warn_list = expand_imap_patterns(
+        raw_imap,
+        source_fastqs,
+        mapping_name="imap file",
+        available_name="parsed sample names",
+        strict_unmatched=False,
+    )
+    for pname, snames in expanded_imap.items():
+        if pname.startswith(identity_prefix):
+            for sname in snames:
+                pname_to_snamelist[sname].append(sname)
+                pname_to_path_tuples[sname].append(source_fastqs[sname])
+            continue
+        for sname in snames:
+            pname_to_snamelist[pname].append(sname)
+            pname_to_path_tuples[pname].append(source_fastqs[sname])
 
     if warn_list:
         logger.warning(
-            "One or more names in imap file did not match sample names and will be skipped: {}",
+            "One or more names or glob patterns in imap file did not match sample names and will be skipped: {}",
             " ".join(warn_list),
         )
     if not pname_to_snamelist:

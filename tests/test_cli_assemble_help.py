@@ -96,7 +96,7 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
     assert "Min third-allele fraction at a SNP site" in help_text
     assert "heterozygous/IUPAC plus masked-N-at-variable-site" in help_text
     assert "BED of loci to assemble instead of delimiting shared loci from RAD samples." in help_text
-    assert "Population file for grouped calling; sample/group or classic pop_assign format." in help_text
+    assert "Population file for grouped calling; sample/group, glob/group, or classic pop_assign format." in help_text
     assert "mapping BAM basenames to final sample names" in help_text
     assert "ipyrad assemble -d" not in help_text
     assert "--ref REF" not in help_text

@@ -21,6 +21,7 @@ from loguru import logger
 
 from ..extracters.locus_extracter import LocusExtracter
 from ..extracters.sequence_common import normalize_sequence_population_inputs
+from ..extracters.sequence_common import resolve_sequence_sample_subset
 from ...utils.exceptions import IPyradError
 
 
@@ -421,6 +422,12 @@ class Bpp:
         self.lex = None
 
         self._validate()
+        _, _, _, self.imap = resolve_sequence_sample_subset(
+            self.data,
+            exclude=None,
+            include_reference=False,
+            imap=self.imap,
+        )
 
     @property
     def algorithm(self) -> str:

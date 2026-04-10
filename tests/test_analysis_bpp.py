@@ -66,8 +66,13 @@ def test_bpp_write_inputs_does_not_resolve_binary(
         lambda binary: (_ for _ in ()).throw(AssertionError(binary)),
     )
 
-    data = tmp_path / "assembly.hdf5"
-    data.write_text("", encoding="utf-8")
+    data = _write_test_h5(
+        tmp_path / "assembly.hdf5",
+        ["AAAA", "CCCC"],
+        rows=[(0, 0, 4, 1, 4)],
+        sample_names=["a", "b"],
+        scaffold_length=4,
+    )
     tool = Bpp(
         data=data,
         name="demo",
@@ -91,8 +96,13 @@ def test_bpp_write_ctlfile_uses_new_defaults(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(bpp_mod, "LocusExtracter", _DummyLex)
-    data = tmp_path / "assembly.hdf5"
-    data.write_text("", encoding="utf-8")
+    data = _write_test_h5(
+        tmp_path / "assembly.hdf5",
+        ["AAAA", "CCCC"],
+        rows=[(0, 0, 4, 1, 4)],
+        sample_names=["a", "b"],
+        scaffold_length=4,
+    )
     tool = Bpp(
         data=data,
         name="demo",
@@ -125,8 +135,13 @@ def test_bpp_msc_m_supports_parenthesized_references(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(bpp_mod, "LocusExtracter", _DummyLex)
-    data = tmp_path / "assembly.hdf5"
-    data.write_text("", encoding="utf-8")
+    data = _write_test_h5(
+        tmp_path / "assembly.hdf5",
+        ["AAAA", "CCCC", "GGGG"],
+        rows=[(0, 0, 4, 1, 4)],
+        sample_names=["a", "b", "c"],
+        scaffold_length=4,
+    )
     tool = Bpp(
         data=data,
         name="demo",
@@ -150,8 +165,13 @@ def test_bpp_msc_m_supports_parenthesized_references(
 
 
 def test_bpp_speciestree_rejects_speciesmodelprior_two_or_three(tmp_path: Path) -> None:
-    data = tmp_path / "assembly.hdf5"
-    data.write_text("", encoding="utf-8")
+    data = _write_test_h5(
+        tmp_path / "assembly.hdf5",
+        ["AAAA", "CCCC"],
+        rows=[(0, 0, 4, 1, 4)],
+        sample_names=["a", "b"],
+        scaffold_length=4,
+    )
     with pytest.raises(IPyradError, match="speciesmodelprior 0 or 1"):
         Bpp(
             data=data,
@@ -168,8 +188,13 @@ def test_bpp_speciestree_rejects_speciesmodelprior_two_or_three(tmp_path: Path) 
 
 
 def test_bpp_threads_must_have_one_or_three_integers(tmp_path: Path) -> None:
-    data = tmp_path / "assembly.hdf5"
-    data.write_text("", encoding="utf-8")
+    data = _write_test_h5(
+        tmp_path / "assembly.hdf5",
+        ["AAAA", "CCCC"],
+        rows=[(0, 0, 4, 1, 4)],
+        sample_names=["a", "b"],
+        scaffold_length=4,
+    )
     with pytest.raises(IPyradError, match="1 or 3 positive integers"):
         Bpp(
             data=data,
@@ -211,6 +236,41 @@ def test_bpp_locus_sampling_is_deterministic_with_seed(tmp_path: Path) -> None:
     assert tool1.paths.seqfile.read_text(encoding="utf-8") == tool2.paths.seqfile.read_text(
         encoding="utf-8"
     )
+
+
+def test_bpp_expands_glob_imap_entries_against_hdf5_sample_names(tmp_path: Path) -> None:
+    h5 = _write_test_h5(
+        tmp_path / "assembly.hdf5",
+        ["AAAA", "AAAT", "CCCC"],
+        rows=[(0, 0, 4, 1, 4)],
+        sample_names=["barbeyi-01", "barbeyi-02", "geyeri-01"],
+        scaffold_length=4,
+    )
+    imap = tmp_path / "imap.tsv"
+    imap.write_text(
+        "barbeyi*\tbarbeyi\n"
+        "geyeri*\tgeyeri\n",
+        encoding="utf-8",
+    )
+    minmap = tmp_path / "minmap.tsv"
+    minmap.write_text("barbeyi\t1\ngeyeri\t1\n", encoding="utf-8")
+
+    tool = Bpp(
+        data=h5,
+        name="demo",
+        outdir=tmp_path / "out",
+        tree="(barbeyi,geyeri);",
+        imap=imap,
+        minmap=minmap,
+        max_loci=1,
+        min_length=4,
+    )
+
+    assert tool.imap == {
+        "barbeyi": ["barbeyi-01", "barbeyi-02"],
+        "geyeri": ["geyeri-01"],
+    }
+    assert tool.minmap == {"barbeyi": 1, "geyeri": 1}
 
 
 def test_call_bpp_runs_in_ctl_directory_and_cleans_side_effects(tmp_path: Path) -> None:

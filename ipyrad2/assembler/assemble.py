@@ -56,7 +56,7 @@ from .variants import (
 from .write_snps import write_snps_hdf5
 from ..utils.parallel import run_with_pool
 from ..utils.exceptions import IPyradError
-from ..utils.pops import parse_imap, parse_pops_file
+from ..utils.pops import expand_imap_patterns, parse_imap, parse_pops_file
 
 
 def _format_peak_rss(value: int) -> str:
@@ -548,22 +548,16 @@ def _normalize_populations_file(
         raise IPyradError(
             f"--populations contains no sample assignments: {populations}"
         )
-
-    sample_counts: dict[str, int] = {}
+    imap, _unmatched = expand_imap_patterns(
+        imap,
+        sample_names,
+        mapping_name="--populations",
+        available_name="this assemble run",
+    )
     sample_to_group: dict[str, str] = {}
     for group, names in imap.items():
         for name in names:
-            sample_counts[name] = sample_counts.get(name, 0) + 1
             sample_to_group[name] = group
-
-    duplicate_samples = sorted(
-        name for name, count in sample_counts.items() if count > 1
-    )
-    if duplicate_samples:
-        raise IPyradError(
-            "--populations assigns sample(s) multiple times: "
-            + ", ".join(duplicate_samples)
-        )
 
     assembled = set(sample_names)
     assigned = set(sample_to_group)
@@ -571,12 +565,6 @@ def _normalize_populations_file(
     if missing:
         raise IPyradError(
             "--populations is missing assembled sample(s): " + ", ".join(missing)
-        )
-    extra = sorted(assigned.difference(assembled))
-    if extra:
-        raise IPyradError(
-            "--populations contains sample(s) not present in this assemble run: "
-            + ", ".join(extra)
         )
 
     out_path = tmpdir / "populations.normalized.tsv"

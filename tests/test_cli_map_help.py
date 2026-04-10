@@ -54,6 +54,7 @@ def test_map_help_groups_and_examples_are_updated() -> None:
     assert "$ ipyrad2 map -d DATA/*.fastq.gz -r REF.fa -o BAMS -u" in help_text
     assert "Reference FASTA to index and map against." in help_text
     assert "Output directory for coordinate-sorted BAMs and map stats." in help_text
+    assert "glob<TAB>group" in help_text
     assert "ipyrad map" not in help_text
     assert "trimmed read files" not in help_text
     assert "--min-map-q" not in help_text

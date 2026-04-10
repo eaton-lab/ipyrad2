@@ -418,6 +418,7 @@ def test_bpp_help_groups_examples_and_runtime_controls_are_present() -> None:
     assert "--clock" in help_text
     assert "--write-only" in help_text
     assert "sample<TAB>population" in help_text
+    assert "glob<TAB>population" in help_text
     assert "population<TAB>min" in help_text
     assert help_text.index("-h, --help") > help_text.index("Logging:")
 

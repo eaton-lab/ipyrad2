@@ -165,7 +165,7 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
 
     naming.add_argument(
         "-p", "--populations", metavar="Path", type=Path,
-        help="Population file for grouped calling; sample/group or classic pop_assign format.",
+        help="Population file for grouped calling; sample/group, glob/group, or classic pop_assign format.",
     )
     naming.add_argument(
         "--rename-bams", metavar="Path", type=Path,

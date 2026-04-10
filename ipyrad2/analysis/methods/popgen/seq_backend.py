@@ -1111,7 +1111,7 @@ def run_sequence_popgen(
     user_imap = bool(raw_imap)
     chunk_spans = _plan_sequence_chunk_spans(data)
 
-    initial_snames, initial_sidxs, _exclude_set = resolve_sequence_sample_subset(
+    initial_snames, initial_sidxs, _exclude_set, raw_imap = resolve_sequence_sample_subset(
         data,
         exclude=exclude,
         include_reference=include_reference,
