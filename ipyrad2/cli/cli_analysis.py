@@ -18,6 +18,7 @@ from .cli_snmf import _setup_snmf_subparser
 from .cli_dapc import _setup_dapc_subparser
 from .cli_admixture import _setup_admixture_subparser
 from .cli_popgen import _setup_popgen_subparser
+from .cli_bpp import _setup_bpp_subparser
 from ..analysis.extracters.window_extracter import run_window_extracter
 from ..analysis.extracters.locus_extracter import run_locus_extracter
 from ..analysis.extracters.snps_extracter import run_snps_extracter
@@ -27,6 +28,7 @@ from ..analysis.methods.snmf import run_snmf_method
 from ..analysis.methods.dapc import run_dapc_method
 from ..analysis.methods.admixture import run_admixture_method
 from ..analysis.methods.popgen import run_popgen_method
+from ..analysis.methods.bpp import run_bpp_method
 from ipyrad2 import __version__ as VERSION
 
 
@@ -53,6 +55,7 @@ $ ipyrad2 analysis snmf -d snps.hdf5 -o SNMF_OUT/ -k 2
 $ ipyrad2 analysis dapc -d snps.hdf5 -o DAPC_OUT/ --k-range 2:5
 $ ipyrad2 analysis admixture -d snps.hdf5 -o ADMIX_OUT/ --k-range 2:5
 $ ipyrad2 analysis popgen -d assembly.hdf5 -o POPGEN_OUT/
+$ ipyrad2 analysis bpp -d assembly.hdf5 -o BPP_OUT/ -n demo --tree species.nwk -i IMAP.txt -g MINMAP.txt -N 500 -L 100 --write-only
 """
 
 
@@ -104,6 +107,10 @@ def _setup_analysis_subparser(subparser: argparse._SubParsersAction, header: str
         analysis_subparser,
         f"{HEADER}\nipyrad2 analysis popgen: compute genome-wide population-genetic statistics",
     )
+    _setup_bpp_subparser(
+        analysis_subparser,
+        f"{HEADER}\nipyrad2 analysis bpp: stage one BPP analysis from sequence HDF5 data",
+    )
 
 
 def run_analysis_tool(args):
@@ -142,7 +149,7 @@ def run_analysis_tool(args):
             name=args.name,
             outdir=args.out,
             out_format=args.out_format,
-            nloci=args.nloci,
+            nloci=args.max_loci,
             min_length=args.min_length,
             windows=args.windows,
             min_sample_coverage=args.min_sample_coverage,
@@ -351,6 +358,43 @@ def run_analysis_tool(args):
             loci_per_window=args.loci_per_window,
             locus_step=args.locus_step,
             cores=args.cores,
+            force=args.force,
+            log_level=args.log_level,
+        )
+        sys.exit(0)
+
+    if args.tool == "bpp":
+        logger.info("------------------------------------------------------------")
+        logger.info("---- ipyrad2 analysis bpp: single-run BPP staging and execution ----")
+        logger.info("------------------------------------------------------------")
+        logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
+        run_bpp_method(
+            data=args.data,
+            name=args.name,
+            outdir=args.out,
+            tree=args.tree,
+            imap=args.imap,
+            minmap=args.minmap,
+            max_loci=args.max_loci,
+            min_length=args.min_length,
+            msc_i=args.msc_i,
+            msc_m=args.msc_m,
+            speciestree=args.speciestree,
+            speciesdelimitation=args.speciesdelimitation,
+            thetaprior=args.thetaprior,
+            tauprior=args.tauprior,
+            speciesmodelprior=args.speciesmodelprior,
+            phiprior=args.phiprior,
+            wprior=args.wprior,
+            alphaprior=args.alphaprior,
+            locusrate=args.locusrate,
+            clock=args.clock,
+            burnin=args.burnin,
+            samplefreq=args.samplefreq,
+            nsample=args.nsample,
+            threads=args.threads,
+            seed=args.seed,
+            write_only=args.write_only,
             force=args.force,
             log_level=args.log_level,
         )

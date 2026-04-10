@@ -89,7 +89,7 @@ def test_lex_help_groups_examples_and_logging_are_updated() -> None:
         "-o, --out",
         "-O, --out-format",
         "-w, --windows",
-        "-N, --nloci",
+        "-N, --max-loci",
         "-L, --min-length",
         "-m, --min-sample-coverage",
         "-r, --max-sample-missing",
@@ -119,6 +119,7 @@ def test_lex_help_groups_examples_and_logging_are_updated() -> None:
     assert "-l, --log-level" in help_text
     assert "--log-level" in help_text
     assert "ipyrad analysis lex" not in help_text
+    assert "--nloci" not in help_text
     assert "--length" not in help_text
     assert help_text.index("-h, --help") > help_text.index("Logging:")
 
@@ -353,8 +354,94 @@ def test_popgen_help_groups_examples_and_backend_controls_are_present() -> None:
     assert help_text.index("-h, --help") > help_text.index("Logging:")
 
 
+def test_bpp_help_groups_examples_and_runtime_controls_are_present() -> None:
+    help_text = _get_analysis_tool_parser("bpp").format_help()
+
+    expected_sections = [
+        "Core inputs:",
+        "Locus sampling:",
+        "Model selection:",
+        "Priors:",
+        "Rate variation:",
+        "MCMC sampler:",
+        "Runtime:",
+        "Logging:",
+    ]
+    positions = [help_text.index(section) for section in expected_sections]
+    assert positions == sorted(positions)
+
+    expected_order = [
+        "-d, --data",
+        "-o, --out",
+        "-n, --name",
+        "--tree",
+        "-i, --imap",
+        "-g, --minmap",
+        "-N, --max-loci",
+        "-L, --min-length",
+        "--msc-i",
+        "--msc-m",
+        "--speciestree",
+        "--speciesdelimitation",
+        "--thetaprior",
+        "--tauprior",
+        "--speciesmodelprior",
+        "--phiprior",
+        "--wprior",
+        "--alphaprior",
+        "--locusrate",
+        "--clock",
+        "--burnin",
+        "--samplefreq",
+        "--nsample",
+        "--threads",
+        "--seed",
+        "--write-only",
+        "-f, --force",
+        "-l, --log-level",
+        "-h, --help",
+    ]
+    start = help_text.index("Core inputs:")
+    indices = []
+    for item in expected_order:
+        idx = help_text.index(item, start)
+        indices.append(idx)
+        start = idx + 1
+    assert indices == sorted(indices)
+
+    assert "ipyrad2 analysis bpp: stage one BPP analysis from sequence HDF5 data" in help_text
+    assert "$ ipyrad2 analysis bpp -d assembly.hdf5 -o OUT/ -n demo --tree species.nwk -i IMAP.txt -g MINMAP.txt -N 1000 -L 100 --threads 50 --seed 123 --tauprior 3 0.05" in help_text
+    assert "--msc-m" in help_text
+    assert "--speciesdelimitation" in help_text
+    assert "--alphaprior" in help_text
+    assert "--locusrate" in help_text
+    assert "--clock" in help_text
+    assert "--write-only" in help_text
+    assert "sample<TAB>population" in help_text
+    assert "population<TAB>min" in help_text
+    assert help_text.index("-h, --help") > help_text.index("Logging:")
+
+
 def test_analysis_parser_accepts_phase2_subcommands() -> None:
     parser = setup_parsers()
+
+    lex_args = parser.parse_args(
+        [
+            "analysis",
+            "lex",
+            "-d",
+            "assembly.hdf5",
+            "-o",
+            "OUT",
+            "-N",
+            "10",
+            "-L",
+            "150",
+        ]
+    )
+    assert lex_args.tool == "lex"
+    assert lex_args.max_loci == 10
+    assert lex_args.min_length == 150
 
     snpex_args = parser.parse_args(
         [
@@ -529,3 +616,35 @@ def test_analysis_parser_accepts_phase2_subcommands() -> None:
     assert popgen_window_args.tool == "popgen"
     assert popgen_window_args.window_size == 1000
     assert popgen_window_args.step_size == 500
+
+    bpp_args = parser.parse_args(
+        [
+            "analysis",
+            "bpp",
+            "-d",
+            "assembly.hdf5",
+            "-o",
+            "OUT",
+            "--tree",
+            "(a,b);",
+            "-i",
+            "IMAP.txt",
+            "-g",
+            "MINMAP.txt",
+            "-N",
+            "25",
+            "-L",
+            "100",
+            "--threads",
+            "8",
+            "--seed",
+            "none",
+            "--write-only",
+        ]
+    )
+    assert bpp_args.tool == "bpp"
+    assert bpp_args.max_loci == 25
+    assert bpp_args.min_length == 100
+    assert bpp_args.threads == [8]
+    assert bpp_args.seed == "none"
+    assert bpp_args.write_only is True
