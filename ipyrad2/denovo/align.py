@@ -17,7 +17,6 @@ from loguru import logger
 from ipyrad2.utils.progress import ProgressBar
 from ipyrad2.utils.parallel import PipelineTimeoutError, run_pipeline
 from ipyrad2.utils.parallel import pipeline as pipeline_module
-from ipyrad2.utils.seqs import IUPAC
 
 from .common import (
     DENOVO_MAPPING_FILENAME,
@@ -146,7 +145,7 @@ def choose_longest_sequence(record: LegacyRecord) -> str:
 
 
 def consensus_from_aligned(aligned: LegacyRecord, min_prop: float = 0.5) -> str:
-    """Build a simple gap-aware consensus from an alignment."""
+    """Build a gap-aware majority-base consensus from an alignment."""
     if not aligned:
         return ""
     length = len(aligned[0][1])
@@ -162,13 +161,8 @@ def consensus_from_aligned(aligned: LegacyRecord, min_prop: float = 0.5) -> str:
         if not bases:
             continue
         counts = {base: bases.count(base) for base in "ACGT"}
-        total = sum(counts.values())
-        base, nbase = max(counts.items(), key=lambda item: item[1])
-        if nbase / max(1, total) >= min_prop:
-            out.append(base)
-            continue
-        alleles = [base for base, count in counts.items() if count > 0]
-        out.append(IUPAC.get(frozenset(alleles), "N") if len(alleles) == 2 else "N")
+        base, _nbase = max(counts.items(), key=lambda item: item[1])
+        out.append(base)
     return "".join(out)
 
 
@@ -213,7 +207,9 @@ def mafft_align_one(
             f"(nseq={nseq}, min_len={min_len}, max_len={max_len})"
         ) from exc
     if rc != 0 or not out:
-        raise RuntimeError(f"mafft failed rc={rc} stderr={err.decode('utf-8', 'replace')}")
+        raise RuntimeError(
+            f"mafft failed rc={rc} stderr={err.decode('utf-8', 'replace')}"
+        )
 
     aligned: list[tuple[str, str]] = []
     name, buf = None, []
@@ -292,7 +288,9 @@ def _load_summary_records(summary_tsv: Path) -> dict[str, SummaryRecord]:
         required = {"seed", "sample", "record_type", "cluster_sequence", "arm_boundary"}
         if reader.fieldnames is None or not required.issubset(reader.fieldnames):
             joined = ", ".join(sorted(required))
-            raise RuntimeError(f"concat.summary.tsv is missing required columns: {joined}")
+            raise RuntimeError(
+                f"concat.summary.tsv is missing required columns: {joined}"
+            )
         for row in reader:
             seed = str(row["seed"])
             sample = str(row["sample"])
@@ -324,7 +322,11 @@ def _iter_locus_members(
 
     with open(mapping_tsv, "rt", encoding="utf-8", newline="") as infile:
         reader = csv.DictReader(infile, delimiter="\t")
-        if reader.fieldnames is None or "locus" not in reader.fieldnames or "core" not in reader.fieldnames:
+        if (
+            reader.fieldnames is None
+            or "locus" not in reader.fieldnames
+            or "core" not in reader.fieldnames
+        ):
             raise RuntimeError(
                 f"{DENOVO_MAPPING_FILENAME} is missing required columns: locus, core"
             )
@@ -377,8 +379,7 @@ def _group_members_by_contract_group(
 def _group_is_joined_only(group: Sequence[LocusMember]) -> bool:
     """Return True when every member is a joined record with recoverable arms."""
     return bool(group) and all(
-        member.record_type == "joined" and bool(member.right_arm)
-        for member in group
+        member.record_type == "joined" and bool(member.right_arm) for member in group
     )
 
 
@@ -390,7 +391,10 @@ def _locus_output_form(members: Sequence[LocusMember]) -> str:
     if not forms:
         return (
             "spaced"
-            if all(member.record_type == "joined" and bool(member.right_arm) for member in members)
+            if all(
+                member.record_type == "joined" and bool(member.right_arm)
+                for member in members
+            )
             else "stripped"
         )
     if len(forms) != 1:
@@ -401,8 +405,7 @@ def _locus_output_form(members: Sequence[LocusMember]) -> str:
 def _locus_is_mixed_spaced(members: Sequence[LocusMember]) -> bool:
     """Return True when one locus is a mixed joined/merged spaced output."""
     return _locus_output_form(members) == "spaced" and not all(
-        member.record_type == "joined" and bool(member.right_arm)
-        for member in members
+        member.record_type == "joined" and bool(member.right_arm) for member in members
     )
 
 
@@ -414,8 +417,12 @@ def _collapse_member_group_without_mafft(
         raise RuntimeError("contract group is empty")
     joined_only = _group_is_joined_only(group)
     if joined_only:
-        left = _collapse_sequence_record_without_mafft([(m.core, m.left_arm) for m in group])
-        right = _collapse_sequence_record_without_mafft([(m.core, m.right_arm) for m in group])
+        left = _collapse_sequence_record_without_mafft(
+            [(m.core, m.left_arm) for m in group]
+        )
+        right = _collapse_sequence_record_without_mafft(
+            [(m.core, m.right_arm) for m in group]
+        )
         if left is None or right is None:
             return None
         return CollapsedGroup(
@@ -426,7 +433,9 @@ def _collapse_member_group_without_mafft(
             left_arm=left,
             right_arm=right,
         )
-    stripped = _collapse_sequence_record_without_mafft([(m.core, m.cluster_sequence) for m in group])
+    stripped = _collapse_sequence_record_without_mafft(
+        [(m.core, m.cluster_sequence) for m in group]
+    )
     if stripped is None:
         return None
     return CollapsedGroup(
@@ -593,8 +602,12 @@ def _consensus_for_mixed_spaced_locus(
         return stripped, False
 
     if alignment_mode == "none":
-        left = choose_longest_sequence([(member.core, member.left_arm) for member in joined_members])
-        right = choose_longest_sequence([(member.core, member.right_arm) for member in joined_members])
+        left = choose_longest_sequence(
+            [(member.core, member.left_arm) for member in joined_members]
+        )
+        right = choose_longest_sequence(
+            [(member.core, member.right_arm) for member in joined_members]
+        )
         return left + ("N" * output_spacer_len) + right, True
 
     aligned_map = dict(
@@ -626,8 +639,12 @@ def _consensus_for_mixed_spaced_locus(
         right_record = []
         for member in group:
             aligned_seq = aligned_map[member.core]
-            left_record.append((member.core, _strip_alignment_segment(aligned_seq[:boundary])))
-            right_record.append((member.core, _strip_alignment_segment(aligned_seq[boundary:])))
+            left_record.append(
+                (member.core, _strip_alignment_segment(aligned_seq[:boundary]))
+            )
+            right_record.append(
+                (member.core, _strip_alignment_segment(aligned_seq[boundary:]))
+            )
         left = _collapse_optional_sequence_record(
             left_record,
             locus_id=locus_id,
@@ -694,16 +711,24 @@ def _plan_locus_without_mafft(
             return None
         collapsed.append(reduced)
 
-    uses_output_spacer = bool(collapsed) and all(group.joined_only for group in collapsed)
+    uses_output_spacer = bool(collapsed) and all(
+        group.joined_only for group in collapsed
+    )
     if uses_output_spacer:
-        left = _collapse_sequence_record_without_mafft([(group.sample, group.left_arm) for group in collapsed])
-        right = _collapse_sequence_record_without_mafft([(group.sample, group.right_arm) for group in collapsed])
+        left = _collapse_sequence_record_without_mafft(
+            [(group.sample, group.left_arm) for group in collapsed]
+        )
+        right = _collapse_sequence_record_without_mafft(
+            [(group.sample, group.right_arm) for group in collapsed]
+        )
         if left is None or right is None:
             return None
         reason = "single" if len(collapsed) == 1 else "identical"
         return reason, left + ("N" * output_spacer_len) + right, True
 
-    stripped = _collapse_sequence_record_without_mafft([(group.sample, group.stripped) for group in collapsed])
+    stripped = _collapse_sequence_record_without_mafft(
+        [(group.sample, group.stripped) for group in collapsed]
+    )
     if stripped is None:
         return None
     reason = "single" if len(collapsed) == 1 else "identical"
@@ -889,7 +914,9 @@ def _plan_alignment(
             )
             continue
 
-        planned = _plan_locus_without_mafft(members, output_spacer_len=output_spacer_len)
+        planned = _plan_locus_without_mafft(
+            members, output_spacer_len=output_spacer_len
+        )
         if planned is None:
             plans.append(
                 _AlignmentPlanItem(
@@ -945,7 +972,9 @@ def _iter_alignment_jobs_from_plan(
         return
 
     plan_iter = iter(plans)
-    for locus_id, locus_name, members in _iter_locus_members(mapping_tsv, summary_records):
+    for locus_id, locus_name, members in _iter_locus_members(
+        mapping_tsv, summary_records
+    ):
         plan = next(plan_iter)
         if plan.locus_id != locus_id:
             raise RuntimeError(
@@ -953,16 +982,19 @@ def _iter_alignment_jobs_from_plan(
             )
         if not plan.requires_mafft:
             continue
-        yield plan.submit_idx, dict(
-            locus_id=locus_id,
-            locus_name=locus_name,
-            record=members,
-            mafft_binary=mafft_binary,
-            min_prop=min_prop,
-            threads=threads,
-            alignment_mode=alignment_mode,
-            timeout_s=mafft_timeout_s,
-            output_spacer_len=output_spacer_len,
+        yield (
+            plan.submit_idx,
+            dict(
+                locus_id=locus_id,
+                locus_name=locus_name,
+                record=members,
+                mafft_binary=mafft_binary,
+                min_prop=min_prop,
+                threads=threads,
+                alignment_mode=alignment_mode,
+                timeout_s=mafft_timeout_s,
+                output_spacer_len=output_spacer_len,
+            ),
         )
 
 
@@ -1006,7 +1038,9 @@ def _iter_threaded_alignment_results(
     """Yield completed threaded locus results."""
     inflight: dict[Future[ThreadedConsensusResult], _ThreadJobInfo] = {}
     job_it = iter(jobs_iter)
-    executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="denovo-align")
+    executor = ThreadPoolExecutor(
+        max_workers=max_workers, thread_name_prefix="denovo-align"
+    )
     close_wait = True
 
     def _submit_next() -> bool:
@@ -1029,7 +1063,9 @@ def _iter_threaded_alignment_results(
     try:
         while inflight:
             timeout = max(0.0, next_heartbeat - time.monotonic())
-            done, _pending = wait(tuple(inflight), timeout=timeout, return_when=FIRST_COMPLETED)
+            done, _pending = wait(
+                tuple(inflight), timeout=timeout, return_when=FIRST_COMPLETED
+            )
             if not done:
                 oldest = min(inflight.values(), key=lambda info: info.started_at)
                 logger.debug(
@@ -1180,12 +1216,18 @@ def write_ordered_consensus_stream_to_file(
         return summary
 
     with open(out_fa, "wt", encoding="utf-8") as fh:
-        prog = ProgressBar(summary.total_loci, None, _progress_message(summary.total_loci, alignment_mode))
+        prog = ProgressBar(
+            summary.total_loci,
+            None,
+            _progress_message(summary.total_loci, alignment_mode),
+        )
         prog.update()
         try:
             if alignment_mode == "none" or mafft_required_loci == 0:
                 for plan in planned.plans:
-                    _write_planned_locus(fh, locus_name=plan.locus_name, consensus=plan.consensus)
+                    _write_planned_locus(
+                        fh, locus_name=plan.locus_name, consensus=plan.consensus
+                    )
                     prog.finished += 1
                     prog.update()
                 logger.info(f"wrote denovo reference to {out_fa}")
@@ -1212,14 +1254,18 @@ def write_ordered_consensus_stream_to_file(
                 while next_idx < len(planned.plans):
                     plan = planned.plans[next_idx]
                     if not plan.requires_mafft:
-                        _write_planned_locus(fh, locus_name=plan.locus_name, consensus=plan.consensus)
+                        _write_planned_locus(
+                            fh, locus_name=plan.locus_name, consensus=plan.consensus
+                        )
                         next_idx += 1
                         prog.finished += 1
                         prog.update()
                         continue
                     if next_idx not in result_buffer:
                         break
-                    _locus_id, locus_name, consensus, _uses_output_spacer = result_buffer.pop(next_idx)
+                    _locus_id, locus_name, consensus, _uses_output_spacer = (
+                        result_buffer.pop(next_idx)
+                    )
                     _write_planned_locus(fh, locus_name=locus_name, consensus=consensus)
                     next_idx += 1
                     prog.finished += 1
