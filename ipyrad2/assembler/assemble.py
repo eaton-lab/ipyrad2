@@ -37,7 +37,7 @@ from .paralogs import (
     get_sample_paralog_tables,
     write_per_sample_final_good,
 )
-from .read_filters import classify_bam_layout, prepare_filtered_analysis_bam
+from .read_filters import BIN_SAM, classify_bam_layout, prepare_filtered_analysis_bam
 from .variants import (
     get_chunked_loci_beds,
     get_group_called_variants_in_vcf_chunks,
@@ -54,7 +54,7 @@ from .variants import (
     write_vcf,
 )
 from .write_snps import write_snps_hdf5
-from ..utils.parallel import run_with_pool
+from ..utils.parallel import run_pipeline, run_with_pool
 from ..utils.exceptions import IPyradError
 from ..utils.pops import expand_imap_patterns, parse_imap, parse_pops_file
 
@@ -378,6 +378,102 @@ def _load_reference_scaffold_lengths(tmpdir: Path) -> dict[str, int]:
     return lengths
 
 
+def _get_mapped_reference_contigs_from_bam(
+    bam_file: Path,
+) -> list[tuple[str, int, int]]:
+    """Return `(contig, contig_len, mapped_reads)` rows with mapped coverage."""
+    cmd = [BIN_SAM, "idxstats", str(bam_file)]
+    _, out, _ = run_pipeline([cmd])
+    text = out.decode() if isinstance(out, bytes) else str(out)
+    rows: list[tuple[str, int, int]] = []
+    for line_no, raw_line in enumerate(text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) < 4:
+            raise IPyradError(
+                f"samtools idxstats output is malformed for {bam_file} on line {line_no}: {raw_line}"
+            )
+        contig = parts[0]
+        try:
+            contig_len = int(parts[1])
+            mapped_reads = int(parts[2])
+        except ValueError as exc:
+            raise IPyradError(
+                f"samtools idxstats output is malformed for {bam_file} on line {line_no}: {raw_line}"
+            ) from exc
+        if contig == "*" or mapped_reads <= 0:
+            continue
+        rows.append((contig, contig_len, mapped_reads))
+    return rows
+
+
+def _format_bam_reference_mismatch_summary(
+    *,
+    missing_contigs: list[tuple[str, int]],
+    length_mismatches: list[tuple[str, int, int, int]],
+) -> str:
+    """Format one compact per-sample BAM/reference mismatch summary."""
+    parts: list[str] = []
+    if missing_contigs:
+        items = [
+            f"{contig} ({mapped} mapped)"
+            for contig, mapped in missing_contigs[:3]
+        ]
+        if len(missing_contigs) > 3:
+            items.append(f"... ({len(missing_contigs) - 3} more)")
+        parts.append("missing contigs: " + ", ".join(items))
+    if length_mismatches:
+        items = [
+            f"{contig} (BAM {bam_len}, REF {ref_len}, {mapped} mapped)"
+            for contig, bam_len, ref_len, mapped in length_mismatches[:3]
+        ]
+        if len(length_mismatches) > 3:
+            items.append(f"... ({len(length_mismatches) - 3} more)")
+        parts.append("length mismatches: " + ", ".join(items))
+    return "; ".join(parts)
+
+
+def _validate_analysis_bams_match_reference(
+    sample_bams: dict[str, Path],
+    tmpdir: Path,
+    reference: Path,
+) -> None:
+    """Reject filtered BAMs whose mapped contigs do not match the current reference."""
+    reference_lengths = _load_reference_scaffold_lengths(tmpdir)
+    affected_samples: list[str] = []
+    for sname, bam_file in sample_bams.items():
+        missing_contigs: list[tuple[str, int]] = []
+        length_mismatches: list[tuple[str, int, int, int]] = []
+        for contig, bam_len, mapped_reads in _get_mapped_reference_contigs_from_bam(
+            bam_file
+        ):
+            ref_len = reference_lengths.get(contig)
+            if ref_len is None:
+                missing_contigs.append((contig, mapped_reads))
+            elif ref_len != bam_len:
+                length_mismatches.append((contig, bam_len, ref_len, mapped_reads))
+        if missing_contigs or length_mismatches:
+            summary = _format_bam_reference_mismatch_summary(
+                missing_contigs=missing_contigs,
+                length_mismatches=length_mismatches,
+            )
+            affected_samples.append(f"{sname}: {summary}")
+
+    if not affected_samples:
+        return
+
+    sample_summaries = " | ".join(affected_samples[:5])
+    if len(affected_samples) > 5:
+        sample_summaries += f" | ... ({len(affected_samples) - 5} more samples)"
+    raise IPyradError(
+        "Filtered analysis BAMs contain mapped contigs that do not match the current "
+        f"reference passed to -r ({reference}). Remap these BAMs against that exact "
+        f"reference before running assemble. Affected samples: {sample_summaries}"
+    )
+
+
 def _normalize_user_loci_bed(loci_bed: Path, tmpdir: Path) -> tuple[Path, int]:
     """Validate and normalize a user-provided loci BED into the assemble tmpdir."""
     if not loci_bed.exists():
@@ -554,6 +650,7 @@ def _normalize_populations_file(
         mapping_name="--populations",
         available_name="this assemble run",
     )
+
     sample_to_group: dict[str, str] = {}
     for group, names in imap.items():
         for name in names:
@@ -566,7 +663,6 @@ def _normalize_populations_file(
         raise IPyradError(
             "--populations is missing assembled sample(s): " + ", ".join(missing)
         )
-
     out_path = tmpdir / "populations.normalized.tsv"
     with out_path.open("w", encoding="utf-8") as out:
         for sample in sample_names:
@@ -1263,6 +1359,8 @@ def run_assembler(
     )
     logger.debug("fetching reference scaffold order")
     get_reference_sort_order(reference, tmpdir)
+    logger.info("validating filtered analysis BAMs against the current reference")
+    _validate_analysis_bams_match_reference(all_dict, tmpdir, reference)
     normalized_loci_bed = None
     if loci_bed is not None:
         normalized_loci_bed, input_locus_count = _normalize_user_loci_bed(

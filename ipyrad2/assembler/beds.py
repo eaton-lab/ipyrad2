@@ -208,7 +208,11 @@ def get_coverage_bed_graphs(
     coll_dir.mkdir(exist_ok=True)
     out_bed_count = bed_dir / f"{sname}.fragments.bedgraph"  # has counts
     out_bed_merge = bed_dir / f"{sname}.fragments.merged.bed"  # merged, no counts
-    fai_path = reference.with_suffix(reference.suffix + ".fai")
+    ref_info = tmpdir / "REF_info.txt"
+    if not ref_info.exists():
+        raise IPyradError(
+            f"Reference scaffold order file not found before coverage delimiting: {ref_info}"
+        )
 
     # Collate keeps read mates adjacent before converting to BED/BEDPE. The
     # resulting bedgraph is later reused for low-depth masking and depth stats.
@@ -260,14 +264,14 @@ def get_coverage_bed_graphs(
     # Chr1    833321  833418
     # Chr1    833321  833418
     # Chr1    833321  833418
-    cmd5 = [BIN_BED, "sort", "-i", "-", "-faidx", str(fai_path)]
+    cmd5 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
     # get coverage in bedgraph format with counts within regions
     # Chr1    833321  833418  14
     # Chr1    833419  833520  2
     # Chr1    837052  837165  4
     # Chr1    837165  837230  18
     # Chr1    837230  837240  14
-    cmd6 = [BIN_BED, "genomecov", "-i", "-", "-g", str(fai_path), "-bg"]
+    cmd6 = [BIN_BED, "genomecov", "-i", "-", "-g", str(ref_info), "-bg"]
     # filter out sites below MIN_DEPTH coverage
     # Chr1    833321  833418  14
     # Chr1    837052  837165  4
@@ -286,7 +290,7 @@ def get_coverage_bed_graphs(
     # locus_3_8 / locus_3_16 can be valid in reference order but fail that check.
     cmd9 = ["sort", "-k1,1", "-k2,2n", "-T", str(tmpdir)]
     cmd10 = [BIN_BED, "merge", "-d", str(min_merge_distance), "-i", "-"]
-    cmd11 = [BIN_BED, "sort", "-i", "-", "-g", str(fai_path)]
+    cmd11 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
     # Chr1    833321  833418
     # Chr1    837052  837240
     run_pipeline(
