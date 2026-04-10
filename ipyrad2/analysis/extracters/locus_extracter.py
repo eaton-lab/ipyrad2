@@ -58,6 +58,7 @@ class LocusExtracter:
         self.outdir = Path(kwargs["outdir"]).expanduser().absolute()
         self.out_format = kwargs["out_format"]
         self.force = kwargs["force"]
+        self.random_seed = kwargs.pop("random_seed", None)
         # Wex doesn't care about nloci or length so pop them
         self.nloci = kwargs.pop("nloci")
         self.min_length = kwargs.pop("min_length", kwargs.pop("length", None))
@@ -215,7 +216,7 @@ class LocusExtracter:
             )
 
         loci = pd.DataFrame(records)
-        order = np.random.permutation(len(loci))
+        order = np.random.default_rng(self.random_seed).permutation(len(loci))
         return loci.iloc[order].reset_index(drop=True)
 
 

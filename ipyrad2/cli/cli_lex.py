@@ -55,7 +55,7 @@ def _setup_lex_subparser(
         help="Optional scaffold names, regexes, or `scaff:start-end` regions to sample loci from.",
     )
     sampling.add_argument(
-        "-N", "--nloci", metavar="int", type=int, default=100,
+        "-N", "--max-loci", metavar="int", type=int, default=100,
         help="Number of randomly sampled loci to extract. [default=100]",
     )
     sampling.add_argument(

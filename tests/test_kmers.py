@@ -376,6 +376,30 @@ def test_get_overhangs_from_barcoded_reads_handles_mixed_barcode_lengths(
     )
 
 
+def test_get_overhangs_from_barcoded_reads_respects_boundary_slack_zero(
+    tmp_path: Path,
+    sequential_pool,
+) -> None:
+    barcodes_by_length = {5: ("TAGAG",), 6: ("TTAGAG",)}
+    reads = ["TTAGAGTGCAG" + tail + "ACGTACGT" for tail in ("A", "C", "G", "T") * 2]
+    fastq = _write_fastq(tmp_path / "sample.fastq.gz", reads)
+
+    inferred = kmers.get_overhangs_from_barcoded_reads(
+        [fastq],
+        barcodes_by_length,
+        20,
+        100,
+        1,
+        "ERROR",
+        label="R1 cutsite motif inference",
+        max_barcode_boundary_slack=0,
+    )
+
+    assert inferred.motifs == ("TGCAG",)
+    assert inferred.skipped_ambiguous_reads == 0
+    assert inferred.boundary_supports == ((6, 0, 8),)
+
+
 def test_get_overhangs_from_barcoded_reads_skips_non_exact_barcode_matches(
     tmp_path: Path,
     sequential_pool,

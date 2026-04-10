@@ -151,6 +151,7 @@ def run_subcommand(args, _exit=True):
             cutsite_1=args.cutsite_1,
             cutsite_2=args.cutsite_2,
             max_mismatch=args.max_mismatch,
+            barcode_boundary_slack=args.barcode_boundary_slack,
             chunksize=args.chunksize,
             i7=args.i7,
             disable_infer_cutsite_motifs=args.disable_infer_cutsite_motifs,

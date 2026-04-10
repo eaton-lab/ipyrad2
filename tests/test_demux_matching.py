@@ -188,6 +188,63 @@ def test_bar_matching_progress_callback_reports_raw_and_matched_reads(tmp_path: 
     assert reports[-1] == (2, 2)
 
 
+def test_bar_matching_boundary_ambiguous_reads_are_not_output_by_default(tmp_path: Path) -> None:
+    raw = _write_fastq(tmp_path / "lane.fastq.gz", ["TTAGAGTGCAGAAAA"])
+    matcher = BarMatchingSingleInline(
+        fastqs=(raw, None),
+        barcodes_to_names={
+            b"TTAGAG": "multiplex-DC15-4",
+            b"TAGAG": "occidentale-CO18-01",
+        },
+        barcode_lengths1=(5, 6),
+        barcode_lengths2=(),
+        cuts1=[b"TGCAG"],
+        cuts2=[],
+        merge_technical_replicates=False,
+        outdir=tmp_path / "out",
+        log_level="WARNING",
+        workers=1,
+        chunksize=10,
+        max_reads=10,
+    )
+
+    assert list(matcher.iter_output_records()) == []
+    assert matcher.sample_hits == {}
+    assert matcher.barcode_boundary_ambiguities == {
+        b"boundary_ambiguous:multiplex-DC15-4:TTAGAG;occidentale-CO18-01:TAGAG": 1,
+    }
+
+
+def test_bar_matching_boundary_slack_zero_recovers_position_zero_candidate(tmp_path: Path) -> None:
+    raw = _write_fastq(tmp_path / "lane.fastq.gz", ["TTAGAGTGCAGAAAA"])
+    matcher = BarMatchingSingleInline(
+        fastqs=(raw, None),
+        barcodes_to_names={
+            b"TTAGAG": "multiplex-DC15-4",
+            b"TAGAG": "occidentale-CO18-01",
+        },
+        barcode_lengths1=(5, 6),
+        barcode_lengths2=(),
+        cuts1=[b"TGCAG"],
+        cuts2=[],
+        merge_technical_replicates=False,
+        outdir=tmp_path / "out",
+        log_level="WARNING",
+        workers=1,
+        chunksize=10,
+        max_reads=10,
+        barcode_boundary_slack=0,
+    )
+
+    records = list(matcher.iter_output_records())
+
+    assert len(records) == 1
+    assert records[0][0] == "multiplex-DC15-4"
+    assert b"\nTGCAGAAAA\n" in records[0][1]
+    assert matcher.sample_hits == {"multiplex-DC15-4": 1}
+    assert matcher.barcode_boundary_ambiguities == {}
+
+
 def test_demux_rejects_monomorphic_barcode1(tmp_path: Path) -> None:
     r1 = _write_fastq(tmp_path / "reads.fastq.gz", ["AAAAAAATCGGAAAA"])
     barcodes = tmp_path / "barcodes.tsv"
@@ -757,8 +814,9 @@ def test_demux_auto_inference_uses_exact_barcode_matches_but_demux_respects_max_
         log_level,
         *,
         label="demux",
+        max_barcode_boundary_slack=1,
     ):
-        calls.append(barcodes_by_length)
+        calls.append((barcodes_by_length, max_barcode_boundary_slack))
         return _junction_set(
             ("ATCGG", "ATCGAT"),
             counts=(80, 20),
@@ -782,10 +840,11 @@ def test_demux_auto_inference_uses_exact_barcode_matches_but_demux_respects_max_
         max_reads=100,
         max_reads_kmer=100,
         log_level="WARNING",
+        barcode_boundary_slack=0,
     )
     tool.run()
 
-    assert calls == [{6: ("ACGTAC",), 7: ("GATTACA",)}]
+    assert calls == [({6: ("ACGTAC",), 7: ("GATTACA",)}, 0)]
     assert Counter(_read_fastq_sequences(tmp_path / "out" / "sample1_R1.fastq.gz")) == Counter(
         ["ATCGGAAAA", "ATCGGTTTT"]
     )
@@ -838,6 +897,7 @@ def test_demux_stats_report_barcode_boundary_classes_for_auto_inference(tmp_path
 
     assert "position" in stats_text
     assert "6+0:10, 7+0:6" in stats_text
+    assert "not assigned or written to any sample output file" in stats_text
 
 
 def test_demux_pipeline_single_inline_writes_expected_outputs(tmp_path: Path) -> None:

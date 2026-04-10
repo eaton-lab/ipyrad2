@@ -37,6 +37,7 @@ def test_demux_help_groups_and_examples_are_updated() -> None:
         "--i7",
         "-m, --max_mismatch",
         "-M, --merge-technical-replicates",
+        "--barcode-boundary-slack",
         "-e1, --cutsite-1",
         "-e2, --cutsite-2",
         "-E, --disable-infer-cutsite-motifs",
@@ -82,6 +83,7 @@ def test_demux_parser_defaults_are_unchanged() -> None:
     assert args.chunksize == 10_000_000
     assert args.disable_infer_cutsite_motifs is False
     assert args.merge_technical_replicates is False
+    assert args.barcode_boundary_slack == 1
     assert args.i7 is False
     assert args.cores == 4
     assert args.log_level == "INFO"
@@ -110,6 +112,37 @@ def test_demux_parser_accepts_pigz_flag() -> None:
     )
 
     assert args.pigz is True
+
+
+def test_demux_parser_accepts_barcode_boundary_slack_zero() -> None:
+    args = setup_parsers().parse_args(
+        [
+            "demux",
+            "-d",
+            "a.fastq.gz",
+            "-b",
+            "bars.tsv",
+            "--barcode-boundary-slack",
+            "0",
+        ]
+    )
+
+    assert args.barcode_boundary_slack == 0
+
+
+def test_demux_parser_rejects_invalid_barcode_boundary_slack() -> None:
+    with pytest.raises(SystemExit):
+        setup_parsers().parse_args(
+            [
+                "demux",
+                "-d",
+                "a.fastq.gz",
+                "-b",
+                "bars.tsv",
+                "--barcode-boundary-slack",
+                "2",
+            ]
+        )
 
 
 @pytest.mark.parametrize(

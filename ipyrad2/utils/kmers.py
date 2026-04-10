@@ -350,11 +350,12 @@ def _barcode_matches_pattern(seq: bytes, pattern: str) -> bool:
 def _matching_barcode_candidates(
     read: bytes,
     barcodes_by_length: Dict[int, Tuple[str, ...]],
+    max_slack: int = 1,
 ) -> List[Tuple[str, int, int]]:
     """Return exact barcode/slack boundaries that match this read exactly."""
     matches: list[Tuple[str, int, int]] = []
     for barcode_length, patterns in barcodes_by_length.items():
-        for slack in (0, 1):
+        for slack in range(max_slack + 1):
             end = slack + barcode_length
             if end > len(read):
                 continue
@@ -363,6 +364,14 @@ def _matching_barcode_candidates(
                 if _barcode_matches_pattern(prefix, pattern):
                     matches.append((pattern, barcode_length, slack))
     return list(dict.fromkeys(matches))
+
+
+def _validate_barcode_boundary_slack(max_slack: int) -> int:
+    """Return a normalized barcode-boundary slack value."""
+    max_slack = int(max_slack)
+    if max_slack not in (0, 1):
+        raise IPyradError("barcode boundary slack must be 0 or 1.")
+    return max_slack
 
 
 def iter_reads(fastq: Path, max_len: int, max_reads: int) -> Iterator[bytes]:
@@ -740,16 +749,19 @@ def get_barcoded_kmer_counts(
     barcodes_by_length: Dict[int, Tuple[str, ...]],
     max_len: int,
     max_reads: int,
+    max_barcode_boundary_slack: int = 1,
 ) -> _BarcodeKmerCounts:
     """Return barcode-boundary-aware kmer counts for one FASTQ."""
     barcodes_by_length = _normalize_barcodes_by_length(barcodes_by_length)
+    max_barcode_boundary_slack = _validate_barcode_boundary_slack(max_barcode_boundary_slack)
+    slack_offsets = tuple(range(max_barcode_boundary_slack + 1))
     barcode_lengths = tuple(sorted(barcodes_by_length))
     counts = {(0, kmer_size): Counter() for kmer_size in range(MIN_KMER_SIZE, MAX_KMER_SIZE + 1)}
     candidate_counts: Dict[Tuple[str, int, int, int], Counter] = {}
     boundary_counts = {
         (barcode_length, slack, kmer_size): Counter()
         for barcode_length in barcode_lengths
-        for slack in (0, 1)
+        for slack in slack_offsets
         for kmer_size in range(MIN_KMER_SIZE, MAX_KMER_SIZE + 1)
     }
     boundary_supports = Counter()
@@ -758,10 +770,14 @@ def get_barcoded_kmer_counts(
     accepted_reads = 0
     skipped_no_match_reads = 0
     skipped_ambiguous_reads = 0
-    needed_len = max(max_len, max(barcode_lengths, default=0) + 1 + MAX_KMER_SIZE)
+    needed_len = max(max_len, max(barcode_lengths, default=0) + max_barcode_boundary_slack + MAX_KMER_SIZE)
     for read in iter_reads(fastq, needed_len, max_reads):
         sampled_reads += 1
-        matched_candidates = _matching_barcode_candidates(read, barcodes_by_length)
+        matched_candidates = _matching_barcode_candidates(
+            read,
+            barcodes_by_length,
+            max_slack=max_barcode_boundary_slack,
+        )
         if not matched_candidates:
             skipped_no_match_reads += 1
             continue
@@ -793,13 +809,13 @@ def get_barcoded_kmer_counts(
         boundary_supports=tuple(
             (barcode_length, slack, boundary_supports[(barcode_length, slack)])
             for barcode_length in barcode_lengths
-            for slack in (0, 1)
+            for slack in slack_offsets
             if boundary_supports[(barcode_length, slack)]
         ),
         candidate_supports=tuple(
             (barcode_pattern, barcode_length, slack, candidate_supports[(barcode_pattern, barcode_length, slack)])
             for barcode_length in barcode_lengths
-            for slack in (0, 1)
+            for slack in slack_offsets
             for barcode_pattern in barcodes_by_length[barcode_length]
             if candidate_supports[(barcode_pattern, barcode_length, slack)]
         ),
@@ -814,14 +830,17 @@ def get_barcoded_kmer_counts(
 def _merge_barcoded_kmer_counts(
     kcounts: Dict[int, _BarcodeKmerCounts],
     barcode_lengths: Tuple[int, ...],
+    max_barcode_boundary_slack: int = 1,
 ) -> _BarcodeKmerCounts:
     """Merge per-file barcode-aware kmer counters into one result."""
+    max_barcode_boundary_slack = _validate_barcode_boundary_slack(max_barcode_boundary_slack)
+    slack_offsets = tuple(range(max_barcode_boundary_slack + 1))
     merged_counts = {(0, kmer_size): Counter() for kmer_size in range(MIN_KMER_SIZE, MAX_KMER_SIZE + 1)}
     merged_candidate_counts: Dict[Tuple[str, int, int, int], Counter] = {}
     merged_boundary_counts = {
         (barcode_length, slack, kmer_size): Counter()
         for barcode_length in barcode_lengths
-        for slack in (0, 1)
+        for slack in slack_offsets
         for kmer_size in range(MIN_KMER_SIZE, MAX_KMER_SIZE + 1)
     }
     boundary_support_counter = Counter()
@@ -857,7 +876,7 @@ def _merge_barcoded_kmer_counts(
         boundary_supports=tuple(
             (barcode_length, slack, boundary_support_counter[(barcode_length, slack)])
             for barcode_length in barcode_lengths
-            for slack in (0, 1)
+            for slack in slack_offsets
             if boundary_support_counter[(barcode_length, slack)]
         ),
         candidate_supports=tuple(
@@ -1063,11 +1082,13 @@ def get_overhangs_from_barcoded_reads(
     log_level: str,
     *,
     label: str = "demux",
+    max_barcode_boundary_slack: int = 1,
 ) -> InferredJunctionSet:
     """Infer read-start motifs after exact barcode-prefix matching."""
     if not fastqs:
         raise IPyradError("No FASTQ files were provided for barcode-aware kmer inference.")
 
+    max_barcode_boundary_slack = _validate_barcode_boundary_slack(max_barcode_boundary_slack)
     barcodes_by_length = _normalize_barcodes_by_length(barcodes_by_length)
     barcode_lengths = tuple(sorted(barcodes_by_length))
     max_reads_per_file = max(1, ceil(max_reads / len(fastqs)))
@@ -1080,11 +1101,16 @@ def get_overhangs_from_barcoded_reads(
                 barcodes_by_length=barcodes_by_length,
                 max_len=max_len,
                 max_reads=max_reads_per_file,
+                max_barcode_boundary_slack=max_barcode_boundary_slack,
             ),
         )
 
     raw_counts = run_with_pool(jobs, log_level, workers, msg="Counting kmers")
-    merged = _merge_barcoded_kmer_counts(raw_counts, barcode_lengths)
+    merged = _merge_barcoded_kmer_counts(
+        raw_counts,
+        barcode_lengths,
+        max_barcode_boundary_slack=max_barcode_boundary_slack,
+    )
     if not merged.accepted_reads:
         if merged.reads_with_multiple_boundary_matches:
             raise IPyradError(
