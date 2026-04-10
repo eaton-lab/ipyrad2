@@ -42,7 +42,9 @@ def detect_total_ram_bytes(default: int = DEFAULT_TOTAL_RAM_BYTES) -> int:
     return int(default)
 
 
-def choose_hdf5_cache_settings(total_ram_bytes: int | None = None) -> dict[str, int | str]:
+def choose_hdf5_cache_settings(
+    total_ram_bytes: int | None = None,
+) -> dict[str, int | str]:
     """Choose bounded HDF5 raw chunk-cache settings from host RAM size."""
     if total_ram_bytes is None:
         total_ram_bytes = detect_total_ram_bytes()
@@ -76,8 +78,13 @@ def format_bytes(nbytes: int) -> str:
 
 
 @lru_cache(maxsize=None)
-def _read_fai_rows(fai_path: str) -> tuple[tuple[str | int, ...], ...]:
+def _read_fai_rows(
+    fai_path: str,
+    fai_mtime_ns: int,
+    fai_size: int,
+) -> tuple[tuple[str | int, ...], ...]:
     """Read and cache the `.fai` rows for one reference."""
+    del fai_mtime_ns, fai_size
     rows: list[tuple[str | int, ...]] = []
     with open(fai_path, "rt", encoding="utf-8") as handle:
         for line in handle:
@@ -87,14 +94,23 @@ def _read_fai_rows(fai_path: str) -> tuple[tuple[str | int, ...], ...]:
             fields = line.split("\t")
             if len(fields) < 5:
                 raise ValueError(f"Malformed FASTA index row in {fai_path}: {line}")
-            rows.append((
-                fields[0],
-                int(fields[1]),
-                int(fields[2]),
-                int(fields[3]),
-                int(fields[4]),
-            ))
+            rows.append(
+                (
+                    fields[0],
+                    int(fields[1]),
+                    int(fields[2]),
+                    int(fields[3]),
+                    int(fields[4]),
+                )
+            )
     return tuple(rows)
+
+
+def _get_fai_cache_key(reference: Path) -> tuple[str, int, int]:
+    """Return the cache key tuple for one reference `.fai` file."""
+    fai = reference.with_suffix(reference.suffix + ".fai")
+    stat = fai.stat()
+    return str(fai), int(stat.st_mtime_ns), int(stat.st_size)
 
 
 def get_fai_values(reference: Path, key: str) -> np.ndarray:
@@ -103,19 +119,22 @@ def get_fai_values(reference: Path, key: str) -> np.ndarray:
         column_idx = _FAI_COLUMNS[key]
     except KeyError as exc:
         keys = ", ".join(sorted(_FAI_COLUMNS))
-        raise KeyError(f"Unsupported FASTA index column {key!r}; expected one of: {keys}") from exc
+        raise KeyError(
+            f"Unsupported FASTA index column {key!r}; expected one of: {keys}"
+        ) from exc
 
-    fai = reference.with_suffix(reference.suffix + ".fai")
-    rows = _read_fai_rows(str(fai))
+    rows = _read_fai_rows(*_get_fai_cache_key(reference))
     if column_idx == 0:
         return np.array([row[column_idx] for row in rows], dtype=object)
     return np.array([row[column_idx] for row in rows], dtype=np.int64)
 
 
-def get_retained_fai_rows(reference: Path, loci_bed: Path) -> tuple[tuple[str | int, ...], ...]:
+def get_retained_fai_rows(
+    reference: Path, loci_bed: Path
+) -> tuple[tuple[str | int, ...], ...]:
     """Return reference `.fai` rows for scaffolds present in one BED, in reference order."""
     fai = reference.with_suffix(reference.suffix + ".fai")
-    rows = _read_fai_rows(str(fai))
+    rows = _read_fai_rows(*_get_fai_cache_key(reference))
 
     retained: set[str] = set()
     with open(loci_bed, "rt", encoding="utf-8") as handle:

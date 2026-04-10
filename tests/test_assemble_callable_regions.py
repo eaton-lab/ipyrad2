@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from ipyrad2.assembler import assemble as assemble_module
 from ipyrad2.assembler import beds as beds_module
+from ipyrad2.assembler.hdf5_utils import get_fai_values
 from ipyrad2.assembler.paralogs import get_sample_paralog_tables
 from ipyrad2.assembler.paralogs import read_snps_table
+from ipyrad2.utils.exceptions import IPyradError
 
 
 def test_write_callable_regions_bed_splits_non_acgt_and_preserves_order(
@@ -50,6 +54,86 @@ def test_write_callable_regions_bed_can_be_empty(tmp_path: Path) -> None:
     assert out_bed.read_text(encoding="utf-8") == ""
 
 
+def test_get_reference_sort_order_refreshes_stale_fai(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    reference = tmp_path / "reference.fa"
+    reference.write_text(">locus_1\nACGT\n", encoding="utf-8")
+    fai = reference.with_suffix(reference.suffix + ".fai")
+    fai.write_text("locus_1\t10\t9\t10\t11\n", encoding="utf-8")
+    observed: dict[str, int] = {"faidx_calls": 0}
+
+    def _fake_run_pipeline(cmds, outfile=None, **kwargs):
+        del kwargs
+        cmd = cmds[0]
+        if cmd[:2] == [beds_module.BIN_SAM, "faidx"]:
+            observed["faidx_calls"] += 1
+            fai.write_text("locus_1\t4\t9\t4\t5\n", encoding="utf-8")
+        elif cmd == ["cut", "-f", "1,2", str(fai)]:
+            assert outfile is not None
+            outfile.write_text("locus_1\t4\n", encoding="utf-8")
+        else:
+            raise AssertionError(cmd)
+        return 0, b"", b""
+
+    monkeypatch.setattr("ipyrad2.assembler.beds.run_pipeline", _fake_run_pipeline)
+
+    out_path = beds_module.get_reference_sort_order(reference, tmp_path)
+
+    assert observed["faidx_calls"] == 1
+    assert fai.read_text(encoding="utf-8") == "locus_1\t4\t9\t4\t5\n"
+    assert out_path.read_text(encoding="utf-8") == "locus_1\t4\n"
+
+
+def test_write_callable_regions_bed_refreshes_reference_fai(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    reference = tmp_path / "reference.fa"
+    reference.write_text(">locus_1\nACGT\n", encoding="utf-8")
+    fai = reference.with_suffix(reference.suffix + ".fai")
+    fai.write_text("locus_1\t10\t9\t10\t11\n", encoding="utf-8")
+    regions_bed = tmp_path / "regions.bed"
+    regions_bed.write_text("locus_1\t0\t4\n", encoding="utf-8")
+    observed: dict[str, int] = {"faidx_calls": 0}
+
+    def _fake_run_pipeline(cmds, outfile=None, **kwargs):
+        del outfile, kwargs
+        cmd = cmds[0]
+        if cmd[:2] != [beds_module.BIN_SAM, "faidx"]:
+            raise AssertionError(cmd)
+        observed["faidx_calls"] += 1
+        fai.write_text("locus_1\t4\t9\t4\t5\n", encoding="utf-8")
+        return 0, b"", b""
+
+    monkeypatch.setattr("ipyrad2.assembler.beds.run_pipeline", _fake_run_pipeline)
+
+    out_bed = beds_module.write_callable_regions_bed(
+        regions_bed,
+        reference,
+        tmp_path / "callable.refresh.bed",
+    )
+
+    assert observed["faidx_calls"] == 1
+    assert out_bed.read_text(encoding="utf-8") == "locus_1\t0\t4\n"
+
+
+def test_get_fai_values_observes_rewritten_fai(tmp_path: Path) -> None:
+    reference = tmp_path / "reference.fa"
+    reference.write_text(">chr1\nA\n", encoding="utf-8")
+    fai = reference.with_suffix(reference.suffix + ".fai")
+    fai.write_text("chr1\t10\t6\t10\t11\n", encoding="utf-8")
+
+    assert list(get_fai_values(reference, "length")) == [10]
+
+    fai.write_text("chr1\t4\t6\t4\t5\n", encoding="utf-8")
+    stat = fai.stat()
+    os.utime(fai, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+
+    assert list(get_fai_values(reference, "length")) == [4]
+
+
 def test_read_snps_table_handles_empty_file(tmp_path: Path) -> None:
     path = tmp_path / "empty.snps.tsv"
     path.write_text("", encoding="utf-8")
@@ -61,6 +145,22 @@ def test_read_snps_table_handles_empty_file(tmp_path: Path) -> None:
     assert str(df.dtypes["chrom"]) == "string"
     assert str(df.dtypes["start"]) == "int64"
     assert str(df.dtypes["AD"]) == "string"
+
+
+def test_normalize_user_loci_bed_rejects_interval_beyond_reference_length(
+    tmp_path: Path,
+) -> None:
+    tmpdir = tmp_path / "assembly_tmpdir"
+    (tmpdir / "beds").mkdir(parents=True)
+    (tmpdir / "REF_info.txt").write_text("chr1\t4\n", encoding="utf-8")
+    loci_bed = tmp_path / "input.bed"
+    loci_bed.write_text("chr1\t0\t5\n", encoding="utf-8")
+
+    with pytest.raises(
+        IPyradError,
+        match="--loci-bed line 1 exceeds reference length for chr1: 5 > 4",
+    ):
+        assemble_module._normalize_user_loci_bed(loci_bed, tmpdir)
 
 
 def test_get_sample_paralog_tables_uses_callable_bed_only_for_variant_call(
