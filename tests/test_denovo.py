@@ -85,7 +85,9 @@ def _summary_row(
     arm_boundary: int | None = None,
 ) -> str:
     cluster_sequence = cluster_sequence.upper()
-    cluster_length = len(cluster_sequence) if cluster_length is None else int(cluster_length)
+    cluster_length = (
+        len(cluster_sequence) if cluster_length is None else int(cluster_length)
+    )
     arm_boundary = cluster_length if arm_boundary is None else int(arm_boundary)
     if length is None:
         uses_spacer = record_type == "joined" and arm_boundary < cluster_length
@@ -123,7 +125,10 @@ def _write_audit_summary(audit_dir: Path, rows: list[dict[str, object]]) -> None
 
 def _report_has_value_line(text: str, key: str, value: str) -> bool:
     """Return True when one aligned report line matches `key  value`."""
-    return re.search(rf"^{re.escape(key)}\s+{re.escape(value)}$", text, re.MULTILINE) is not None
+    return (
+        re.search(rf"^{re.escape(key)}\s+{re.escape(value)}$", text, re.MULTILINE)
+        is not None
+    )
 
 
 def test_iter_status_records_splits_crlf_and_preserves_trailing_partial() -> None:
@@ -144,7 +149,12 @@ def test_extract_searching_percent_ignores_non_searching_status() -> None:
     assert denovo_module._extract_searching_percent("Searching 17%") == 17
     assert denovo_module._extract_searching_percent("Searching 100%") == 100
     assert denovo_module._extract_searching_percent("Reading file 100%") is None
-    assert denovo_module._extract_searching_percent("Matching unique query sequences: 0 of 10 (0.00%)") is None
+    assert (
+        denovo_module._extract_searching_percent(
+            "Matching unique query sequences: 0 of 10 (0.00%)"
+        )
+        is None
+    )
 
 
 def test_write_stripped_clustering_fasta_strips_joined_spacer(tmp_path: Path) -> None:
@@ -154,7 +164,9 @@ def test_write_stripped_clustering_fasta_strips_joined_spacer(tmp_path: Path) ->
     joined.write_text(f">s1;J1\nAAA{'N' * 24}TTT\n", encoding="utf-8")
     merged.write_text(">s1;M1\nAAATTT\n", encoding="utf-8")
 
-    seed_to_meta = denovo_module._write_stripped_clustering_fasta(out_fa, [joined, merged])
+    seed_to_meta = denovo_module._write_stripped_clustering_fasta(
+        out_fa, [joined, merged]
+    )
 
     assert out_fa.read_text(encoding="utf-8") == ">s1;J1\nAAATTT\n>s1;M1\nAAATTT\n"
     assert seed_to_meta == {
@@ -163,11 +175,16 @@ def test_write_stripped_clustering_fasta_strips_joined_spacer(tmp_path: Path) ->
     }
 
 
-
-def test_build_sample_summary_rehydrates_joined_consensus_from_stripped_cluster(tmp_path: Path) -> None:
+def test_build_sample_summary_rehydrates_joined_consensus_from_stripped_cluster(
+    tmp_path: Path,
+) -> None:
     workdir = tmp_path
-    (workdir / "s1.joined.fa").write_text(f">s1;J1\nAAA{'N' * 24}TTT\n", encoding="utf-8")
-    (workdir / "s1.consensus.fa").write_text(">centroid=s1;J1;size=9;seqs=2\nAAATTT\n", encoding="utf-8")
+    (workdir / "s1.joined.fa").write_text(
+        f">s1;J1\nAAA{'N' * 24}TTT\n", encoding="utf-8"
+    )
+    (workdir / "s1.consensus.fa").write_text(
+        ">centroid=s1;J1;size=9;seqs=2\nAAATTT\n", encoding="utf-8"
+    )
     (workdir / "s1.clusters.tsv").write_text(
         "S\t0\t6\t*\t*\t*\t*\t*\ts1;J1;size=9\t*\n"
         "H\t0\t6\t100.0\t+\t0\t0\t0\ts1;J2;size=4\ts1;J1;size=9\n",
@@ -242,6 +259,7 @@ def test_run_denovo_rejects_mixed_input_layout(
             keep_intermediates=False,
             log_level="INFO",
         )
+
 
 def test_run_denovo_requires_working_binaries(
     tmp_path: Path,
@@ -398,11 +416,15 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
         denovo_module,
         "build_sample_summary",
         lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("run_denovo should not build sample summaries in the main process")
+            AssertionError(
+                "run_denovo should not build sample summaries in the main process"
+            )
         ),
     )
     monkeypatch.setattr(denovo_module, "concat_summaries", fake_concat_summaries)
-    monkeypatch.setattr(denovo_module, "vsearch_cluster_across", fake_vsearch_cluster_across)
+    monkeypatch.setattr(
+        denovo_module, "vsearch_cluster_across", fake_vsearch_cluster_across
+    )
     monkeypatch.setattr(denovo_module, "make_global_tables", fake_make_global_tables)
     monkeypatch.setattr(
         denovo_module,
@@ -457,7 +479,9 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
     assert _report_has_value_line(stats_text, "alignment_mode", "mafft")
     assert _report_has_value_line(stats_text, "vsearch_threads_per_job", "3")
     assert _report_has_value_line(stats_text, "across_vsearch_threads", "6")
-    assert _report_has_value_line(stats_text, "duplicated_component_reconciliation", "same-sample graph")
+    assert _report_has_value_line(
+        stats_text, "duplicated_component_reconciliation", "same-sample graph"
+    )
     assert _report_has_value_line(stats_text, "mafft_threads_per_job", "0")
     assert _report_has_value_line(stats_text, "single_sequence_loci", "1")
     assert _report_has_value_line(stats_text, "mafft_required_loci", "0")
@@ -475,14 +499,20 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
         "msg": "Dereplicating and clustering",
     }
     assert calls["consensus"]["mapping_tsv"] == outdir / "denovo.loci.mapping.tsv"
-    assert calls["consensus"]["summary_tsv"] == outdir / denovo_module.WORKDIR_NAME / "concat.summary.tsv"
+    assert (
+        calls["consensus"]["summary_tsv"]
+        == outdir / denovo_module.WORKDIR_NAME / "concat.summary.tsv"
+    )
     assert calls["consensus"]["out_fa"] == outdir / "denovo_reference.fa"
     assert calls["consensus"]["mafft_binary"] == str(mafft_binary)
     assert calls["consensus"]["cores"] == 6
     assert calls["consensus"]["alignment_mode"] == "mafft"
     assert calls["graph_cores"] == 6
     assert calls["graph_log_level"] == "INFO"
-    assert calls["across"]["summary_tsv"] == outdir / denovo_module.WORKDIR_NAME / "concat.summary.tsv"
+    assert (
+        calls["across"]["summary_tsv"]
+        == outdir / denovo_module.WORKDIR_NAME / "concat.summary.tsv"
+    )
     assert calls["across"]["threads"] == 6
 
 
@@ -500,12 +530,16 @@ def test_run_denovo_keep_intermediates_preserves_workdir(
         "get_name_to_fastq_dict",
         lambda *args, **kwargs: {"sample_a": (sample_fastq, None)},
     )
-    monkeypatch.setattr(denovo_module, "run_with_pool", lambda *args, **kwargs: {"sample_a": None})
+    monkeypatch.setattr(
+        denovo_module, "run_with_pool", lambda *args, **kwargs: {"sample_a": None}
+    )
     monkeypatch.setattr(
         denovo_module,
         "build_sample_summary",
         lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("run_denovo should not build sample summaries in the main process")
+            AssertionError(
+                "run_denovo should not build sample summaries in the main process"
+            )
         ),
     )
     monkeypatch.setattr(
@@ -525,25 +559,38 @@ def test_run_denovo_keep_intermediates_preserves_workdir(
             encoding="utf-8",
         ),
     )
-    monkeypatch.setattr(denovo_module, "vsearch_cluster_across", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        denovo_module, "vsearch_cluster_across", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(
         denovo_module,
         "make_global_tables",
         lambda outdir, cores, log_level, within_similarity: (
-            pd.DataFrame([{"locus": 1, "locus_name": "locus_1_1", "contract_group": "contract_1_1", "core": "sample_a;S1"}]).to_csv(
+            pd.DataFrame(
+                [
+                    {
+                        "locus": 1,
+                        "locus_name": "locus_1_1",
+                        "contract_group": "contract_1_1",
+                        "core": "sample_a;S1",
+                    }
+                ]
+            ).to_csv(
                 outdir.parent / "denovo.loci.mapping.tsv",
                 sep="\t",
                 index=False,
             ),
-            pd.DataFrame([
-                {
-                    "locus": 1,
-                    "n_samples": 1,
-                    "n_cores": 1,
-                    "duplicated_component": False,
-                    "used_reconciliation": False,
-                }
-            ]).to_csv(
+            pd.DataFrame(
+                [
+                    {
+                        "locus": 1,
+                        "n_samples": 1,
+                        "n_cores": 1,
+                        "duplicated_component": False,
+                        "used_reconciliation": False,
+                    }
+                ]
+            ).to_csv(
                 outdir.parent / "denovo.loci.stats.tsv",
                 sep="\t",
                 index=False,
@@ -559,7 +606,9 @@ def test_run_denovo_keep_intermediates_preserves_workdir(
         "write_ordered_consensus_stream_to_file",
         lambda **kwargs: (
             kwargs["out_fa"].write_text(">locus_1_1\nACGT\n", encoding="utf-8"),
-            _alignment_summary(total_loci=1, single_sequence_loci=1, alignment_mode="mafft"),
+            _alignment_summary(
+                total_loci=1, single_sequence_loci=1, alignment_mode="mafft"
+            ),
         )[1],
     )
 
@@ -662,9 +711,13 @@ def test_run_vsearch_with_progress_tracks_searching_status_only(
         stream_checkpoints.append(list(events))
         yield "Searching 100%\rMatching unique query sequences: 0 of 10 (0.00%)\r"
 
-    monkeypatch.setattr(denovo_module, "_iter_vsearch_stderr_chunks", _fake_stderr_chunks)
+    monkeypatch.setattr(
+        denovo_module, "_iter_vsearch_stderr_chunks", _fake_stderr_chunks
+    )
 
-    denovo_module._run_vsearch_with_progress(["vsearch"], message="Across-sample clustering")
+    denovo_module._run_vsearch_with_progress(
+        ["vsearch"], message="Across-sample clustering"
+    )
 
     assert ("init", 100, "Across-sample clustering") in events
     assert ("update", 0) in events
@@ -732,8 +785,12 @@ def test_vsearch_pairs_cleans_large_sample_files_after_derep_and_summary(
             assert not cluster_fa.exists()
             assert derep_unsorted.exists()
             assert derep.exists()
-            consensus.write_text(">centroid=sample;J1;size=5;seqs=1\nAAATTT\n", encoding="utf-8")
-            clusters.write_text("S\t0\t6\t*\t*\t*\t*\t*\tsample;J1;size=5\t*\n", encoding="utf-8")
+            consensus.write_text(
+                ">centroid=sample;J1;size=5;seqs=1\nAAATTT\n", encoding="utf-8"
+            )
+            clusters.write_text(
+                "S\t0\t6\t*\t*\t*\t*\t*\tsample;J1;size=5\t*\n", encoding="utf-8"
+            )
             return
         raise AssertionError(cmd)
 
@@ -751,7 +808,9 @@ def test_vsearch_pairs_cleans_large_sample_files_after_derep_and_summary(
         return pd.DataFrame()
 
     monkeypatch.setattr(denovo_module, "run_pipeline", fake_run_pipeline)
-    monkeypatch.setattr(denovo_module, "build_sample_summary", fake_build_sample_summary)
+    monkeypatch.setattr(
+        denovo_module, "build_sample_summary", fake_build_sample_summary
+    )
 
     denovo_module.vsearch_pairs(
         sname="sample",
@@ -808,17 +867,25 @@ def test_vsearch_pairs_keeps_sample_intermediates_when_requested(
             derep.write_text(">sample;S1;size=5\nAAATTT\n", encoding="utf-8")
             return
         if "--cluster_fast" in cmd:
-            consensus.write_text(">centroid=sample;S1;size=5;seqs=1\nAAATTT\n", encoding="utf-8")
-            clusters.write_text("S\t0\t6\t*\t*\t*\t*\t*\tsample;S1;size=5\t*\n", encoding="utf-8")
+            consensus.write_text(
+                ">centroid=sample;S1;size=5;seqs=1\nAAATTT\n", encoding="utf-8"
+            )
+            clusters.write_text(
+                "S\t0\t6\t*\t*\t*\t*\t*\tsample;S1;size=5\t*\n", encoding="utf-8"
+            )
             return
         raise AssertionError(cmd)
 
     def fake_build_sample_summary(sname, outdir, *, seed_to_meta=None, **kwargs):
-        (outdir / f"{sname}.summary.tsv").write_text("sample\tcluster_id\nsample\t0\n", encoding="utf-8")
+        (outdir / f"{sname}.summary.tsv").write_text(
+            "sample\tcluster_id\nsample\t0\n", encoding="utf-8"
+        )
         return pd.DataFrame()
 
     monkeypatch.setattr(denovo_module, "run_pipeline", fake_run_pipeline)
-    monkeypatch.setattr(denovo_module, "build_sample_summary", fake_build_sample_summary)
+    monkeypatch.setattr(
+        denovo_module, "build_sample_summary", fake_build_sample_summary
+    )
 
     denovo_module.vsearch_pairs(
         sname="sample",
@@ -928,8 +995,12 @@ def test_vsearch_pairs_preserves_post_derep_files_when_summary_fails(
             derep.write_text(">sample;S1;size=5\nAAATTT\n", encoding="utf-8")
             return
         if "--cluster_fast" in cmd:
-            consensus.write_text(">centroid=sample;S1;size=5;seqs=1\nAAATTT\n", encoding="utf-8")
-            clusters.write_text("S\t0\t6\t*\t*\t*\t*\t*\tsample;S1;size=5\t*\n", encoding="utf-8")
+            consensus.write_text(
+                ">centroid=sample;S1;size=5;seqs=1\nAAATTT\n", encoding="utf-8"
+            )
+            clusters.write_text(
+                "S\t0\t6\t*\t*\t*\t*\t*\tsample;S1;size=5\t*\n", encoding="utf-8"
+            )
             return
         raise AssertionError(cmd)
 
@@ -964,7 +1035,9 @@ def test_vsearch_pairs_preserves_post_derep_files_when_summary_fails(
     assert clusters.exists()
 
 
-def test_select_denovo_samples_keeps_all_when_input_count_is_at_most_cap(tmp_path: Path) -> None:
+def test_select_denovo_samples_keeps_all_when_input_count_is_at_most_cap(
+    tmp_path: Path,
+) -> None:
     fastq_dict = {}
     for idx in range(10):
         path = tmp_path / f"sample_{idx}.fastq.gz"
@@ -981,7 +1054,9 @@ def test_select_denovo_samples_keeps_all_when_input_count_is_at_most_cap(tmp_pat
     assert selected == fastq_dict
 
 
-def test_select_denovo_samples_fills_from_next_largest_when_top_half_is_below_cap(tmp_path: Path) -> None:
+def test_select_denovo_samples_fills_from_next_largest_when_top_half_is_below_cap(
+    tmp_path: Path,
+) -> None:
     fastq_dict = {}
     for idx in range(11):
         path = tmp_path / f"sample_{idx}.fastq.gz"
@@ -1016,7 +1091,9 @@ def test_select_denovo_samples_prefers_top_half_by_input_size(tmp_path: Path) ->
         use_all_samples=False,
     )
     eligible = [f"sample_{idx}" for idx in range(29, 14, -1)]
-    expected = sorted(random.Random(0).sample(eligible, denovo_module.DEFAULT_MAX_DENOVO_SAMPLES))
+    expected = sorted(
+        random.Random(0).sample(eligible, denovo_module.DEFAULT_MAX_DENOVO_SAMPLES)
+    )
 
     assert mode == "top-half-random"
     assert repeated_mode == "top-half-random"
@@ -1029,10 +1106,7 @@ def test_select_denovo_samples_prefers_top_half_by_input_size(tmp_path: Path) ->
 def test_select_denovo_samples_imap_picks_largest_per_group(tmp_path: Path) -> None:
     imap_path = tmp_path / "denovo.imap.tsv"
     imap_path.write_text(
-        "a1 pop_a\n"
-        "a2 pop_a\n"
-        "b1 pop_b\n"
-        "b2 pop_b\n",
+        "a1 pop_a\na2 pop_a\nb1 pop_b\nb2 pop_b\n",
         encoding="utf-8",
     )
     a1 = tmp_path / "a1.fastq.gz"
@@ -1172,7 +1246,11 @@ def test_write_ordered_consensus_stream_to_file_flushes_in_mapping_order(
         yield 1, (2, "locus_2_1", "CONS2", False)
         yield 0, (1, "locus_1_1", "CONS1", False)
 
-    monkeypatch.setattr(align_module, "_iter_threaded_alignment_results", fake_iter_threaded_alignment_results)
+    monkeypatch.setattr(
+        align_module,
+        "_iter_threaded_alignment_results",
+        fake_iter_threaded_alignment_results,
+    )
     summary = align_module.write_ordered_consensus_stream_to_file(
         mapping_tsv=mapping_tsv,
         summary_tsv=summary_tsv,
@@ -1181,12 +1259,16 @@ def test_write_ordered_consensus_stream_to_file_flushes_in_mapping_order(
         cores=2,
     )
 
-    assert out_fa.read_text(encoding="utf-8") == ">locus_1_1\nCONS1\n>locus_2_1\nCONS2\n"
+    assert (
+        out_fa.read_text(encoding="utf-8") == ">locus_1_1\nCONS1\n>locus_2_1\nCONS2\n"
+    )
     assert summary.mafft_required_loci == 2
     assert summary.mafft_worker_processes == 2
 
 
-def test_load_summary_records_supports_compact_arm_boundary_schema(tmp_path: Path) -> None:
+def test_load_summary_records_supports_compact_arm_boundary_schema(
+    tmp_path: Path,
+) -> None:
     summary_tsv = tmp_path / "concat.summary.tsv"
     summary_tsv.write_text(
         _summary_header()
@@ -1346,7 +1428,11 @@ def test_write_ordered_consensus_stream_to_file_interrupt_raises_system_exit_130
         yield  # pragma: no cover
 
     monkeypatch.setattr(align_module, "ProgressBar", _ProgressStub)
-    monkeypatch.setattr(align_module, "_iter_threaded_alignment_results", fake_iter_threaded_alignment_results)
+    monkeypatch.setattr(
+        align_module,
+        "_iter_threaded_alignment_results",
+        fake_iter_threaded_alignment_results,
+    )
 
     with pytest.raises(SystemExit) as excinfo:
         align_module.write_ordered_consensus_stream_to_file(
@@ -1362,18 +1448,38 @@ def test_write_ordered_consensus_stream_to_file_interrupt_raises_system_exit_130
 
 
 def test_worker_build_consensus_returns_single_record_without_alignment() -> None:
-    locus_id, locus_name, consensus, uses_output_spacer = align_module.worker_build_consensus(
-        locus_id=4,
-        record=[("seed", "ACGTNN")],
-        mafft_binary="mafft",
-        min_prop=0.5,
-        threads=1,
+    locus_id, locus_name, consensus, uses_output_spacer = (
+        align_module.worker_build_consensus(
+            locus_id=4,
+            record=[("seed", "ACGTNN")],
+            mafft_binary="mafft",
+            min_prop=0.5,
+            threads=1,
+        )
     )
 
     assert locus_id == 4
     assert locus_name == "locus_4"
     assert consensus == "ACGTNN"
     assert uses_output_spacer is False
+
+
+def test_consensus_from_aligned_uses_majority_base_even_below_min_prop() -> None:
+    consensus = align_module.consensus_from_aligned(
+        [("a", "A"), ("b", "C"), ("c", "C")],
+        min_prop=0.9,
+    )
+
+    assert consensus == "C"
+
+
+def test_consensus_from_aligned_breaks_exact_ties_by_acgt_order() -> None:
+    consensus = align_module.consensus_from_aligned(
+        [("a", "T"), ("b", "G"), ("c", "C"), ("d", "A")],
+        min_prop=0.9,
+    )
+
+    assert consensus == "A"
 
 
 def test_worker_build_consensus_identical_sequences_skip_mafft(
@@ -1384,12 +1490,14 @@ def test_worker_build_consensus_identical_sequences_skip_mafft(
 
     monkeypatch.setattr(align_module, "mafft_align_one", fail_mafft)
 
-    locus_id, locus_name, consensus, uses_output_spacer = align_module.worker_build_consensus(
-        locus_id=7,
-        record=[("a", "ACGT"), ("b", "ACGT"), ("c", "ACGT")],
-        mafft_binary="mafft",
-        min_prop=0.5,
-        threads=1,
+    locus_id, locus_name, consensus, uses_output_spacer = (
+        align_module.worker_build_consensus(
+            locus_id=7,
+            record=[("a", "ACGT"), ("b", "ACGT"), ("c", "ACGT")],
+            mafft_binary="mafft",
+            min_prop=0.5,
+            threads=1,
+        )
     )
 
     assert locus_id == 7
@@ -1409,12 +1517,14 @@ def test_worker_build_consensus_same_length_nonidentical_still_calls_mafft(
 
     monkeypatch.setattr(align_module, "mafft_align_one", fake_mafft)
 
-    locus_id, locus_name, consensus, uses_output_spacer = align_module.worker_build_consensus(
-        locus_id=8,
-        record=[("a", "ACGT"), ("b", "ACGA")],
-        mafft_binary="mafft",
-        min_prop=0.5,
-        threads=1,
+    locus_id, locus_name, consensus, uses_output_spacer = (
+        align_module.worker_build_consensus(
+            locus_id=8,
+            record=[("a", "ACGT"), ("b", "ACGA")],
+            mafft_binary="mafft",
+            min_prop=0.5,
+            threads=1,
+        )
     )
 
     assert locus_id == 8
@@ -1482,7 +1592,9 @@ def test_write_ordered_consensus_stream_to_file_no_alignment_uses_longest_stripp
     )
 
     def fail_pool(*args, **kwargs):
-        raise AssertionError("threaded aligner should not be used for --no-alignment path")
+        raise AssertionError(
+            "threaded aligner should not be used for --no-alignment path"
+        )
 
     monkeypatch.setattr(align_module, "_iter_threaded_alignment_results", fail_pool)
     align_module.write_ordered_consensus_stream_to_file(
@@ -1695,12 +1807,16 @@ def test_run_denovo_no_alignment_passes_alignment_mode_none(
         "get_name_to_fastq_dict",
         lambda *args, **kwargs: {"sample_a": (sample_fastq, None)},
     )
-    monkeypatch.setattr(denovo_module, "run_with_pool", lambda *args, **kwargs: {"sample_a": None})
+    monkeypatch.setattr(
+        denovo_module, "run_with_pool", lambda *args, **kwargs: {"sample_a": None}
+    )
     monkeypatch.setattr(
         denovo_module,
         "build_sample_summary",
         lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("run_denovo should not build sample summaries in the main process")
+            AssertionError(
+                "run_denovo should not build sample summaries in the main process"
+            )
         ),
     )
     monkeypatch.setattr(
@@ -1720,7 +1836,9 @@ def test_run_denovo_no_alignment_passes_alignment_mode_none(
             encoding="utf-8",
         ),
     )
-    monkeypatch.setattr(denovo_module, "vsearch_cluster_across", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        denovo_module, "vsearch_cluster_across", lambda *args, **kwargs: None
+    )
 
     def fake_make_global_tables(
         outdir,
@@ -1728,7 +1846,16 @@ def test_run_denovo_no_alignment_passes_alignment_mode_none(
         log_level,
         within_similarity,
     ):
-        mapping = pd.DataFrame([{"locus": 1, "locus_name": "locus_1_1", "contract_group": "contract_1_1", "core": "sample_a;S1"}])
+        mapping = pd.DataFrame(
+            [
+                {
+                    "locus": 1,
+                    "locus_name": "locus_1_1",
+                    "contract_group": "contract_1_1",
+                    "core": "sample_a;S1",
+                }
+            ]
+        )
         stats = pd.DataFrame(
             [
                 {
@@ -1786,6 +1913,7 @@ def test_run_denovo_no_alignment_passes_alignment_mode_none(
     stats_text = (outdir / "denovo.stats.txt").read_text(encoding="utf-8")
     assert _report_has_value_line(stats_text, "alignment_mode", "none")
     assert _report_has_value_line(stats_text, "mafft_worker_processes", "0")
+
 
 def test_write_denovo_stats_formats_assemble_style_sections(
     tmp_path: Path,
@@ -1959,10 +2087,30 @@ def test_collect_denovo_qc_summarizes_final_outputs(
 
     pd.DataFrame(
         [
-            {"n_samples": 1, "n_cores": 1, "duplicated_component": False, "used_reconciliation": False},
-            {"n_samples": 2, "n_cores": 2, "duplicated_component": True, "used_reconciliation": True},
-            {"n_samples": 2, "n_cores": 3, "duplicated_component": True, "used_reconciliation": False},
-            {"n_samples": 1, "n_cores": 2, "duplicated_component": False, "used_reconciliation": False},
+            {
+                "n_samples": 1,
+                "n_cores": 1,
+                "duplicated_component": False,
+                "used_reconciliation": False,
+            },
+            {
+                "n_samples": 2,
+                "n_cores": 2,
+                "duplicated_component": True,
+                "used_reconciliation": True,
+            },
+            {
+                "n_samples": 2,
+                "n_cores": 3,
+                "duplicated_component": True,
+                "used_reconciliation": False,
+            },
+            {
+                "n_samples": 1,
+                "n_cores": 2,
+                "duplicated_component": False,
+                "used_reconciliation": False,
+            },
         ]
     ).to_csv(outputs["loci_stats"], sep="\t", index=False)
     _write_audit_summary(
@@ -1984,10 +2132,43 @@ def test_collect_denovo_qc_summarizes_final_outputs(
     )
     (workdir / "concat.summary.tsv").write_text(
         _summary_header()
-        + _summary_row(sample="s1", cluster_id=0, seed="s1;A", cluster_sequence="AAAAAA", record_type="joined", n_reads=10, length=30, arm_boundary=3)
-        + _summary_row(sample="s1", cluster_id=1, seed="s1;B", cluster_sequence="CCCCCC", record_type="merged", n_reads=6, length=6)
-        + _summary_row(sample="s2", cluster_id=0, seed="s2;A", cluster_sequence="GGGGGG", record_type="single", n_reads=8, length=6)
-        + _summary_row(sample="s2", cluster_id=1, seed="s2;B", cluster_sequence="TTTTTT", record_type="single", n_reads=3, length=6),
+        + _summary_row(
+            sample="s1",
+            cluster_id=0,
+            seed="s1;A",
+            cluster_sequence="AAAAAA",
+            record_type="joined",
+            n_reads=10,
+            length=30,
+            arm_boundary=3,
+        )
+        + _summary_row(
+            sample="s1",
+            cluster_id=1,
+            seed="s1;B",
+            cluster_sequence="CCCCCC",
+            record_type="merged",
+            n_reads=6,
+            length=6,
+        )
+        + _summary_row(
+            sample="s2",
+            cluster_id=0,
+            seed="s2;A",
+            cluster_sequence="GGGGGG",
+            record_type="single",
+            n_reads=8,
+            length=6,
+        )
+        + _summary_row(
+            sample="s2",
+            cluster_id=1,
+            seed="s2;B",
+            cluster_sequence="TTTTTT",
+            record_type="single",
+            n_reads=3,
+            length=6,
+        ),
         encoding="utf-8",
     )
 
@@ -2040,7 +2221,9 @@ def test_collect_denovo_qc_handles_empty_outputs(
     }
     selected_fastq_dict = {"sample_a": (tmp_path / "sample_a.fastq.gz", None)}
 
-    pd.DataFrame(columns=["n_samples", "n_cores", "duplicated_component", "used_reconciliation"]).to_csv(
+    pd.DataFrame(
+        columns=["n_samples", "n_cores", "duplicated_component", "used_reconciliation"]
+    ).to_csv(
         outputs["loci_stats"],
         sep="\t",
         index=False,
@@ -2078,10 +2261,45 @@ def test_make_global_tables_contracts_joined_duplicates_and_writes_hierarchical_
     workdir.mkdir()
     (workdir / "concat.summary.tsv").write_text(
         _summary_header()
-        + _summary_row(sample="s1", cluster_id=0, seed="s1;J1", cluster_sequence="AAATTT", record_type="joined", n_reads=5, length=30, arm_boundary=3)
-        + _summary_row(sample="s1", cluster_id=1, seed="s1;J2", cluster_sequence="AAATTT", record_type="joined", n_reads=4, length=30, arm_boundary=3)
-        + _summary_row(sample="s2", cluster_id=0, seed="s2;J1", cluster_sequence="AAATTT", record_type="joined", n_reads=6, length=30, arm_boundary=3)
-        + _summary_row(sample="s3", cluster_id=0, seed="s3;M1", cluster_sequence="GGGGGG", record_type="merged", n_reads=7, length=6),
+        + _summary_row(
+            sample="s1",
+            cluster_id=0,
+            seed="s1;J1",
+            cluster_sequence="AAATTT",
+            record_type="joined",
+            n_reads=5,
+            length=30,
+            arm_boundary=3,
+        )
+        + _summary_row(
+            sample="s1",
+            cluster_id=1,
+            seed="s1;J2",
+            cluster_sequence="AAATTT",
+            record_type="joined",
+            n_reads=4,
+            length=30,
+            arm_boundary=3,
+        )
+        + _summary_row(
+            sample="s2",
+            cluster_id=0,
+            seed="s2;J1",
+            cluster_sequence="AAATTT",
+            record_type="joined",
+            n_reads=6,
+            length=30,
+            arm_boundary=3,
+        )
+        + _summary_row(
+            sample="s3",
+            cluster_id=0,
+            seed="s3;M1",
+            cluster_sequence="GGGGGG",
+            record_type="merged",
+            n_reads=7,
+            length=6,
+        ),
         encoding="utf-8",
     )
     (workdir / "global_hits.uc.tsv").write_text(
@@ -2099,9 +2317,20 @@ def test_make_global_tables_contracts_joined_duplicates_and_writes_hierarchical_
     summary = graph_module.make_global_tables(workdir)
     mapping_df, stats_df = _read_graph_output_tables(workdir)
 
-    assert mapping_df["locus_name"].tolist()[:3] == ["locus_1_1", "locus_1_1", "locus_1_1"]
-    assert mapping_df.loc[mapping_df["locus_name"] == "locus_1_1", "contract_group"].nunique() == 2
-    assert set(mapping_df.loc[mapping_df["sample"] == "s1", "contract_group"]) == {"contract_1_1"}
+    assert mapping_df["locus_name"].tolist()[:3] == [
+        "locus_1_1",
+        "locus_1_1",
+        "locus_1_1",
+    ]
+    assert (
+        mapping_df.loc[
+            mapping_df["locus_name"] == "locus_1_1", "contract_group"
+        ].nunique()
+        == 2
+    )
+    assert set(mapping_df.loc[mapping_df["sample"] == "s1", "contract_group"]) == {
+        "contract_1_1"
+    }
     assert summary.consensus_records == 4
     assert summary.loci_written == 2
     assert stats_df.loc[0, "n_samples"] == 2
@@ -2117,9 +2346,35 @@ def test_make_global_tables_reconciles_mixed_joined_and_merged_component(
     workdir.mkdir()
     (workdir / "concat.summary.tsv").write_text(
         _summary_header()
-        + _summary_row(sample="s1", cluster_id=0, seed="s1;J1", cluster_sequence="AAATTT", record_type="joined", n_reads=5, length=30, arm_boundary=3)
-        + _summary_row(sample="s1", cluster_id=1, seed="s1;M1", cluster_sequence="AAATTT", record_type="merged", n_reads=4, length=6)
-        + _summary_row(sample="s2", cluster_id=0, seed="s2;J1", cluster_sequence="AAATTT", record_type="joined", n_reads=6, length=30, arm_boundary=3),
+        + _summary_row(
+            sample="s1",
+            cluster_id=0,
+            seed="s1;J1",
+            cluster_sequence="AAATTT",
+            record_type="joined",
+            n_reads=5,
+            length=30,
+            arm_boundary=3,
+        )
+        + _summary_row(
+            sample="s1",
+            cluster_id=1,
+            seed="s1;M1",
+            cluster_sequence="AAATTT",
+            record_type="merged",
+            n_reads=4,
+            length=6,
+        )
+        + _summary_row(
+            sample="s2",
+            cluster_id=0,
+            seed="s2;J1",
+            cluster_sequence="AAATTT",
+            record_type="joined",
+            n_reads=6,
+            length=30,
+            arm_boundary=3,
+        ),
         encoding="utf-8",
     )
     (workdir / "global_hits.uc.tsv").write_text(
@@ -2140,7 +2395,9 @@ def test_make_global_tables_reconciles_mixed_joined_and_merged_component(
     assert graph_summary.components_reconciled == 1
     assert mapping_df["reconcile_mode"].tolist() == ["mixed", "mixed", "mixed"]
     assert mapping_df["output_form"].tolist() == ["spaced", "spaced", "spaced"]
-    assert set(mapping_df.loc[mapping_df["sample"] == "s1", "contract_group"]) == {"contract_1_1"}
+    assert set(mapping_df.loc[mapping_df["sample"] == "s1", "contract_group"]) == {
+        "contract_1_1"
+    }
     assert bool(stats_df.loc[0, "used_mixed_reconciliation"]) is True
     assert stats_df.loc[0, "output_form"] == "spaced"
     assert stats_df.loc[0, "n_reconciled_groups"] == 1
@@ -2153,9 +2410,33 @@ def test_make_global_tables_rounds_mean_and_std_fields_to_3_decimals(
     workdir.mkdir()
     (workdir / "concat.summary.tsv").write_text(
         _summary_header()
-        + _summary_row(sample="s1", cluster_id=0, seed="s1;S1", cluster_sequence="AAAAAAA", record_type="single", n_reads=1, length=7)
-        + _summary_row(sample="s2", cluster_id=0, seed="s2;M1", cluster_sequence="CCCCCCCC", record_type="merged", n_reads=2, length=8)
-        + _summary_row(sample="s3", cluster_id=0, seed="s3;S1", cluster_sequence="GGGGGGGGGG", record_type="single", n_reads=4, length=10),
+        + _summary_row(
+            sample="s1",
+            cluster_id=0,
+            seed="s1;S1",
+            cluster_sequence="AAAAAAA",
+            record_type="single",
+            n_reads=1,
+            length=7,
+        )
+        + _summary_row(
+            sample="s2",
+            cluster_id=0,
+            seed="s2;M1",
+            cluster_sequence="CCCCCCCC",
+            record_type="merged",
+            n_reads=2,
+            length=8,
+        )
+        + _summary_row(
+            sample="s3",
+            cluster_id=0,
+            seed="s3;S1",
+            cluster_sequence="GGGGGGGGGG",
+            record_type="single",
+            n_reads=4,
+            length=10,
+        ),
         encoding="utf-8",
     )
     (workdir / "global_hits.uc.tsv").write_text(
@@ -2172,7 +2453,9 @@ def test_make_global_tables_rounds_mean_and_std_fields_to_3_decimals(
 
     graph_module.make_global_tables(workdir)
 
-    with open(workdir.parent / "denovo.loci.stats.tsv", "rt", encoding="utf-8", newline="") as fh:
+    with open(
+        workdir.parent / "denovo.loci.stats.tsv", "rt", encoding="utf-8", newline=""
+    ) as fh:
         row = next(csv.DictReader(fh, delimiter="\t"))
 
     assert row["n_reads_mean"] == "2.333"
@@ -2189,9 +2472,36 @@ def test_make_global_tables_reconciles_joined_only_identical_duplicates_without_
     workdir.mkdir()
     (workdir / "concat.summary.tsv").write_text(
         _summary_header()
-        + _summary_row(sample="s1", cluster_id=0, seed="s1;J1", cluster_sequence="AAATTT", record_type="joined", n_reads=5, length=30, arm_boundary=3)
-        + _summary_row(sample="s1", cluster_id=1, seed="s1;J2", cluster_sequence="AAATTT", record_type="joined", n_reads=4, length=30, arm_boundary=3)
-        + _summary_row(sample="s2", cluster_id=0, seed="s2;J1", cluster_sequence="AAATTT", record_type="joined", n_reads=6, length=30, arm_boundary=3),
+        + _summary_row(
+            sample="s1",
+            cluster_id=0,
+            seed="s1;J1",
+            cluster_sequence="AAATTT",
+            record_type="joined",
+            n_reads=5,
+            length=30,
+            arm_boundary=3,
+        )
+        + _summary_row(
+            sample="s1",
+            cluster_id=1,
+            seed="s1;J2",
+            cluster_sequence="AAATTT",
+            record_type="joined",
+            n_reads=4,
+            length=30,
+            arm_boundary=3,
+        )
+        + _summary_row(
+            sample="s2",
+            cluster_id=0,
+            seed="s2;J1",
+            cluster_sequence="AAATTT",
+            record_type="joined",
+            n_reads=6,
+            length=30,
+            arm_boundary=3,
+        ),
         encoding="utf-8",
     )
     (workdir / "global_hits.uc.tsv").write_text(
@@ -2210,9 +2520,15 @@ def test_make_global_tables_reconciles_joined_only_identical_duplicates_without_
 
     assert mapping_df["locus_name"].tolist() == ["locus_1_1", "locus_1_1", "locus_1_1"]
     assert graph_summary.joined_only_reconciled_loci == 1
-    assert mapping_df["reconcile_mode"].tolist() == ["joined_only", "joined_only", "joined_only"]
+    assert mapping_df["reconcile_mode"].tolist() == [
+        "joined_only",
+        "joined_only",
+        "joined_only",
+    ]
     assert mapping_df["output_form"].tolist() == ["spaced", "spaced", "spaced"]
-    assert set(mapping_df.loc[mapping_df["sample"] == "s1", "contract_group"]) == {"contract_1_1"}
+    assert set(mapping_df.loc[mapping_df["sample"] == "s1", "contract_group"]) == {
+        "contract_1_1"
+    }
     assert bool(stats_df.loc[0, "used_reconciliation"]) is True
     assert bool(stats_df.loc[0, "used_joined_only_reconciliation"]) is True
     assert stats_df.loc[0, "reconcile_mode"] == "joined_only"
@@ -2235,8 +2551,24 @@ def test_make_global_tables_parallelizes_multiple_components(
     workdir.mkdir()
     (workdir / "concat.summary.tsv").write_text(
         _summary_header()
-        + _summary_row(sample="s1", cluster_id=0, seed="s1;S1", cluster_sequence="AAAAAA", record_type="single", n_reads=5, length=6)
-        + _summary_row(sample="s2", cluster_id=0, seed="s2;S1", cluster_sequence="CCCCCC", record_type="single", n_reads=6, length=6),
+        + _summary_row(
+            sample="s1",
+            cluster_id=0,
+            seed="s1;S1",
+            cluster_sequence="AAAAAA",
+            record_type="single",
+            n_reads=5,
+            length=6,
+        )
+        + _summary_row(
+            sample="s2",
+            cluster_id=0,
+            seed="s2;S1",
+            cluster_sequence="CCCCCC",
+            record_type="single",
+            n_reads=6,
+            length=6,
+        ),
         encoding="utf-8",
     )
     (workdir / "global_hits.uc.tsv").write_text("", encoding="utf-8")
@@ -2289,10 +2621,45 @@ def test_make_global_tables_parallel_path_matches_serial(
         workdir.mkdir()
         (workdir / "concat.summary.tsv").write_text(
             _summary_header()
-            + _summary_row(sample="s1", cluster_id=0, seed="s1;J1", cluster_sequence="AAATTT", record_type="joined", n_reads=5, length=30, arm_boundary=3)
-            + _summary_row(sample="s1", cluster_id=1, seed="s1;J2", cluster_sequence="AAATTT", record_type="joined", n_reads=4, length=30, arm_boundary=3)
-            + _summary_row(sample="s2", cluster_id=0, seed="s2;J1", cluster_sequence="AAATTT", record_type="joined", n_reads=6, length=30, arm_boundary=3)
-            + _summary_row(sample="s3", cluster_id=0, seed="s3;M1", cluster_sequence="GGGGGG", record_type="merged", n_reads=7, length=6),
+            + _summary_row(
+                sample="s1",
+                cluster_id=0,
+                seed="s1;J1",
+                cluster_sequence="AAATTT",
+                record_type="joined",
+                n_reads=5,
+                length=30,
+                arm_boundary=3,
+            )
+            + _summary_row(
+                sample="s1",
+                cluster_id=1,
+                seed="s1;J2",
+                cluster_sequence="AAATTT",
+                record_type="joined",
+                n_reads=4,
+                length=30,
+                arm_boundary=3,
+            )
+            + _summary_row(
+                sample="s2",
+                cluster_id=0,
+                seed="s2;J1",
+                cluster_sequence="AAATTT",
+                record_type="joined",
+                n_reads=6,
+                length=30,
+                arm_boundary=3,
+            )
+            + _summary_row(
+                sample="s3",
+                cluster_id=0,
+                seed="s3;M1",
+                cluster_sequence="GGGGGG",
+                record_type="merged",
+                n_reads=7,
+                length=6,
+            ),
             encoding="utf-8",
         )
         (workdir / "global_hits.uc.tsv").write_text(
@@ -2338,12 +2705,60 @@ def test_make_global_tables_writes_audits_in_completion_order_but_keeps_final_ou
     workdir.mkdir()
     (workdir / "concat.summary.tsv").write_text(
         _summary_header()
-        + _summary_row(sample="s1", cluster_id=0, seed="s1;A1", cluster_sequence="AAAAAA", record_type="single", n_reads=5, length=6)
-        + _summary_row(sample="s1", cluster_id=1, seed="s1;A2", cluster_sequence="AAAAAA", record_type="single", n_reads=4, length=6)
-        + _summary_row(sample="s2", cluster_id=2, seed="s2;A1", cluster_sequence="CCCCCC", record_type="single", n_reads=6, length=6)
-        + _summary_row(sample="s3", cluster_id=3, seed="s3;B1", cluster_sequence="GGGGGG", record_type="single", n_reads=7, length=6)
-        + _summary_row(sample="s3", cluster_id=4, seed="s3;B2", cluster_sequence="GGGGGG", record_type="single", n_reads=3, length=6)
-        + _summary_row(sample="s4", cluster_id=5, seed="s4;B1", cluster_sequence="TTTTTT", record_type="single", n_reads=8, length=6),
+        + _summary_row(
+            sample="s1",
+            cluster_id=0,
+            seed="s1;A1",
+            cluster_sequence="AAAAAA",
+            record_type="single",
+            n_reads=5,
+            length=6,
+        )
+        + _summary_row(
+            sample="s1",
+            cluster_id=1,
+            seed="s1;A2",
+            cluster_sequence="AAAAAA",
+            record_type="single",
+            n_reads=4,
+            length=6,
+        )
+        + _summary_row(
+            sample="s2",
+            cluster_id=2,
+            seed="s2;A1",
+            cluster_sequence="CCCCCC",
+            record_type="single",
+            n_reads=6,
+            length=6,
+        )
+        + _summary_row(
+            sample="s3",
+            cluster_id=3,
+            seed="s3;B1",
+            cluster_sequence="GGGGGG",
+            record_type="single",
+            n_reads=7,
+            length=6,
+        )
+        + _summary_row(
+            sample="s3",
+            cluster_id=4,
+            seed="s3;B2",
+            cluster_sequence="GGGGGG",
+            record_type="single",
+            n_reads=3,
+            length=6,
+        )
+        + _summary_row(
+            sample="s4",
+            cluster_id=5,
+            seed="s4;B1",
+            cluster_sequence="TTTTTT",
+            record_type="single",
+            n_reads=8,
+            length=6,
+        ),
         encoding="utf-8",
     )
     (workdir / "global_hits.uc.tsv").write_text(
@@ -2382,7 +2797,9 @@ def test_make_global_tables_writes_audits_in_completion_order_but_keeps_final_ou
     )
     mapping_df, stats_df = _read_graph_output_tables(workdir)
 
-    audit_summary = pd.read_csv(tmp_path / "denovo.audit" / "components.summary.tsv", sep="\t")
+    audit_summary = pd.read_csv(
+        tmp_path / "denovo.audit" / "components.summary.tsv", sep="\t"
+    )
     assert audit_summary["component_id"].tolist() == [2, 1]
     assert summary.loci_written == 2
     assert mapping_df["locus_name"].tolist() == ["locus_1_1"] * 3 + ["locus_2_1"] * 3
@@ -2397,9 +2814,33 @@ def test_make_global_tables_logs_when_flush_is_blocked_by_earlier_component(
     workdir.mkdir()
     (workdir / "concat.summary.tsv").write_text(
         _summary_header()
-        + _summary_row(sample="s1", cluster_id=0, seed="s1;A1", cluster_sequence="AAAAAA", record_type="single", n_reads=5, length=6)
-        + _summary_row(sample="s2", cluster_id=1, seed="s2;A1", cluster_sequence="CCCCCC", record_type="single", n_reads=6, length=6)
-        + _summary_row(sample="s3", cluster_id=2, seed="s3;A1", cluster_sequence="GGGGGG", record_type="single", n_reads=7, length=6),
+        + _summary_row(
+            sample="s1",
+            cluster_id=0,
+            seed="s1;A1",
+            cluster_sequence="AAAAAA",
+            record_type="single",
+            n_reads=5,
+            length=6,
+        )
+        + _summary_row(
+            sample="s2",
+            cluster_id=1,
+            seed="s2;A1",
+            cluster_sequence="CCCCCC",
+            record_type="single",
+            n_reads=6,
+            length=6,
+        )
+        + _summary_row(
+            sample="s3",
+            cluster_id=2,
+            seed="s3;A1",
+            cluster_sequence="GGGGGG",
+            record_type="single",
+            n_reads=7,
+            length=6,
+        ),
         encoding="utf-8",
     )
     (workdir / "global_hits.uc.tsv").write_text("", encoding="utf-8")
@@ -2425,7 +2866,9 @@ def test_make_global_tables_logs_when_flush_is_blocked_by_earlier_component(
     monkeypatch.setattr(graph_module, "run_with_pool_iter", fake_run_with_pool_iter)
     monkeypatch.setattr(graph_module, "FLUSH_STALL_LOG_SECONDS", 0.0)
     monkeypatch.setattr(graph_module.time, "monotonic", lambda: next(monotonic_values))
-    monkeypatch.setattr(graph_module.logger, "warning", lambda message: warnings.append(str(message)))
+    monkeypatch.setattr(
+        graph_module.logger, "warning", lambda message: warnings.append(str(message))
+    )
 
     summary = graph_module.make_global_tables(
         workdir,
@@ -2436,8 +2879,11 @@ def test_make_global_tables_logs_when_flush_is_blocked_by_earlier_component(
     assert summary.loci_written == 3
     assert mapping_df["locus_name"].tolist() == ["locus_1_1", "locus_2_1", "locus_3_1"]
     assert stats_df["component_id"].tolist() == [1, 2, 3]
-    assert any("component 1" in message and "later component results already buffered" in message for message in warnings)
-
+    assert any(
+        "component 1" in message
+        and "later component results already buffered" in message
+        for message in warnings
+    )
 
 
 def test_make_global_tables_keeps_oversize_component_as_unsplit_locus_and_records_audit(
@@ -2471,31 +2917,54 @@ def test_make_global_tables_keeps_oversize_component_as_unsplit_locus_and_record
     component_two = ("s1;KEEP0", "s2;KEEP0")
     summary_rows.extend(
         [
-            _summary_row(sample="s1", cluster_id=cluster_id, seed=component_two[0], cluster_sequence="CCCCCC", record_type="single", n_reads=6, length=6),
-            _summary_row(sample="s2", cluster_id=cluster_id + 1, seed=component_two[1], cluster_sequence="GGGGGG", record_type="single", n_reads=7, length=6),
+            _summary_row(
+                sample="s1",
+                cluster_id=cluster_id,
+                seed=component_two[0],
+                cluster_sequence="CCCCCC",
+                record_type="single",
+                n_reads=6,
+                length=6,
+            ),
+            _summary_row(
+                sample="s2",
+                cluster_id=cluster_id + 1,
+                seed=component_two[1],
+                cluster_sequence="GGGGGG",
+                record_type="single",
+                n_reads=7,
+                length=6,
+            ),
         ]
     )
-    (workdir / "concat.summary.tsv").write_text(header + "".join(summary_rows), encoding="utf-8")
+    (workdir / "concat.summary.tsv").write_text(
+        header + "".join(summary_rows), encoding="utf-8"
+    )
 
     edge_rows = [
         f"{left}\t{right}\t99.0\t+\t100.0\t6\t6"
         for left, right in zip(component_one_seeds, component_one_seeds[1:])
     ]
     edge_rows.append(f"{component_two[0]}\t{component_two[1]}\t99.0\t+\t100.0\t6\t6")
-    (workdir / "global_hits.uc.tsv").write_text("\n".join(edge_rows) + "\n", encoding="utf-8")
+    (workdir / "global_hits.uc.tsv").write_text(
+        "\n".join(edge_rows) + "\n", encoding="utf-8"
+    )
     summary = graph_module.make_global_tables(workdir)
     mapping_df, stats_df = _read_graph_output_tables(workdir)
 
-    assert mapping_df["locus_name"].tolist() == ["locus_1_1"] * total_samples + ["locus_2_1"] * 2
+    assert (
+        mapping_df["locus_name"].tolist()
+        == ["locus_1_1"] * total_samples + ["locus_2_1"] * 2
+    )
     assert summary.raw_oversize_placeholder_components == 1
     assert stats_df["locus"].tolist() == [1, 2]
-    assert mapping_df.loc[mapping_df["locus_name"] == "locus_1_1", "sample"].tolist() == [
-        f"s{idx}"
-        for idx in range(1, total_samples + 1)
-    ]
-    assert mapping_df.loc[mapping_df["locus_name"] == "locus_1_1", "output_form"].tolist() == [
-        "stripped"
-    ] * total_samples
+    assert mapping_df.loc[
+        mapping_df["locus_name"] == "locus_1_1", "sample"
+    ].tolist() == [f"s{idx}" for idx in range(1, total_samples + 1)]
+    assert (
+        mapping_df.loc[mapping_df["locus_name"] == "locus_1_1", "output_form"].tolist()
+        == ["stripped"] * total_samples
+    )
     assert stats_df.loc[0, "component_id"] == 1
     assert stats_df.loc[0, "n_samples"] == total_samples
     assert stats_df.loc[0, "n_cores"] == total_samples
@@ -2511,7 +2980,10 @@ def test_make_global_tables_keeps_oversize_component_as_unsplit_locus_and_record
     assert int(audit_summary.loc[0, "n_contracted_nodes"]) == total_samples
     assert bool(audit_summary.loc[0, "used_oversize_rescue"]) is False
     assert bool(audit_summary.loc[0, "used_residue_cleanup"]) is False
-    assert pd.isna(audit_summary.loc[0, "discard_reason"]) or audit_summary.loc[0, "discard_reason"] == ""
+    assert (
+        pd.isna(audit_summary.loc[0, "discard_reason"])
+        or audit_summary.loc[0, "discard_reason"] == ""
+    )
     assert int(audit_summary.loc[0, "discard_limit_nodes"]) == 60
     assert int(audit_summary.loc[0, "n_input_nodes"]) == total_samples * per_sample
     assert int(audit_summary.loc[0, "n_final_loci"]) == 1
@@ -2545,12 +3017,16 @@ def test_make_global_tables_keeps_raw_oversize_component_as_placeholder_without_
                 )
             )
             cluster_id += 1
-    (workdir / "concat.summary.tsv").write_text(_summary_header() + "".join(summary_rows), encoding="utf-8")
+    (workdir / "concat.summary.tsv").write_text(
+        _summary_header() + "".join(summary_rows), encoding="utf-8"
+    )
     edge_rows = [
         f"{left}\t{right}\t99.0\t+\t100.0\t6\t6"
         for left, right in zip(component_seeds, component_seeds[1:])
     ]
-    (workdir / "global_hits.uc.tsv").write_text("\n".join(edge_rows) + "\n", encoding="utf-8")
+    (workdir / "global_hits.uc.tsv").write_text(
+        "\n".join(edge_rows) + "\n", encoding="utf-8"
+    )
     calls = {"count": 0}
     original_build_contracted_component = graph_module._build_contracted_component
 
@@ -2558,7 +3034,9 @@ def test_make_global_tables_keeps_raw_oversize_component_as_placeholder_without_
         calls["count"] += 1
         return original_build_contracted_component(*args, **kwargs)
 
-    monkeypatch.setattr(graph_module, "_build_contracted_component", wrapped_build_contracted_component)
+    monkeypatch.setattr(
+        graph_module, "_build_contracted_component", wrapped_build_contracted_component
+    )
 
     summary = graph_module.make_global_tables(workdir)
     mapping_df, stats_df = _read_graph_output_tables(workdir)
@@ -2572,7 +3050,9 @@ def test_make_global_tables_keeps_raw_oversize_component_as_placeholder_without_
     assert bool(stats_df.loc[0, "same_sample_reconciliation_attempted"]) is False
     assert bool(stats_df.loc[0, "used_reconciliation"]) is False
 
-    audit_summary = pd.read_csv(tmp_path / "denovo.audit" / "components.summary.tsv", sep="\t")
+    audit_summary = pd.read_csv(
+        tmp_path / "denovo.audit" / "components.summary.tsv", sep="\t"
+    )
     assert audit_summary.loc[0, "status"] == "oversize_unsplit"
     assert int(audit_summary.loc[0, "n_input_nodes"]) == 55
     assert int(audit_summary.loc[0, "n_contracted_nodes"]) == 5
@@ -2586,9 +3066,7 @@ def test_make_global_tables_keeps_component_at_oversize_limit(
 ) -> None:
     workdir = tmp_path / "work"
     workdir.mkdir()
-    header = (
-        _summary_header()
-    )
+    header = _summary_header()
     summary_rows: list[str] = []
     component_seeds: list[str] = []
     cluster_id = 0
@@ -2608,13 +3086,17 @@ def test_make_global_tables_keeps_component_at_oversize_limit(
                 )
             )
             cluster_id += 1
-    (workdir / "concat.summary.tsv").write_text(header + "".join(summary_rows), encoding="utf-8")
+    (workdir / "concat.summary.tsv").write_text(
+        header + "".join(summary_rows), encoding="utf-8"
+    )
 
     edge_rows = [
         f"{left}\t{right}\t99.0\t+\t100.0\t6\t6"
         for left, right in zip(component_seeds, component_seeds[1:])
     ]
-    (workdir / "global_hits.uc.tsv").write_text("\n".join(edge_rows) + "\n", encoding="utf-8")
+    (workdir / "global_hits.uc.tsv").write_text(
+        "\n".join(edge_rows) + "\n", encoding="utf-8"
+    )
 
     calls: dict[str, object] = {}
 
@@ -2721,9 +3203,7 @@ def test_oversize_placeholder_locus_is_written_to_final_reference(
 ) -> None:
     workdir = tmp_path / "work"
     workdir.mkdir()
-    header = (
-        _summary_header()
-    )
+    header = _summary_header()
     summary_rows: list[str] = []
     component_seeds: list[str] = []
     cluster_id = 0
@@ -2759,12 +3239,16 @@ def test_oversize_placeholder_locus_is_written_to_final_reference(
             cluster_id += 1
             sample_idx[sample] += 1
             counts[sample] -= 1
-    (workdir / "concat.summary.tsv").write_text(header + "".join(summary_rows), encoding="utf-8")
+    (workdir / "concat.summary.tsv").write_text(
+        header + "".join(summary_rows), encoding="utf-8"
+    )
     edge_rows = [
         f"{left}\t{right}\t99.0\t+\t100.0\t6\t6"
         for left, right in zip(component_seeds, component_seeds[1:])
     ]
-    (workdir / "global_hits.uc.tsv").write_text("\n".join(edge_rows) + "\n", encoding="utf-8")
+    (workdir / "global_hits.uc.tsv").write_text(
+        "\n".join(edge_rows) + "\n", encoding="utf-8"
+    )
 
     graph_summary = graph_module.make_global_tables(workdir)
     mapping_df, stats_df = _read_graph_output_tables(workdir)
@@ -2821,9 +3305,13 @@ def test_constrained_split_component_cleans_duplicate_rich_chain() -> None:
     }
     node_order = {"a1": 0, "a2": 1, "b1": 2, "c1": 3, "d1": 4}
 
-    constrained_result = split_component_constrained(nodes, edges, node_samples, node_order)
+    constrained_result = split_component_constrained(
+        nodes, edges, node_samples, node_order
+    )
 
-    constrained_clean_nodes = sum(len(component) for component in constrained_result if len(component) > 1)
+    constrained_clean_nodes = sum(
+        len(component) for component in constrained_result if len(component) > 1
+    )
 
     assert constrained_clean_nodes == 5
 
@@ -2835,9 +3323,33 @@ def test_make_global_tables_reconciles_same_sample_direct_edge_above_within_simi
     workdir.mkdir()
     (workdir / "concat.summary.tsv").write_text(
         _summary_header()
-        + _summary_row(sample="s1", cluster_id=0, seed="s1;M1", cluster_sequence="AAATTT", record_type="merged", n_reads=5, length=6)
-        + _summary_row(sample="s1", cluster_id=1, seed="s1;M2", cluster_sequence="AAATTC", record_type="merged", n_reads=4, length=6)
-        + _summary_row(sample="s2", cluster_id=0, seed="s2;M1", cluster_sequence="AAATTT", record_type="merged", n_reads=6, length=6),
+        + _summary_row(
+            sample="s1",
+            cluster_id=0,
+            seed="s1;M1",
+            cluster_sequence="AAATTT",
+            record_type="merged",
+            n_reads=5,
+            length=6,
+        )
+        + _summary_row(
+            sample="s1",
+            cluster_id=1,
+            seed="s1;M2",
+            cluster_sequence="AAATTC",
+            record_type="merged",
+            n_reads=4,
+            length=6,
+        )
+        + _summary_row(
+            sample="s2",
+            cluster_id=0,
+            seed="s2;M1",
+            cluster_sequence="AAATTT",
+            record_type="merged",
+            n_reads=6,
+            length=6,
+        ),
         encoding="utf-8",
     )
     (workdir / "global_hits.uc.tsv").write_text(
@@ -2857,7 +3369,9 @@ def test_make_global_tables_reconciles_same_sample_direct_edge_above_within_simi
 
     assert mapping_df["locus_name"].tolist() == ["locus_1_1", "locus_1_1", "locus_1_1"]
     assert graph_summary.components_reconciled == 1
-    assert set(mapping_df.loc[mapping_df["sample"] == "s1", "contract_group"]) == {"contract_1_1"}
+    assert set(mapping_df.loc[mapping_df["sample"] == "s1", "contract_group"]) == {
+        "contract_1_1"
+    }
     assert bool(stats_df.loc[0, "used_reconciliation"]) is True
     assert bool(stats_df.loc[0, "same_sample_reconciliation_attempted"]) is True
 
@@ -2870,9 +3384,36 @@ def test_make_global_tables_does_not_require_mafft_for_split_stage(
     workdir.mkdir()
     (workdir / "concat.summary.tsv").write_text(
         _summary_header()
-        + _summary_row(sample="s1", cluster_id=0, seed="s1;J1", cluster_sequence="AAATTT", record_type="joined", n_reads=5, length=30, arm_boundary=3)
-        + _summary_row(sample="s1", cluster_id=1, seed="s1;J2", cluster_sequence="AAATTT", record_type="joined", n_reads=4, length=30, arm_boundary=3)
-        + _summary_row(sample="s2", cluster_id=0, seed="s2;J1", cluster_sequence="AAATTT", record_type="joined", n_reads=6, length=30, arm_boundary=3),
+        + _summary_row(
+            sample="s1",
+            cluster_id=0,
+            seed="s1;J1",
+            cluster_sequence="AAATTT",
+            record_type="joined",
+            n_reads=5,
+            length=30,
+            arm_boundary=3,
+        )
+        + _summary_row(
+            sample="s1",
+            cluster_id=1,
+            seed="s1;J2",
+            cluster_sequence="AAATTT",
+            record_type="joined",
+            n_reads=4,
+            length=30,
+            arm_boundary=3,
+        )
+        + _summary_row(
+            sample="s2",
+            cluster_id=0,
+            seed="s2;J1",
+            cluster_sequence="AAATTT",
+            record_type="joined",
+            n_reads=6,
+            length=30,
+            arm_boundary=3,
+        ),
         encoding="utf-8",
     )
     (workdir / "global_hits.uc.tsv").write_text(
@@ -2889,7 +3430,9 @@ def test_make_global_tables_does_not_require_mafft_for_split_stage(
     monkeypatch.setattr(
         graph_module,
         "mafft_align_one",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("graph splitting should not call MAFFT")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("graph splitting should not call MAFFT")
+        ),
         raising=False,
     )
 

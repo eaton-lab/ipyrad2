@@ -18,6 +18,7 @@ from .beds import (
     get_across_sample_loci_bed,
     get_sample_depth_stats_in_final_loci,
     sort_bed_by_reference_order,
+    write_callable_regions_bed,
 )
 from .loci import (
     write_sam_faidx,
@@ -128,11 +129,14 @@ def _profile_stage(stage: str):
             _format_peak_rss(end_child_peak),
         )
 
+
 def existing_results_force_or_raise(outdir, tmpdir, name, force):
     """Apply assemble overwrite policy for the current output prefix."""
     if (outdir / f"{name}.loci.gz").exists() or tmpdir.exists():
         if not force:
-            raise IPyradError(f"outfiles with prefix {name} already exist in {outdir}. Use --force to overwrite.")
+            raise IPyradError(
+                f"outfiles with prefix {name} already exist in {outdir}. Use --force to overwrite."
+            )
         else:
             # collect relevant files and rm
             logger.debug(f"removing previous ipyrad assemble files from {outdir}")
@@ -244,7 +248,9 @@ def _write_mixed_paralog_summary(
     wgs = wgs_metrics[[col for col in wgs_cols if col in wgs_metrics.columns]].copy()
 
     if "rid" not in rad.columns or "rid" not in wgs.columns:
-        raise IPyradError("Mixed RAD/WGS paralog summaries require per-locus rid values.")
+        raise IPyradError(
+            "Mixed RAD/WGS paralog summaries require per-locus rid values."
+        )
 
     rad = rad.rename(
         columns={
@@ -280,14 +286,26 @@ def _write_mixed_paralog_summary(
     if "end" not in merged.columns and "wgs_end" in merged.columns:
         merged["end"] = merged["wgs_end"]
 
-    fill_int = ["rad_n_data", "rad_n_good", "rad_n_fail", "wgs_n_data", "wgs_n_good", "wgs_n_fail"]
+    fill_int = [
+        "rad_n_data",
+        "rad_n_good",
+        "rad_n_fail",
+        "wgs_n_data",
+        "wgs_n_good",
+        "wgs_n_fail",
+    ]
     fill_float = [
         "rad_fail_frac_among_data",
         "rad_good_frac_among_data",
         "wgs_fail_frac_among_data",
         "wgs_good_frac_among_data",
     ]
-    fill_bool = ["rad_drop_global", "rad_keep_global", "wgs_drop_global", "wgs_keep_global"]
+    fill_bool = [
+        "rad_drop_global",
+        "rad_keep_global",
+        "wgs_drop_global",
+        "wgs_keep_global",
+    ]
     for col in fill_int:
         if col in merged.columns:
             merged[col] = merged[col].fillna(0).astype("int64")
@@ -307,8 +325,12 @@ def _write_mixed_paralog_summary(
     counts = {
         "loci_fail_paralog_rad": int(merged["rad_drop_global"].sum()),
         "loci_fail_paralog_wgs": int(merged["wgs_drop_global"].sum()),
-        "loci_fail_paralog_both": int((merged["rad_drop_global"] & merged["wgs_drop_global"]).sum()),
-        "loci_pass_paralog_rad_fail_paralog_wgs": int((merged["rad_keep_global"] & merged["wgs_drop_global"]).sum()),
+        "loci_fail_paralog_both": int(
+            (merged["rad_drop_global"] & merged["wgs_drop_global"]).sum()
+        ),
+        "loci_pass_paralog_rad_fail_paralog_wgs": int(
+            (merged["rad_keep_global"] & merged["wgs_drop_global"]).sum()
+        ),
     }
     _write_mixed_paralog_counts(phase_dir, counts)
     logger.info("mixed RAD/WGS paralog QC summary written to {}", summary_path)
@@ -347,19 +369,30 @@ def _normalize_user_loci_bed(loci_bed: Path, tmpdir: Path) -> tuple[Path, int]:
     with loci_bed.open("r", encoding="utf-8") as handle:
         for lineno, raw_line in enumerate(handle, start=1):
             line = raw_line.strip()
-            if not line or line.startswith("#") or line.startswith("track ") or line.startswith("browser "):
+            if (
+                not line
+                or line.startswith("#")
+                or line.startswith("track ")
+                or line.startswith("browser ")
+            ):
                 continue
             parts = raw_line.rstrip("\n").split("\t")
             if len(parts) < 3:
-                raise IPyradError(f"--loci-bed line {lineno} must have at least 3 tab-delimited columns.")
+                raise IPyradError(
+                    f"--loci-bed line {lineno} must have at least 3 tab-delimited columns."
+                )
             chrom = parts[0]
             if chrom not in scaffold_order:
-                raise IPyradError(f"--loci-bed contains scaffold not present in reference: {chrom}")
+                raise IPyradError(
+                    f"--loci-bed contains scaffold not present in reference: {chrom}"
+                )
             try:
                 start = int(parts[1])
                 end = int(parts[2])
             except ValueError as exc:
-                raise IPyradError(f"--loci-bed line {lineno} has non-integer start/end coordinates.") from exc
+                raise IPyradError(
+                    f"--loci-bed line {lineno} has non-integer start/end coordinates."
+                ) from exc
             if start < 0:
                 raise IPyradError(f"--loci-bed line {lineno} has start < 0.")
             if end <= start:
@@ -390,7 +423,9 @@ def _normalize_user_loci_bed(loci_bed: Path, tmpdir: Path) -> tuple[Path, int]:
     return out_bed, len(records)
 
 
-def _normalize_bam_rename_file(rename_bams: Path, bam_paths: list[Path]) -> dict[str, str]:
+def _normalize_bam_rename_file(
+    rename_bams: Path, bam_paths: list[Path]
+) -> dict[str, str]:
     """Parse and validate explicit BAM-basename sample-name overrides."""
     rename_bams = rename_bams.expanduser().absolute()
     if not rename_bams.exists():
@@ -402,7 +437,9 @@ def _normalize_bam_rename_file(rename_bams: Path, bam_paths: list[Path]) -> dict
     basename_counts: dict[str, int] = {}
     for name in basenames:
         basename_counts[name] = basename_counts.get(name, 0) + 1
-    duplicate_inputs = sorted(name for name, count in basename_counts.items() if count > 1)
+    duplicate_inputs = sorted(
+        name for name, count in basename_counts.items() if count > 1
+    )
     if duplicate_inputs:
         raise IPyradError(
             "--rename-bams cannot be used when input BAM basenames are duplicated: "
@@ -417,10 +454,14 @@ def _normalize_bam_rename_file(rename_bams: Path, bam_paths: list[Path]) -> dict
                 continue
             parts = line.split()
             if len(parts) != 2:
-                raise IPyradError(f"--rename-bams line {lineno} must contain exactly 2 columns.")
+                raise IPyradError(
+                    f"--rename-bams line {lineno} must contain exactly 2 columns."
+                )
             bam_name, sample_name = parts
             if bam_name in rename_map:
-                raise IPyradError(f"--rename-bams assigns BAM basename multiple times: {bam_name}")
+                raise IPyradError(
+                    f"--rename-bams assigns BAM basename multiple times: {bam_name}"
+                )
             rename_map[bam_name] = sample_name
 
     if not rename_map:
@@ -476,7 +517,9 @@ def _normalize_populations_file(
             raise pops_exc from imap_exc
 
     if not imap:
-        raise IPyradError(f"--populations contains no sample assignments: {populations}")
+        raise IPyradError(
+            f"--populations contains no sample assignments: {populations}"
+        )
 
     sample_counts: dict[str, int] = {}
     sample_to_group: dict[str, str] = {}
@@ -485,10 +528,13 @@ def _normalize_populations_file(
             sample_counts[name] = sample_counts.get(name, 0) + 1
             sample_to_group[name] = group
 
-    duplicate_samples = sorted(name for name, count in sample_counts.items() if count > 1)
+    duplicate_samples = sorted(
+        name for name, count in sample_counts.items() if count > 1
+    )
     if duplicate_samples:
         raise IPyradError(
-            "--populations assigns sample(s) multiple times: " + ", ".join(duplicate_samples)
+            "--populations assigns sample(s) multiple times: "
+            + ", ".join(duplicate_samples)
         )
 
     assembled = set(sample_names)
@@ -583,12 +629,21 @@ def _run_paralog_stage(
 ) -> Path:
     """Run the active per-sample and across-sample paralog filtering stage."""
     logger.info("filtering paralogs within samples")
+    callable_regions_bed = write_callable_regions_bed(
+        regions_bed,
+        reference,
+        phase_dir / "loci.callable.paralog.bed",
+    )
+    logger.info(
+        "excluding non-ACGT reference positions from within-sample paralog variant calling"
+    )
 
     # Score every sample against the shared RAD-defined loci BED. RAD samples
     # still define the loci, but WGS samples are also evaluated here so their
     # sample-specific masks and the shared drop decision use the same evidence.
     kwargs = dict(
         regions_bed=regions_bed,
+        callable_regions_bed=callable_regions_bed,
         reference_fasta=reference,
         tmpdir=phase_dir,
         min_map_q=min_map_q,
@@ -710,6 +765,15 @@ def _run_variant_stage(
     """Call, filter, and resolve joint variants inside the canonical loci BED."""
     vcf_dir = tmpdir / "vcfs"
     vcf_dir.mkdir(parents=True, exist_ok=True)
+    callable_loci_bed = write_callable_regions_bed(
+        tmpdir / "beds" / "loci.bed",
+        reference,
+        tmpdir / "beds" / "loci.callable.variant.bed",
+    )
+    if _count_nonempty_lines(callable_loci_bed) == 0:
+        raise IPyradError(
+            "No callable A/C/G/T reference positions remain in the final loci BED after excluding non-ACGT bases."
+        )
 
     # Keep the number of concurrent joint-calling jobs aligned with the normal
     # assemble worker budget. Each mpileup/call job is memory-heavy because it
@@ -721,7 +785,9 @@ def _run_variant_stage(
     # Still create more chunks than inflight jobs so long loci sets distribute
     # better across workers without forcing more concurrent mpileup processes.
     chunk_count = max(8, 2 * variant_workers)
-    chunk_beds = get_chunked_loci_beds(tmpdir, chunk_count)
+    chunk_beds = get_chunked_loci_beds(
+        tmpdir, chunk_count, source_bed=callable_loci_bed
+    )
 
     jobs = {}
     for chunk in chunk_beds:
@@ -776,7 +842,10 @@ def _build_sample_masks(
     # samples contribute consensus sequence and final genotype outputs.
     jobs = {}
     for sname in all_dict:
-        jobs[sname] = (make_lowdepth_mask, dict(sname=sname, min_sample_depth=min_sample_depth, tmpdir=tmpdir))
+        jobs[sname] = (
+            make_lowdepth_mask,
+            dict(sname=sname, min_sample_depth=min_sample_depth, tmpdir=tmpdir),
+        )
     run_with_pool(jobs, log_level, workers, msg="Building low-depth masks")
 
     # Sample-specific paralog masks now apply to every sample that was scored in
@@ -855,7 +924,9 @@ def _write_consensus_and_outputs(
         len(snames),
     )
     with _profile_stage("consensus extraction"):
-        run_with_pool(jobs, log_level, consensus_workers, msg="Extracting consensus sequences")
+        run_with_pool(
+            jobs, log_level, consensus_workers, msg="Extracting consensus sequences"
+        )
 
     # Build one FASTA database spanning all consensus sequences. The final .loci
     # and HDF5 writers both consume this database to stay coordinate-consistent.
@@ -905,7 +976,9 @@ def _write_consensus_and_outputs(
                 msg="Merging final VCF masks",
             )
         if final_vcf_masks:
-            apply_sample_region_masks_to_resolved_vcf(tmpdir, final_vcf_masks, vcf_gz=final_vcf)
+            apply_sample_region_masks_to_resolved_vcf(
+                tmpdir, final_vcf_masks, vcf_gz=final_vcf
+            )
 
     mixed_run_summary: dict[str, int] | None = None
     rad_samples = sorted(rad_samples or [])
@@ -917,7 +990,9 @@ def _write_consensus_and_outputs(
         }
         mixed_run_summary.update(_load_mixed_paralog_counts(tmpdir))
         mixed_run_summary.update(load_variant_postfilter_stats(tmpdir))
-        support_stats = summarize_variant_support_by_sample_type(final_vcf, rad_samples, wgs_samples)
+        support_stats = summarize_variant_support_by_sample_type(
+            final_vcf, rad_samples, wgs_samples
+        )
         mixed_run_summary.update(support_stats)
         logger.info(
             "mixed RAD/WGS summary: sites RAD-only={} WGS-only={} both={} WGS het masks={}",
@@ -988,11 +1063,11 @@ def run_assembler(
     min_site_q: int,
     min_geno_q: int,
     min_base_q: int,
-    min_sample_depth: int,                # sample must have depth cov or site is masked.
-    min_locus_sample_coverage: int,       # locus must have data for N samples (used in locus delim)
+    min_sample_depth: int,  # sample must have depth cov or site is masked.
+    min_locus_sample_coverage: int,  # locus must have data for N samples (used in locus delim)
     min_locus_trim_sample_coverage: int,  # trim r/l to region with at least N samples data (default 4)
     min_locus_length: int,
-    min_locus_merge_distance: int,        # merge loci within this distance
+    min_locus_merge_distance: int,  # merge loci within this distance
     max_locus_hetero_frequency: float,
     max_locus_variant_frequency: float,
     max_sample_hetero_frequency: float,
@@ -1011,7 +1086,7 @@ def run_assembler(
     threads: int,
     force: bool,
     log_level: str,
-    ):
+):
     # Normalize the top-level input/output paths first so later stages can
     # treat everything as concrete local files.
     loci_bed = loci_bed.expanduser().absolute() if loci_bed else None
@@ -1047,8 +1122,12 @@ def run_assembler(
     phase_dir = tmpdir / "phase"
     phase_dir.mkdir(exist_ok=True)
 
-    expanded_rad_bams = [bam_file.expanduser().absolute() for bam_file in rad_bams] if rad_bams else []
-    expanded_wgs_bams = [bam_file.expanduser().absolute() for bam_file in wgs_bams] if wgs_bams else []
+    expanded_rad_bams = (
+        [bam_file.expanduser().absolute() for bam_file in rad_bams] if rad_bams else []
+    )
+    expanded_wgs_bams = (
+        [bam_file.expanduser().absolute() for bam_file in wgs_bams] if wgs_bams else []
+    )
 
     # Validate that some BAM inputs exist before parsing optional rename maps.
     # This keeps the main missing-input errors stable instead of surfacing
@@ -1056,9 +1135,13 @@ def run_assembler(
     bam_dict: dict[str, Path] = {}
     wgs_dict: dict[str, Path] = {}
     if not expanded_rad_bams and loci_bed is None:
-        raise IPyradError("No RAD bam files found. These are required unless --loci-bed is provided.")
+        raise IPyradError(
+            "No RAD bam files found. These are required unless --loci-bed is provided."
+        )
     if not expanded_rad_bams and not expanded_wgs_bams:
-        raise IPyradError("No input BAM files found. Provide --rad-bams and/or --wgs-bams.")
+        raise IPyradError(
+            "No input BAM files found. Provide --rad-bams and/or --wgs-bams."
+        )
 
     rename_map: dict[str, str] = {}
     if rename_bams is not None:
@@ -1081,8 +1164,12 @@ def run_assembler(
     renamed_pairs = sorted(rad_renamed + wgs_renamed)
     if renamed_pairs:
         shown = min(10, len(renamed_pairs))
-        logger.info("renamed {} BAM sample name(s) from --rename-bams", len(renamed_pairs))
-        logger.info("showing first {}/{} BAM rename mappings", shown, len(renamed_pairs))
+        logger.info(
+            "renamed {} BAM sample name(s) from --rename-bams", len(renamed_pairs)
+        )
+        logger.info(
+            "showing first {}/{} BAM rename mappings", shown, len(renamed_pairs)
+        )
         max_len = max(len(sample_name) for sample_name, _ in renamed_pairs[:shown])
         for sample_name, bam_name in renamed_pairs[:shown]:
             logger.info("{} <- {}", sample_name.ljust(max_len), bam_name)
@@ -1090,7 +1177,9 @@ def run_assembler(
     duplicate_names = sorted(set(bam_dict) & set(wgs_dict))
     if duplicate_names:
         joined = ", ".join(duplicate_names)
-        raise IPyradError(f"RAD and WGS inputs resolve to duplicate sample names: {joined}")
+        raise IPyradError(
+            f"RAD and WGS inputs resolve to duplicate sample names: {joined}"
+        )
 
     # Prepare one combined sample map, then replace the original BAMs with the
     # filtered analysis BAMs that downstream assemble stages should consume.
@@ -1109,7 +1198,9 @@ def run_assembler(
         logger.info(
             "loaded {} population group(s): {}",
             len(population_imap),
-            ", ".join(f"{group}={len(names)}" for group, names in population_imap.items()),
+            ", ".join(
+                f"{group}={len(names)}" for group, names in population_imap.items()
+            ),
         )
         if parsed_minmap is not None:
             logger.info(
@@ -1151,13 +1242,19 @@ def run_assembler(
 
     # Record runtime settings and initialize reference metadata before locus
     # delimiting starts.
-    logger.info(f"using up to {cores} cores (up to {workers} multi-threaded jobs using {threads} threads)")
+    logger.info(
+        f"using up to {cores} cores (up to {workers} multi-threaded jobs using {threads} threads)"
+    )
     logger.debug("fetching reference scaffold order")
     get_reference_sort_order(reference, tmpdir)
     normalized_loci_bed = None
     if loci_bed is not None:
-        normalized_loci_bed, input_locus_count = _normalize_user_loci_bed(loci_bed, tmpdir)
-        logger.info("using provided loci BED instead of RAD-based shared-locus delimiting")
+        normalized_loci_bed, input_locus_count = _normalize_user_loci_bed(
+            loci_bed, tmpdir
+        )
+        logger.info(
+            "using provided loci BED instead of RAD-based shared-locus delimiting"
+        )
         logger.info("loaded {} loci from {}", input_locus_count, normalized_loci_bed)
         logger.debug(
             "ignoring RAD-delimiting options because --loci-bed was provided: min_locus_sample_coverage={}, min_locus_length={}, min_locus_merge_distance={}",
@@ -1191,7 +1288,14 @@ def run_assembler(
 
     if normalized_loci_bed is None:
         logger.info("delimiting shared coverage beds (loci)")
-        args = (list(bam_dict), min_locus_sample_coverage, min_locus_merge_distance, min_locus_length, ".fragments.merged.bed", tmpdir)
+        args = (
+            list(bam_dict),
+            min_locus_sample_coverage,
+            min_locus_merge_distance,
+            min_locus_length,
+            ".fragments.merged.bed",
+            tmpdir,
+        )
         loci_bed = get_across_sample_loci_bed(*args)
 
         # Preserve the pre-paralog shared loci so the raw RAD-defined windows stay

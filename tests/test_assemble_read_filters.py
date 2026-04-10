@@ -375,11 +375,13 @@ def test_run_variant_stage_caps_inflight_jobs_to_assemble_worker_budget(
     (tmpdir / "beds").mkdir(parents=True)
     reference = tmp_path / "ref.fa"
     reference.write_text(">chr1\nAAAA\n", encoding="utf-8")
+    (tmpdir / "beds" / "loci.bed").write_text("chr1\t0\t4\n", encoding="utf-8")
 
     observed: dict[str, object] = {}
 
-    def _fake_get_chunked_loci_beds(_tmpdir, nchunks):
+    def _fake_get_chunked_loci_beds(_tmpdir, nchunks, source_bed=None):
         observed["chunk_count"] = nchunks
+        observed["source_bed"] = source_bed
         chunk0 = tmpdir / "beds" / "chunk-0.bed"
         chunk1 = tmpdir / "beds" / "chunk-1.bed"
         chunk0.write_text("chr1\t0\t10\n", encoding="utf-8")
@@ -417,6 +419,7 @@ def test_run_variant_stage_caps_inflight_jobs_to_assemble_worker_budget(
     assert observed["msg"] == "Calling variants"
     assert observed["max_workers"] == 2
     assert observed["chunk_count"] == 8
+    assert observed["source_bed"] == tmpdir / "beds" / "loci.callable.variant.bed"
     first_job = next(iter(observed["jobs"].values()))
     assert first_job[1]["threads"] == 2
 
@@ -825,6 +828,16 @@ def test_run_paralog_stage_normalizes_shared_bed_to_reference_order(
         "locus_11\t10\n",
         encoding="utf-8",
     )
+    reference = tmp_path / "ref.fa"
+    reference.write_text(
+        ">locus_1\nACGTACGTAC\n>locus_2\nACGTACGTAC\n>locus_11\nACGTACGTAC\n",
+        encoding="utf-8",
+    )
+    regions_bed = tmp_path / "regions.bed"
+    regions_bed.write_text(
+        "locus_1\t0\t10\nlocus_2\t0\t10\nlocus_11\t0\t10\n",
+        encoding="utf-8",
+    )
 
     def _fake_run_with_pool(jobs, log_level, workers, msg=None):
         del jobs, log_level, workers, msg
@@ -847,8 +860,8 @@ def test_run_paralog_stage_normalizes_shared_bed_to_reference_order(
 
     final_bed = _run_paralog_stage(
         sample_bams={"sample": tmp_path / "sample.bam"},
-        regions_bed=tmp_path / "regions.bed",
-        reference=tmp_path / "ref.fa",
+        regions_bed=regions_bed,
+        reference=reference,
         bed_dir=bed_dir,
         phase_dir=phase_dir,
         min_map_q=40,
@@ -880,6 +893,10 @@ def test_run_paralog_stage_uses_rad_aggregate_for_mixed_shared_bed(
     bed_dir.mkdir(parents=True)
     phase_dir.mkdir(parents=True)
     (tmpdir / "REF_info.txt").write_text("chr1\t100\n", encoding="utf-8")
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\n" + ("A" * 100) + "\n", encoding="utf-8")
+    regions_bed = tmp_path / "regions.bed"
+    regions_bed.write_text("chr1\t0\t30\n", encoding="utf-8")
 
     def _fake_run_with_pool(jobs, log_level, workers, msg=None):
         del jobs, log_level, workers, msg
@@ -928,8 +945,8 @@ def test_run_paralog_stage_uses_rad_aggregate_for_mixed_shared_bed(
 
     final_bed = _run_paralog_stage(
         sample_bams={"rad": tmp_path / "rad.bam", "wgs": tmp_path / "wgs.bam"},
-        regions_bed=tmp_path / "regions.bed",
-        reference=tmp_path / "ref.fa",
+        regions_bed=regions_bed,
+        reference=reference,
         bed_dir=bed_dir,
         phase_dir=phase_dir,
         min_map_q=40,
@@ -1164,7 +1181,7 @@ def test_run_assembler_uses_filtered_analysis_bams_downstream(
     tmp_path: Path,
 ) -> None:
     reference = tmp_path / "ref.fa"
-    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    reference.write_text(">chr1\nACGTACGTAC\n", encoding="utf-8")
     rad_bam = tmp_path / "rad.bam"
     wgs_bam = tmp_path / "wgs.bam"
     rad_bam.write_text("", encoding="utf-8")
@@ -1264,8 +1281,9 @@ def test_run_assembler_uses_filtered_analysis_bams_downstream(
 
     monkeypatch.setattr("ipyrad2.assembler.assemble.aggregate_across_samples", _fake_aggregate_across_samples)
     monkeypatch.setattr("ipyrad2.assembler.assemble.write_per_sample_final_good", _fake_write_per_sample_final_good)
-    def _fake_get_chunked_loci_beds(tmpdir, nchunks):
+    def _fake_get_chunked_loci_beds(tmpdir, nchunks, source_bed=None):
         variant_chunk_counts.append(nchunks)
+        assert source_bed == tmpdir / "beds" / "loci.callable.variant.bed"
         chunk_bed = tmpdir / "beds" / "chunk-0.bed"
         chunk_bed.write_text("chr1\t0\t10\n", encoding="utf-8")
         return [chunk_bed]
@@ -1394,9 +1412,9 @@ def test_run_assembler_uses_filtered_analysis_bams_downstream(
                 "nsites_sample_cov_greater_than_or_equal_to_min_locus_trim_sample_coverage": 4,
             },
             "sample_locus_counts": {"rad": 1, "wgs": 1},
-            "sample_locus_mask_counts": {"rad": 0, "wgs": 0},
-            "loci_with_sample_mask_max_sample_hetero_frequency": 0,
-            "sample_locus_mask_count_max_sample_hetero_frequency": 0,
+            "masked_by_max_hetero_frequency_counts": {"rad": 0, "wgs": 0},
+            "loci_with_samples_masked_by_max_hetero_frequency": 0,
+            "total_masked_sample_occurrences_by_max_hetero_frequency": 0,
             "samples_per_locus_counts": {2: 1},
             "locus_length_counts": {4: 1},
             "alignment_nonmissing_sample_bases": 8,
@@ -2083,10 +2101,14 @@ def test_write_loci_and_stats_files_masks_samples_above_max_sample_hetero_freque
 
     assert summary["nloci_after_filtering"] == 1
     assert summary["sample_locus_counts"] == {"s1": 0, "s2": 1, "s3": 1}
-    assert summary["sample_locus_mask_counts"] == {"s1": 1, "s2": 0, "s3": 0}
-    assert summary["loci_with_sample_mask_max_sample_hetero_frequency"] == 1
-    assert summary["sample_locus_mask_count_max_sample_hetero_frequency"] == 1
-    assert loci_lines[1].endswith("NNNN")
+    assert summary["masked_by_max_hetero_frequency_counts"] == {"s1": 1, "s2": 0, "s3": 0}
+    assert summary["loci_with_samples_masked_by_max_hetero_frequency"] == 1
+    assert summary["total_masked_sample_occurrences_by_max_hetero_frequency"] == 1
+    assert all(not line.startswith("s1") for line in loci_lines)
+    assert loci_lines[1].startswith("s2")
+    assert loci_lines[2].startswith("s3")
+    assert loci_lines[3].startswith("//")
+    assert (tmp_path / "assembly.bed").read_text(encoding="utf-8") == "chr1\t0\t4\t3\n"
     assert (tmp_path / "beds" / "s1.consensus_hetero.mask.bed").read_text(encoding="utf-8") == "chr1\t0\t4\n"
     manifest = (tmp_path / "assembly.retained_loci.tsv").read_text(encoding="utf-8")
     assert "chr1:1-4\tchr1:1-4\ts1" in manifest
@@ -2173,6 +2195,9 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
                 "nsites_sample_cov_greater_than_or_equal_to_min_locus_trim_sample_coverage": 18,
             },
             "sample_locus_counts": {"s1": 5, "s2": 4},
+            "masked_by_max_hetero_frequency_counts": {"s1": 2, "s2": 0},
+            "loci_with_samples_masked_by_max_hetero_frequency": 2,
+            "total_masked_sample_occurrences_by_max_hetero_frequency": 2,
             "samples_per_locus_counts": {1: 3, 2: 3},
             "locus_length_counts": {4: 2, 5: 4},
             "alignment_nonmissing_sample_bases": 36,
@@ -2206,11 +2231,18 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
     assert outpath == tmp_path / "assembly.stats.txt"
     assert "# Assemble Summary" in report
     assert "# Locus Filtering" in report
+    assert "# Sample Masking" in report
     assert "# Alignment Summary" in report
     assert "# Sample Summary" in report
     assert "# Locus Occupancy" in report
     assert "shared_loci_after_delimiting" in report
     assert "final_snp_sites_written" in report
+    assert "masked_by_max_hetero_frequency" in report
+    assert "loci_with_samples_masked_by_max_hetero_frequency" in report
+    assert "total_masked_sample_occurrences_by_max_hetero_frequency" in report
+    assert "loci_with_sample_masks_max_sample_heterozygosity" not in report
+    assert "sample_locus_masks_max_sample_heterozygosity" not in report
+    assert "loci_masked_max_sample_hetero_frequency" not in report
     assert "s1" in report
     assert "assembly_reference_sequence" not in report
 
