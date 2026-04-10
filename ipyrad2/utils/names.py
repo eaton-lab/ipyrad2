@@ -199,7 +199,10 @@ def _build_paired_result(
     """Build a paired-end result dict if all groups are valid pairs."""
     if not perfect_pairs(groups, fastqs):
         return None
-    return {name: _pair_group(groups[name], name) for name in sorted(groups)}
+    try:
+        return {name: _pair_group(groups[name], name) for name in sorted(groups)}
+    except IPyradError:
+        return None
 
 
 def _build_single_end_result(
@@ -317,42 +320,51 @@ def _paired_name_error_message(
     )
 
 
-def _raise_paired_name_error(
-    fastqs: List[Path],
-    groups: Dict[str, List[Path]],
-    parsed_count: int,
-    parser,
-    source: str,
-) -> None:
-    """Raise a detailed error for incomplete or inconsistent paired-name evidence."""
-    raise IPyradError(
-        _paired_name_error_message(fastqs, groups, parsed_count, parser, source)
-    )
+def _is_complete_pair_group(paths: List[Path], parser) -> bool:
+    """Return whether paths contain exactly one matching R1/R2 pair."""
+    if len(paths) != 2:
+        return False
+    mates = set()
+    trailing = None
+    for path in paths:
+        parsed = parser(path)
+        if parsed is None:
+            return False
+        mate = parsed[1]
+        if mate in mates:
+            return False
+        mates.add(mate)
+        if len(parsed) > 2:
+            current_trailing = parsed[2]
+            if trailing is None:
+                trailing = current_trailing
+            elif trailing != current_trailing:
+                return False
+    return mates == {1, 2}
 
 
-def _count_complete_pair_files(groups: Dict[str, List[Path]]) -> int:
+def _count_complete_pair_files(groups: Dict[str, List[Path]], parser) -> int:
     """Return the number of files in groups that form valid complete pairs."""
     complete = 0
-    for sample_name, paths in groups.items():
-        if len(paths) != 2:
-            continue
-        try:
-            _pair_group(paths, sample_name)
-        except IPyradError:
-            continue
-        complete += len(paths)
+    for paths in groups.values():
+        if _is_complete_pair_group(paths, parser):
+            complete += len(paths)
     return complete
 
 
-def _warn_or_raise_incomplete_pair_evidence(
+def _warn_incomplete_pair_evidence(
     fastqs: List[Path],
     evidences,
 ) -> None:
-    """Warn or raise for failed pair evidence based on complete-pair support."""
+    """Warn for incomplete pairing only when at least one complete pair exists."""
     scored = []
     for groups, parsed_count, parser, source in evidences:
-        complete_pair_files = _count_complete_pair_files(groups)
+        complete_pair_files = _count_complete_pair_files(groups, parser)
+        if not complete_pair_files:
+            continue
         scored.append((complete_pair_files, parsed_count, groups, parser, source))
+    if not scored:
+        return
 
     complete_pair_files, parsed_count, groups, parser, source = max(
         scored,
@@ -365,12 +377,9 @@ def _warn_or_raise_incomplete_pair_evidence(
         parser=parser,
         source=source,
     )
-    if complete_pair_files / len(fastqs) >= 0.5:
-        raise IPyradError(message)
-
     logger.warning(
         "{} Proceeding as single-end; complete auto-detected pairs cover {}/{} "
-        "input files (<50% threshold for a hard error).",
+        "input files.",
         message,
         complete_pair_files,
         len(fastqs),
@@ -547,7 +556,7 @@ def get_pairs_or_single_by_trim(
             )
         )
     if evidences:
-        _warn_or_raise_incomplete_pair_evidence(fastqs, evidences)
+        _warn_incomplete_pair_evidence(fastqs, evidences)
 
     # --------------------------------------------------------------
     logger.info("failed to pair files, assuming data in single-end")
