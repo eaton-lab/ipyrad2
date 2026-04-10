@@ -86,8 +86,8 @@ def _setup_denovo_subparser(subparsers: argparse._SubParsersAction, header: str 
     selection.add_argument(
         "--imap", metavar="Path", type=Path,
         help=(
-            "Optional IMAP file used to select one representative sample per group "
-            "for denovo pseudoreference construction."
+            "Optional IMAP file with `sample<TAB>group` or `glob<TAB>group` lines; "
+            "all matched samples are retained for denovo pseudoreference construction."
         ),
     )
     selection.add_argument(

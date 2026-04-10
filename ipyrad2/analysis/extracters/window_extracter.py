@@ -34,7 +34,6 @@ outfile: alignment.phy
 from typing import Dict, List, Tuple
 import sys
 from pathlib import Path
-import itertools
 import numpy as np
 import pandas as pd
 import h5py
@@ -103,7 +102,7 @@ class WindowExtracter:
 
         # fills: snames, sidxs, scaffold_table
         self.scaffold_table = load_sequence_scaffold_table(self.data)
-        self.snames, self.sidxs, self.exclude = resolve_sequence_sample_subset(
+        self.snames, self.sidxs, self.exclude, imap = resolve_sequence_sample_subset(
             self.data,
             exclude=self.exclude,
             include_reference=self.include_reference,
@@ -130,7 +129,7 @@ class WindowExtracter:
         self.scaffold_table = load_sequence_scaffold_table(self.data)
 
     def _get_snames_and_sidxs_subset(self, imap) -> None:
-        self.snames, self.sidxs, self.exclude = resolve_sequence_sample_subset(
+        self.snames, self.sidxs, self.exclude, self.imap = resolve_sequence_sample_subset(
             self.data,
             exclude=self.exclude,
             include_reference=self.include_reference,
@@ -478,7 +477,8 @@ class WindowExtracter:
         nsites = fseqarr.shape[1]
 
         bpp_sep = "\n" if bpp_format else ""
-        alignment = f"{ntaxa} {nsites}\n{bpp_sep}{'\n'.join(phy)}\n"
+        phy_text = "\n".join(phy)
+        alignment = f"{ntaxa} {nsites}\n{bpp_sep}{phy_text}\n"
         stats_dict = self._build_stats_dict(fnames, fseqarr, outfile)
 
         if return_alignment:

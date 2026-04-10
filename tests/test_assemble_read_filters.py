@@ -1059,6 +1059,37 @@ def test_normalize_populations_file_accepts_classic_pop_assign_format(tmp_path: 
     assert minmap == {"pop1": 1, "pop2": 2}
 
 
+def test_normalize_populations_file_expands_globs_in_classic_pop_assign_format(
+    tmp_path: Path,
+) -> None:
+    tmpdir = tmp_path / "assembly_tmpdir"
+    tmpdir.mkdir(parents=True)
+    populations = tmp_path / "groups.txt"
+    populations.write_text(
+        "barbeyi*\tbarbeyi\n"
+        "geyeri*\tgeyeri\n"
+        "# barbeyi:1 geyeri:1\n",
+        encoding="utf-8",
+    )
+
+    out_path, imap, minmap = _normalize_populations_file(
+        populations=populations,
+        tmpdir=tmpdir,
+        sample_names=["barbeyi-01", "barbeyi-02", "geyeri-01"],
+    )
+
+    assert out_path.read_text(encoding="utf-8") == (
+        "barbeyi-01\tbarbeyi\n"
+        "barbeyi-02\tbarbeyi\n"
+        "geyeri-01\tgeyeri\n"
+    )
+    assert imap == {
+        "barbeyi": ["barbeyi-01", "barbeyi-02"],
+        "geyeri": ["geyeri-01"],
+    }
+    assert minmap == {"barbeyi": 1, "geyeri": 1}
+
+
 def test_normalize_populations_file_rejects_duplicate_sample_assignments(tmp_path: Path) -> None:
     tmpdir = tmp_path / "assembly_tmpdir"
     tmpdir.mkdir(parents=True)
@@ -1088,7 +1119,10 @@ def test_normalize_populations_file_rejects_missing_and_extra_samples(tmp_path: 
 
     extra = tmp_path / "extra.tsv"
     extra.write_text("s1\tpopA\ns2\tpopB\n", encoding="utf-8")
-    with pytest.raises(IPyradError, match="not present in this assemble run: s2"):
+    with pytest.raises(
+        IPyradError,
+        match="--populations contains sample names or glob patterns that were not found in this assemble run: s2",
+    ):
         _normalize_populations_file(
             populations=extra,
             tmpdir=tmpdir,

@@ -317,6 +317,43 @@ def test_wex_accepts_imap_and_minmap_files(tmp_path: Path) -> None:
     assert seqs.shape == (2, 4)
 
 
+def test_wex_expands_glob_imap_entries_from_file(tmp_path: Path) -> None:
+    h5 = _write_test_h5(
+        tmp_path / "assembly.hdf5",
+        ["ACGTACGT", "NNNNTCGT", "TCGTACGA"],
+        rows=[(0, 0, 4, 1, 4), (0, 4, 8, 5, 8)],
+        sample_names=["barbeyi-01", "barbeyi-02", "geyeri-01"],
+        scaffold_length=8,
+    )
+    imap = tmp_path / "imap.tsv"
+    imap.write_text(
+        "barbeyi*\tbarbeyi\n"
+        "geyeri*\tgeyeri\n",
+        encoding="utf-8",
+    )
+    minmap = tmp_path / "minmap.tsv"
+    minmap.write_text("barbeyi\t1\ngeyeri\t1\n", encoding="utf-8")
+
+    tool = _make_wex(
+        tmp_path,
+        h5,
+        windows=["chr1:1-4"],
+        force=True,
+        imap=imap,
+        minmap=minmap,
+    )
+
+    names, seqs = tool._run()
+
+    assert tool.imap == {
+        "barbeyi": ["barbeyi-01", "barbeyi-02"],
+        "geyeri": ["geyeri-01"],
+    }
+    assert tool.minmap == {"barbeyi": 1, "geyeri": 1}
+    assert names == ["barbeyi-01", "barbeyi-02", "geyeri-01"]
+    assert seqs.shape == (3, 4)
+
+
 def test_wex_excludes_reference_by_default(tmp_path: Path) -> None:
     h5 = _write_test_h5(
         tmp_path / "assembly.hdf5",

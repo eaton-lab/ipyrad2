@@ -57,7 +57,10 @@ def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = N
 
     naming.add_argument(
         "-i", "--imap", metavar="Path", type=Path,
-        help=r"Sample-to-group table with sample\tgroup lines for subsetting, renaming, or merging samples.",
+        help=(
+            "Sample-to-group table with `sample<TAB>group` or `glob<TAB>group` "
+            "lines for subsetting, renaming, or merging samples."
+        ),
     )
     naming.add_argument(
         "-dx", "--delim-str", metavar="str", type=str, default=None,

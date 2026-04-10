@@ -12,7 +12,7 @@ import pandas as pd
 from loguru import logger
 
 from ...utils.exceptions import IPyradError
-from ...utils.pops import parse_imap, parse_minmap, parse_pops_file
+from ...utils.pops import expand_imap_patterns, parse_imap, parse_minmap, parse_pops_file
 
 
 REFERENCE_SAMPLE_NAME = "assembly_reference_sequence"
@@ -78,13 +78,19 @@ def resolve_sequence_sample_subset(
     exclude=None,
     include_reference: bool = False,
     imap=None,
-) -> tuple[list[str], list[int], set[str]]:
+) -> tuple[list[str], list[int], set[str], dict[str, list[str]]]:
     """Return selected sample names, their HDF5 row indexes, and final excludes."""
     exclude_set = set(exclude if exclude else [])
     all_names = load_sequence_sample_names(data)
     dbnames = set(all_names)
 
     if imap:
+        imap, _unmatched = expand_imap_patterns(
+            imap,
+            all_names,
+            mapping_name="IMAP",
+            available_name="the HDF5 database",
+        )
         imapset = set(itertools.chain(*imap.values()))
         badnames = imapset.difference(dbnames)
         if badnames:
@@ -102,6 +108,7 @@ def resolve_sequence_sample_subset(
                 "but it must also be assigned to an IMAP group."
             )
     else:
+        imap = {}
         imapset = set()
 
     if (
@@ -121,7 +128,7 @@ def resolve_sequence_sample_subset(
 
     sidxs = [idx for idx, name in enumerate(all_names) if name not in exclude_set]
     snames = [name for idx, name in enumerate(all_names) if idx in sidxs]
-    return snames, sidxs, exclude_set
+    return snames, sidxs, exclude_set, imap
 
 
 def build_sequence_imap_minmap(

@@ -32,6 +32,8 @@ def test_denovo_help_uses_grouped_layout_and_updated_examples() -> None:
     assert "--imap" in help_text
     assert "--use-all-samples" in help_text
     assert "--no-alignment" in help_text
+    assert "glob<TAB>group" in help_text
+    assert "all matched samples are retained" in help_text
     assert "ipyrad denovo" not in help_text
 
 
