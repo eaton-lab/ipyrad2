@@ -184,6 +184,10 @@ def write_demux_stats(
                 outfile.write("none\n\n")
 
             outfile.write("# Barcode boundary ambiguity statistics\n######################\n")
+            outfile.write(
+                "Reads listed in this section matched multiple sample/barcode-boundary "
+                "candidates and were not assigned or written to any sample output file.\n"
+            )
             ambiguous_obs = aggregate_file_stat_counter(file_stats, 3)
             if ambiguous_obs:
                 ambiguity_df = pd.DataFrame(

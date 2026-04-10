@@ -39,6 +39,11 @@ def validate_demux_args(args: Namespace, parser: ArgumentParser) -> None:
         not 0 <= args.max_mismatch <= 2,
         "--max-mismatch must be between 0 and 2",
     )
+    _parser_error_if(
+        parser,
+        args.barcode_boundary_slack not in (0, 1),
+        "--barcode-boundary-slack must be 0 or 1",
+    )
 
 
 def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str = None) -> None:
@@ -85,6 +90,14 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
     mode.add_argument(
         "-M", "--merge-technical-replicates", action="store_true",
         help="Merge technical replicates that share a sample name.",
+    )
+    mode.add_argument(
+        "--barcode-boundary-slack", metavar="int", type=int, choices=(0, 1), default=1,
+        help=(
+            "Maximum barcode-boundary offset allowed for inline barcode matching. "
+            "Use 0 to require barcodes at read position 0; 1 also allows a one-base offset. "
+            "[default=%(default)s]"
+        ),
     )
 
     cutsites.add_argument(

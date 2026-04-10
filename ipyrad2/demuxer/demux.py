@@ -224,6 +224,8 @@ class Demux:
     max_reads_kmer: int
     """: Total reads sampled across files for junction inference."""
     log_level: str
+    barcode_boundary_slack: int = 1
+    """: Max 5-prime barcode-boundary offset allowed for inline barcode matching."""
     pigz: bool = False
     force: bool = False
 
@@ -354,6 +356,9 @@ class Demux:
             raise IPyradError("max_reads_kmer must be >= 1.")
         if not 0 <= self.max_mismatch <= 2:
             raise IPyradError("max_mismatch must be between 0 and 2.")
+        if self.barcode_boundary_slack not in (0, 1):
+            raise IPyradError("barcode_boundary_slack must be 0 or 1.")
+
     def _prepare_outdir_path(self) -> None:
         """Normalize the outdir path and create missing parent directories."""
         self.outdir = Path(self.outdir).expanduser().resolve()
@@ -685,6 +690,7 @@ class Demux:
                 self.cores,
                 self.log_level,
                 label="R1 cutsite motif inference",
+                max_barcode_boundary_slack=self.barcode_boundary_slack,
             )
             self._re1_motifs = self._re1_inference.motifs
             self._re1_source = "auto"
@@ -703,6 +709,7 @@ class Demux:
                 self.cores,
                 self.log_level,
                 label="R2 cutsite motif inference",
+                max_barcode_boundary_slack=self.barcode_boundary_slack,
             )
             self._re2_motifs = self._re2_inference.motifs
             self._re2_source = "auto"
@@ -916,6 +923,7 @@ class Demux:
             barcode2_mismatch_by_barcode=self._barcode2_mismatch_by_barcode,
             barcode_lengths1=self._barcode_lengths1,
             barcode_lengths2=self._barcode_lengths2,
+            barcode_boundary_slack=self.barcode_boundary_slack,
             cuts1=self._cuts1,
             cuts2=self._cuts2,
             merge_technical_replicates=self.merge_technical_replicates,

@@ -42,6 +42,7 @@ class DemuxRunConfig:
     max_reads: int | None
     i7: bool
     log_level: str
+    barcode_boundary_slack: int = 1
     barcodes_to_samples: Dict[bytes, Tuple[str, ...]] = field(default_factory=dict)
     barcode1_to_samples: Dict[bytes, Tuple[str, ...]] = field(default_factory=dict)
     barcode2_to_samples: Dict[bytes, Tuple[str, ...]] = field(default_factory=dict)
@@ -116,6 +117,8 @@ class BarMatching:
     """: Optional callback receiving absolute (raw_reads, matched_reads)."""
     progress_interval_reads: int = DEFAULT_PROGRESS_REPORT_READS
     """: Minimum raw-read interval between progress callback updates."""
+    barcode_boundary_slack: int = 1
+    """: Maximum 5-prime barcode-boundary offset allowed for inline barcode matching."""
 
     # stats counters
     barcode_misses: Dict[str, int] = field(default_factory=dict)
@@ -406,6 +409,7 @@ class BarMatchingSingleInline(BarMatching):
             self.barcode1_candidates_by_length,
             self.barcode_lengths1,
             self.cuts1,
+            max_slack=self.barcode_boundary_slack,
         )
 
     def _iter_matched_barcode(self) -> Iterator[Tuple[str, str, str]]:
@@ -419,6 +423,7 @@ class BarMatchingSingleInline(BarMatching):
                 self.barcode1_candidates_by_length,
                 self.cuts1,
                 self.barcode1_mismatch_by_barcode,
+                max_slack=self.barcode_boundary_slack,
             )
             sample_candidates: Dict[str, List[BarcodeBoundaryCandidate]] = {}
             for candidate in candidates:
@@ -476,11 +481,13 @@ class BarMatchingCombinatorialInline(BarMatching):
             self.barcode1_candidates_by_length,
             self.barcode_lengths1,
             self.cuts1,
+            max_slack=self.barcode_boundary_slack,
         )
         self.maxlen2 = _match_window_length(
             self.barcode2_candidates_by_length,
             self.barcode_lengths2,
             self.cuts2,
+            max_slack=self.barcode_boundary_slack,
         )
 
     def _iter_matched_barcode(self):
@@ -495,12 +502,14 @@ class BarMatchingCombinatorialInline(BarMatching):
                 self.barcode1_candidates_by_length,
                 self.cuts1,
                 self.barcode1_mismatch_by_barcode,
+                max_slack=self.barcode_boundary_slack,
             )
             candidates_r2 = match_barcode_candidates(
                 read2[1][:self.maxlen2],
                 self.barcode2_candidates_by_length,
                 self.cuts2,
                 self.barcode2_mismatch_by_barcode,
+                max_slack=self.barcode_boundary_slack,
             )
 
             sample_candidates: Dict[str, List[Tuple[BarcodeBoundaryCandidate, BarcodeBoundaryCandidate, bytes]]] = {}
@@ -542,10 +551,12 @@ class BarMatchingCombinatorialInline(BarMatching):
 
             _record_combined_barcode_miss(self.barcode_misses, candidates_r1, candidates_r2)
 
+
 def cut_matcher(
     read: bytes,
     barcode_lengths: Tuple[int, ...],
     cutters: List[bytes],
+    max_slack: int = 1,
 ) -> Tuple[bytes, int] | None:
     """Return the matched barcode and trim start at valid barcode boundaries."""
     matches = _match_boundary_candidates(
@@ -553,6 +564,7 @@ def cut_matcher(
         barcode_lengths,
         cutters,
         barcode_candidates_by_length=None,
+        max_slack=max_slack,
     )
     if len(matches) == 1:
         candidate = matches[0]
@@ -566,14 +578,24 @@ def cut_matcher(
     return None
 
 
+def _validate_boundary_slack(max_slack: int) -> int:
+    """Return a normalized barcode-boundary slack value."""
+    max_slack = int(max_slack)
+    if max_slack not in (0, 1):
+        raise IPyradError("barcode boundary slack must be 0 or 1.")
+    return max_slack
+
+
 def _match_boundary_candidates(
     read: bytes,
     barcode_lengths: Iterable[int],
     cutters: Sequence[bytes],
     barcode_candidates_by_length: Dict[int, frozenset[bytes]] | None,
     mismatch_by_barcode: Dict[bytes, int] | None = None,
+    max_slack: int = 1,
 ) -> List[BarcodeBoundaryCandidate]:
     """Return deterministic barcode-boundary candidates supported by an immediate cutsite match."""
+    max_slack = _validate_boundary_slack(max_slack)
     mismatch_by_barcode = mismatch_by_barcode or {}
     matches: Dict[Tuple[bytes, int, int], BarcodeBoundaryCandidate] = {}
     for barcode_length in sorted(barcode_lengths):
@@ -582,7 +604,7 @@ def _match_boundary_candidates(
             allowed_barcodes = barcode_candidates_by_length.get(barcode_length)
             if not allowed_barcodes:
                 continue
-        for slack in (0, 1):
+        for slack in range(max_slack + 1):
             cut_start = slack + barcode_length
             if cut_start <= 0 or cut_start > len(read):
                 continue
@@ -611,6 +633,7 @@ def match_barcode_candidates(
     barcode_candidates_by_length: Dict[int, frozenset[bytes]],
     cutters: List[bytes],
     mismatch_by_barcode: Dict[bytes, int] | None = None,
+    max_slack: int = 1,
 ) -> List[BarcodeBoundaryCandidate]:
     """Return exact barcode-boundary candidates supported by an immediate cutsite match."""
     return _match_boundary_candidates(
@@ -619,6 +642,7 @@ def match_barcode_candidates(
         cutters,
         barcode_candidates_by_length=barcode_candidates_by_length,
         mismatch_by_barcode=mismatch_by_barcode,
+        max_slack=max_slack,
     )
 
 
@@ -634,10 +658,12 @@ def _match_window_length(
     barcode_candidates_by_length: Dict[int, frozenset[bytes]],
     fallback_lengths: Tuple[int, ...],
     cutters: Sequence[bytes],
+    max_slack: int = 1,
 ) -> int:
     """Return the maximum read prefix length needed for barcode+cut matching."""
+    max_slack = _validate_boundary_slack(max_slack)
     barcode_lengths = tuple(barcode_candidates_by_length) or fallback_lengths
-    return max(barcode_lengths) + 1 + max(len(cut) for cut in cutters)
+    return max(barcode_lengths) + max_slack + max(len(cut) for cut in cutters)
 
 
 def _trim_fastq_record(
@@ -763,6 +789,7 @@ def build_matcher(
         chunksize=config.chunksize,
         max_reads=config.max_reads,
         workers=workers,
+        barcode_boundary_slack=config.barcode_boundary_slack,
     )
     if config.i7:
         return BarMatchingI7(**kwargs)
