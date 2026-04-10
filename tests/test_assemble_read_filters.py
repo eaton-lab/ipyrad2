@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from ipyrad2.assembler import run_assembler as exported_run_assembler
+from ipyrad2.assembler import assemble as assemble_module
 from ipyrad2.assembler.assemble import _run_variant_stage
 from ipyrad2.assembler.assemble import _run_paralog_stage
 from ipyrad2.assembler.assemble import _write_consensus_and_outputs
@@ -199,10 +200,9 @@ def test_get_coverage_bed_graphs_uses_layout_specific_bamtobed_command(
     bam_file.write_text("", encoding="utf-8")
     reference = tmp_path / "ref.fa"
     reference.write_text(">chr1\nACGT\n", encoding="utf-8")
-    reference.with_suffix(reference.suffix + ".fai").write_text(
-        "chr1\t4\t6\t4\t5\n",
-        encoding="utf-8",
-    )
+    ref_info = tmp_path / "TMP" / "REF_info.txt"
+    ref_info.parent.mkdir(parents=True, exist_ok=True)
+    ref_info.write_text("chr1\t4\n", encoding="utf-8")
     observed: dict[str, object] = {}
 
     def _fake_run_pipeline(cmds, outfile=None, **kwargs):
@@ -229,6 +229,90 @@ def test_get_coverage_bed_graphs_uses_layout_specific_bamtobed_command(
 
     assert out_bed == tmp_path / "TMP" / "beds" / "sample.fragments.merged.bed"
     assert observed["cmds"][1] == expected_cmd2
+    assert observed["cmds"][4] == [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
+    assert observed["cmds"][5] == [BIN_BED, "genomecov", "-i", "-", "-g", str(ref_info), "-bg"]
+    assert observed["cmds"][10] == [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
+
+
+def test_get_mapped_reference_contigs_from_bam_ignores_zero_mapped_and_unmapped(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    bam_file = tmp_path / "sample.bam"
+    bam_file.write_text("", encoding="utf-8")
+
+    def _fake_run_pipeline(cmds, outfile=None, **kwargs):
+        del outfile, kwargs
+        assert cmds == [[BIN_SAM, "idxstats", str(bam_file)]]
+        return 0, (
+            "chr1\t10\t3\t0\n"
+            "chr2\t20\t0\t4\n"
+            "*\t0\t0\t5\n"
+        ).encode(), b""
+
+    monkeypatch.setattr("ipyrad2.assembler.assemble.run_pipeline", _fake_run_pipeline)
+
+    assert assemble_module._get_mapped_reference_contigs_from_bam(bam_file) == [
+        ("chr1", 10, 3)
+    ]
+
+
+def test_validate_analysis_bams_match_reference_rejects_missing_contigs(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    tmpdir = tmp_path / "assembly_tmpdir"
+    tmpdir.mkdir()
+    (tmpdir / "REF_info.txt").write_text("chr1\t10\n", encoding="utf-8")
+    bam_file = tmp_path / "sample.bam"
+    bam_file.write_text("", encoding="utf-8")
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        assemble_module,
+        "_get_mapped_reference_contigs_from_bam",
+        lambda _bam_file: [("chr1", 10, 3), ("locus_10005_2", 81, 4)],
+    )
+
+    with pytest.raises(
+        IPyradError,
+        match="sample: missing contigs: locus_10005_2",
+    ):
+        assemble_module._validate_analysis_bams_match_reference(
+            {"sample": bam_file},
+            tmpdir,
+            reference,
+        )
+
+
+def test_validate_analysis_bams_match_reference_rejects_length_mismatches(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    tmpdir = tmp_path / "assembly_tmpdir"
+    tmpdir.mkdir()
+    (tmpdir / "REF_info.txt").write_text("chr1\t10\n", encoding="utf-8")
+    bam_file = tmp_path / "sample.bam"
+    bam_file.write_text("", encoding="utf-8")
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        assemble_module,
+        "_get_mapped_reference_contigs_from_bam",
+        lambda _bam_file: [("chr1", 12, 5)],
+    )
+
+    with pytest.raises(
+        IPyradError,
+        match=r"sample: length mismatches: chr1 \(BAM 12, REF 10, 5 mapped\)",
+    ):
+        assemble_module._validate_analysis_bams_match_reference(
+            {"sample": bam_file},
+            tmpdir,
+            reference,
+        )
 
 
 def test_get_consensus_uses_shared_reference_fasta(monkeypatch, tmp_path: Path) -> None:
@@ -1273,6 +1357,10 @@ def test_run_assembler_uses_filtered_analysis_bams_downstream(
         "ipyrad2.assembler.assemble.get_reference_sort_order",
         lambda _reference, tmpdir: (tmpdir / "REF_info.txt").write_text("chr1\t100\n", encoding="utf-8"),
     )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._validate_analysis_bams_match_reference",
+        lambda *args, **kwargs: None,
+    )
 
     def _fake_get_across_sample_loci_bed(*_args, **_kwargs):
         loci_bed = tmp_path / "OUT" / "assembly_tmpdir" / "beds" / "loci.bed"
@@ -1626,6 +1714,84 @@ def test_run_assembler_uses_filtered_analysis_bams_downstream(
     assert (tmp_path / "OUT" / "assembly.hdf5").exists()
 
 
+def test_run_assembler_rejects_bam_reference_mismatch_before_coverage_delimiting(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    rad_bam = tmp_path / "rad.bam"
+    rad_bam.write_text("", encoding="utf-8")
+    pool_messages: list[str] = []
+
+    monkeypatch.setattr("ipyrad2.assembler.assemble.get_name_from_bam", lambda path: path.stem)
+    monkeypatch.setattr("ipyrad2.assembler.assemble.classify_bam_layout", lambda _path: "single")
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble.get_reference_sort_order",
+        lambda _reference, tmpdir: (tmpdir / "REF_info.txt").write_text("chr1\t4\n", encoding="utf-8"),
+    )
+
+    def _fake_run_with_pool(jobs, log_level, max_workers=None, msg="Processing"):
+        del log_level, max_workers
+        pool_messages.append(msg)
+        if msg == "Filtering mapped reads":
+            return {
+                sname: tmp_path / "OUT" / "assembly_tmpdir" / "analysis_bams" / f"{sname}.analysis.filtered.bam"
+                for sname in jobs
+            }
+        pytest.fail(f"unexpected pool stage after BAM/reference validation failure: {msg}")
+
+    monkeypatch.setattr("ipyrad2.assembler.assemble.run_with_pool", _fake_run_with_pool)
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._validate_analysis_bams_match_reference",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            IPyradError("remap against the current reference")
+        ),
+    )
+
+    with pytest.raises(IPyradError, match="remap against the current reference"):
+        run_assembler(
+            rad_bams=[rad_bam],
+            wgs_bams=None,
+            reference=reference,
+            outdir=tmp_path / "OUT",
+            name="assembly",
+            loci_bed=None,
+            min_map_q=10,
+            max_tlen=None,
+            max_softclip=None,
+            max_nm=None,
+            min_site_q=13,
+            min_geno_q=13,
+            min_base_q=13,
+            min_sample_depth=1,
+            min_locus_sample_coverage=1,
+            min_locus_trim_sample_coverage=1,
+            min_locus_length=25,
+            min_locus_merge_distance=300,
+            max_locus_hetero_frequency=0.3,
+            max_locus_variant_frequency=1.0,
+            max_sample_hetero_frequency=0.10,
+            softclip_len_threshold=20,
+            softclip_frac_max=0.5,
+            depth_z_max=7.0,
+            third_frac_cut=0.10,
+            min_3allele_sites=2,
+            maf_threshold=0.20,
+            max_sites_above_maf=8,
+            paralog_fail_frac_max=0.10,
+            populations=None,
+            rename_bams=None,
+            masks=None,
+            cores=2,
+            threads=1,
+            force=False,
+            log_level="WARNING",
+        )
+
+    assert pool_messages == ["Filtering mapped reads"]
+
+
 def test_run_assembler_rejects_duplicate_sample_names_across_rad_and_wgs(
     monkeypatch,
     tmp_path: Path,
@@ -1707,6 +1873,10 @@ def test_run_assembler_rename_bams_overrides_header_names_for_populations_and_ou
             sname: kwargs["tmpdir"] / "analysis_bams" / f"{sname}.analysis.filtered.bam"
             for sname in kwargs["bam_dict"]
         },
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._validate_analysis_bams_match_reference",
+        lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
         "ipyrad2.assembler.assemble.run_with_pool",
@@ -1903,7 +2073,7 @@ def test_run_assembler_accepts_loci_bed_without_rad_samples(
     monkeypatch.setattr("ipyrad2.assembler.assemble.classify_bam_layout", lambda _path: "single")
     monkeypatch.setattr(
         "ipyrad2.assembler.assemble.get_reference_sort_order",
-        lambda _reference, tmpdir: (tmpdir / "REF_info.txt").write_text("chr2\t4\nchr1\t4\n", encoding="utf-8"),
+        lambda _reference, tmpdir: (tmpdir / "REF_info.txt").write_text("chr2\t12\nchr1\t12\n", encoding="utf-8"),
     )
     monkeypatch.setattr(
         "ipyrad2.assembler.assemble._prepare_analysis_bams",
@@ -1911,6 +2081,10 @@ def test_run_assembler_accepts_loci_bed_without_rad_samples(
             sname: kwargs["tmpdir"] / "analysis_bams" / f"{sname}.analysis.filtered.bam"
             for sname in kwargs["bam_dict"]
         },
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._validate_analysis_bams_match_reference",
+        lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
         "ipyrad2.assembler.assemble.get_across_sample_loci_bed",
