@@ -85,14 +85,24 @@ def test_secondary_mate_fallback_supports_dotted_suffix_patterns(tmp_path: Path)
     }
 
 
-def test_mismatched_trailing_suffix_after_mate_token_raises(tmp_path: Path) -> None:
+def test_mismatched_trailing_suffix_after_mate_token_is_quiet_single_end(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = _StubLogger()
+    monkeypatch.setattr(names_module, "logger", logger)
     fastq1 = tmp_path / "sample_L001_R1_001-sub.fastq.gz"
     fastq2 = tmp_path / "sample_L001_R2_001-trim.fastq.gz"
     fastq1.touch()
     fastq2.touch()
 
-    with pytest.raises(IPyradError, match="same trailing suffix"):
-        get_name_to_fastq_dict([fastq1, fastq2], None, None)
+    result = get_name_to_fastq_dict([fastq1, fastq2], None, None)
+
+    assert result == {
+        "sample_L001_R1_001-sub": (fastq1, None),
+        "sample_L001_R2_001-trim": (fastq2, None),
+    }
+    assert logger.warnings == []
 
 
 def test_ambiguous_single_end_fastqs_are_not_collapsed_into_a_pair(tmp_path: Path) -> None:
@@ -109,7 +119,7 @@ def test_ambiguous_single_end_fastqs_are_not_collapsed_into_a_pair(tmp_path: Pat
     }
 
 
-def test_terminal_r2_in_single_end_name_warns_and_falls_back(
+def test_terminal_r2_in_single_end_name_is_quiet_single_end(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -121,14 +131,10 @@ def test_terminal_r2_in_single_end_name_warns_and_falls_back(
     result = names_module.get_name_to_fastq_dict([fastq], None, None)
 
     assert result == {"Larkspur2": (fastq, None)}
-    assert any(
-        "Larkspu: missing R1" in warning
-        and "Proceeding as single-end" in warning
-        for warning in logger.warnings
-    )
+    assert logger.warnings == []
 
 
-def test_r1_only_single_end_outputs_warn_and_fall_back(
+def test_r1_only_single_end_outputs_are_quiet_single_end(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -146,8 +152,27 @@ def test_r1_only_single_end_outputs_warn_and_fall_back(
         f"barbeyi-CO1-{idx:02d}_R1": (fastqs[idx - 1], None)
         for idx in range(1, 5)
     }
-    assert any("missing R2" in warning for warning in logger.warnings)
-    assert any("complete auto-detected pairs cover 0/4" in warning for warning in logger.warnings)
+    assert logger.warnings == []
+
+
+def test_unmatched_r1_r2_tokens_are_quiet_single_end(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = _StubLogger()
+    monkeypatch.setattr(names_module, "logger", logger)
+    fastq1 = tmp_path / "alpha_R1.fastq.gz"
+    fastq2 = tmp_path / "beta_R2.fastq.gz"
+    fastq1.touch()
+    fastq2.touch()
+
+    result = names_module.get_name_to_fastq_dict([fastq1, fastq2], None, None)
+
+    assert result == {
+        "alpha_R1": (fastq1, None),
+        "beta_R2": (fastq2, None),
+    }
+    assert logger.warnings == []
 
 
 def test_low_complete_pair_ratio_warns_and_falls_back(
@@ -178,26 +203,49 @@ def test_low_complete_pair_ratio_warns_and_falls_back(
     assert any("complete auto-detected pairs cover 2/5" in warning for warning in logger.warnings)
 
 
-def test_majority_complete_split_pairs_still_raise(tmp_path: Path) -> None:
+def test_majority_complete_split_pairs_warn_and_fall_back_to_single_end(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = _StubLogger()
+    monkeypatch.setattr(names_module, "logger", logger)
     fastq1a = tmp_path / "sample_R1_001-sub.fastq.gz"
     fastq2a = tmp_path / "sample_R2_001-sub.fastq.gz"
     fastq1b = tmp_path / "sample_R1_002-sub.fastq.gz"
     for path in (fastq1a, fastq2a, fastq1b):
         path.touch()
 
-    with pytest.raises(IPyradError, match="do not form complete consistent R1/R2 pairs"):
-        get_name_to_fastq_dict([fastq1a, fastq2a, fastq1b], None, None)
+    result = get_name_to_fastq_dict([fastq1a, fastq2a, fastq1b], None, None)
+
+    assert result == {
+        "sample_R1_001-sub": (fastq1a, None),
+        "sample_R1_002-sub": (fastq1b, None),
+        "sample_R2_001-sub": (fastq2a, None),
+    }
+    assert any("complete auto-detected pairs cover 2/3" in warning for warning in logger.warnings)
 
 
-def test_mixed_paired_end_and_unrecognized_layout_raises(tmp_path: Path) -> None:
+def test_mixed_paired_end_and_unrecognized_layout_warns_and_falls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = _StubLogger()
+    monkeypatch.setattr(names_module, "logger", logger)
     fastq1 = tmp_path / "sample_R1.fastq.gz"
     fastq2 = tmp_path / "sample_R2.fastq.gz"
     weird = tmp_path / "sample_extra.fastq.gz"
     for path in (fastq1, fastq2, weird):
         path.touch()
 
-    with pytest.raises(IPyradError, match="unrecognized alongside paired-end-looking files"):
-        get_name_to_fastq_dict([fastq1, fastq2, weird], None, None)
+    result = get_name_to_fastq_dict([fastq1, fastq2, weird], None, None)
+
+    assert result == {
+        "sample_R1": (fastq1, None),
+        "sample_R2": (fastq2, None),
+        "sample_extra": (weird, None),
+    }
+    assert any("unrecognized alongside paired-end-looking files" in warning for warning in logger.warnings)
+    assert any("complete auto-detected pairs cover 2/3" in warning for warning in logger.warnings)
 
 
 def test_delim_parsing_raises_on_ambiguous_non_paired_groups(tmp_path: Path) -> None:
