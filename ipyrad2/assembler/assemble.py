@@ -355,6 +355,29 @@ def _load_reference_scaffold_order(tmpdir: Path) -> dict[str, int]:
     return order
 
 
+def _load_reference_scaffold_lengths(tmpdir: Path) -> dict[str, int]:
+    """Return reference scaffold lengths from the assemble REF_info.txt file."""
+    ref_info = tmpdir / "REF_info.txt"
+    lengths: dict[str, int] = {}
+    with ref_info.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 2 or not parts[0]:
+                continue
+            try:
+                lengths[parts[0]] = int(parts[1])
+            except ValueError as exc:
+                raise IPyradError(
+                    f"Reference scaffold length file is malformed: {ref_info}"
+                ) from exc
+    if not lengths:
+        raise IPyradError(f"Reference scaffold length file is empty: {ref_info}")
+    return lengths
+
+
 def _normalize_user_loci_bed(loci_bed: Path, tmpdir: Path) -> tuple[Path, int]:
     """Validate and normalize a user-provided loci BED into the assemble tmpdir."""
     if not loci_bed.exists():
@@ -363,6 +386,7 @@ def _normalize_user_loci_bed(loci_bed: Path, tmpdir: Path) -> tuple[Path, int]:
         raise IPyradError(f"--loci-bed must point to a file: {loci_bed}")
 
     scaffold_order = _load_reference_scaffold_order(tmpdir)
+    scaffold_lengths = _load_reference_scaffold_lengths(tmpdir)
     records: list[tuple[str, int, int, int]] = []
     ignored_extra_cols = False
 
@@ -397,6 +421,10 @@ def _normalize_user_loci_bed(loci_bed: Path, tmpdir: Path) -> tuple[Path, int]:
                 raise IPyradError(f"--loci-bed line {lineno} has start < 0.")
             if end <= start:
                 raise IPyradError(f"--loci-bed line {lineno} must satisfy end > start.")
+            if end > scaffold_lengths[chrom]:
+                raise IPyradError(
+                    f"--loci-bed line {lineno} exceeds reference length for {chrom}: {end} > {scaffold_lengths[chrom]}"
+                )
             if len(parts) > 3:
                 ignored_extra_cols = True
             records.append((chrom, start, end, lineno))

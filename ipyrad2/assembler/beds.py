@@ -28,8 +28,9 @@ def get_name_from_bam(bam_file: Path) -> str:
 
 
 def samtools_index_reference(reference: Path, threads: int) -> None:
-    """Index the reference FASTA with samtools if needed downstream."""
-    cmd = [BIN_SAM, "faidx", reference]
+    """Refresh the reference FASTA index with samtools."""
+    del threads
+    cmd = [BIN_SAM, "faidx", str(reference)]
     run_pipeline([cmd])
 
 
@@ -38,8 +39,7 @@ def get_reference_sort_order(reference: Path, tmpdir: Path) -> Path:
     out_path = tmpdir / "REF_info.txt"
 
     fai_path = reference.with_suffix(reference.suffix + ".fai")
-    if not fai_path.exists():
-        samtools_index_reference(reference, 4)
+    samtools_index_reference(reference, 4)
 
     cmd = ["cut", "-f", "1,2", str(fai_path)]
     run_pipeline([cmd], out_path)
@@ -110,6 +110,7 @@ def write_callable_regions_bed(
     out_bed: Path,
 ) -> Path:
     """Write BED fragments limited to A/C/G/T reference runs inside regions_bed."""
+    samtools_index_reference(reference_fasta, 1)
     intervals: list[tuple[int, str, int, int]] = []
     by_contig: dict[str, list[tuple[int, int, int]]] = {}
     with Path(regions_bed).open("r", encoding="utf-8") as handle:
@@ -158,7 +159,9 @@ def write_callable_regions_bed(
         for order, start, end in by_contig[chrom]:
             if end > seq_len:
                 raise IPyradError(
-                    f"BED interval exceeds reference length for {chrom}: {start}-{end} > {seq_len}"
+                    "BED interval exceeds current reference length for "
+                    f"{chrom}: {start}-{end} > {seq_len}. "
+                    "This usually means the BED or BAM inputs do not match the current reference FASTA."
                 )
             fragments_by_order[order].extend(
                 _iter_callable_slices(sequence, start, end)
