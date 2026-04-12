@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 from loguru import logger
 
+from ipyrad2.analysis.extracters import window_extracter as window_extracter_module
 from ipyrad2.analysis.extracters.locus_extracter import LocusExtracter
 from ipyrad2.analysis.extracters.window_extracter import WindowExtracter
 from ipyrad2.utils.exceptions import IPyradError
@@ -148,6 +149,40 @@ def _parse_lex_stats(stats_path: Path) -> tuple[dict[str, str], list[dict[str, s
     return header, rows
 
 
+def _parse_hash_section_report(report_text: str) -> dict[str, list[str]]:
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in report_text.splitlines():
+        if line.startswith("# "):
+            current = line[2:]
+            sections[current] = []
+            continue
+        if current is not None:
+            sections[current].append(line)
+    return sections
+
+
+def _parse_key_value_section(lines: list[str]) -> dict[str, str]:
+    rows: dict[str, str] = {}
+    for line in lines:
+        if not line.strip():
+            continue
+        key, value = re.split(r" {2,}", line.rstrip(), maxsplit=1)
+        rows[key.strip()] = value.strip()
+    return rows
+
+
+def _parse_table_section(lines: list[str]) -> list[dict[str, str]]:
+    rows = [line for line in lines if line.strip()]
+    if not rows:
+        return []
+    headers = re.split(r" {2,}", rows[0].strip())
+    return [
+        dict(zip(headers, re.split(r" {2,}", row.strip()), strict=True))
+        for row in rows[1:]
+    ]
+
+
 def test_wex_phy_output_writes_stats_and_keeps_filtered_rows_aligned(
     tmp_path: Path,
 ) -> None:
@@ -168,14 +203,55 @@ def test_wex_phy_output_writes_stats_and_keeps_filtered_rows_aligned(
     tool._write_to_phy()
 
     phy = (tmp_path / "OUT" / "alignment.phy").read_text(encoding="utf-8")
-    stats = (tmp_path / "OUT" / "alignment.stats.tsv").read_text(encoding="utf-8")
+    stats = (tmp_path / "OUT" / "alignment.stats.txt").read_text(encoding="utf-8")
+    sections = _parse_hash_section_report(stats)
+    filtering = _parse_key_value_section(sections["Filtering Summary"])
+    alignment = _parse_key_value_section(sections["Alignment Summary"])
+    sample_rows = _parse_table_section(sections["Sample Summary"])
 
     lines = phy.splitlines()
     assert lines[0] == "2 4"
     assert lines[1].strip().endswith("ACGT")
     assert lines[2].strip().endswith("TCGT")
-    assert "nvariants_in_windows_after_filtering" in stats
-    assert "nvariants_in_windows_afater_filtering" not in stats
+    assert "# Extract Summary" in stats
+    assert "# Filtering Summary" in stats
+    assert "# Alignment Summary" in stats
+    assert "# Sample Summary" in stats
+    assert filtering["samples_dropped_by_max_missing"] == "s2"
+    assert alignment["nvariants_in_windows_after_filtering"] == "1"
+    assert sample_rows == [
+        {"sample": "s1", "population": "all", "percent_missing": "0.000"},
+        {"sample": "s2", "population": "all", "percent_missing": "100.000"},
+        {"sample": "s3", "population": "all", "percent_missing": "0.000"},
+    ]
+
+
+def test_wex_phy_file_output_does_not_call_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    h5 = _write_test_h5(
+        tmp_path / "assembly.hdf5",
+        ["ACGTACGT", "NNNNTCGT", "TCGTACGA"],
+        rows=[(0, 0, 4, 1, 4), (0, 4, 8, 5, 8)],
+        scaffold_length=8,
+    )
+    tool = _make_wex(
+        tmp_path,
+        h5,
+        windows=["chr1:1-4"],
+        force=True,
+    )
+
+    def _fail() -> None:
+        raise AssertionError("_run should not be used for normal file output")
+
+    monkeypatch.setattr(tool, "_run", _fail)
+
+    tool._write_to_phy()
+
+    phy = (tmp_path / "OUT" / "alignment.phy").read_text(encoding="utf-8")
+    assert phy.startswith("3 4\n")
 
 
 def test_wex_phy_stdout_writes_stats_without_crashing(
@@ -199,10 +275,13 @@ def test_wex_phy_stdout_writes_stats_without_crashing(
     tool._write_to_phy()
 
     captured = capsys.readouterr()
-    stats = (tmp_path / "OUT" / "alignment.stats.tsv").read_text(encoding="utf-8")
+    stats = (tmp_path / "OUT" / "alignment.stats.txt").read_text(encoding="utf-8")
+    extract = _parse_key_value_section(
+        _parse_hash_section_report(stats)["Extract Summary"]
+    )
 
     assert captured.out.startswith("3 4\n")
-    assert "outfile\tSTDOUT" in stats
+    assert extract["outfile"] == "STDOUT"
 
 
 def test_wex_fasta_output_and_force_handling(tmp_path: Path) -> None:
@@ -286,6 +365,88 @@ def test_wex_without_windows_selects_all_scaffolds_and_logs_hint(tmp_path: Path)
         and "-P" in str(msg)
         for msg in messages
     )
+
+
+def test_wex_packs_many_full_scaffold_windows_into_few_chunk_loads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    nscaffolds = 2001
+    scaffold_width = 3
+    nsites = nscaffolds * scaffold_width
+    h5 = _write_test_h5(
+        tmp_path / "assembly.hdf5",
+        ["A" * nsites, "N" * nsites, "T" * nsites],
+        rows=[
+            (idx, idx * scaffold_width, (idx + 1) * scaffold_width, 1, scaffold_width)
+            for idx in range(nscaffolds)
+        ],
+        scaffold_names=[f"chr{idx}" for idx in range(nscaffolds)],
+        scaffold_lengths=[scaffold_width] * nscaffolds,
+    )
+    tool = _make_wex(tmp_path, h5, force=True)
+
+    load_calls = 0
+    original = window_extracter_module.load_sequence_chunk_from_phy
+
+    def _counting_loader(*args, **kwargs):
+        nonlocal load_calls
+        load_calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        window_extracter_module,
+        "load_sequence_chunk_from_phy",
+        _counting_loader,
+    )
+
+    names, seqs = tool._run()
+
+    assert names == ["s1", "s2", "s3"]
+    assert seqs.shape == (3, nsites)
+    assert load_calls == 4
+
+
+def test_wex_stats_report_uses_imap_population_labels_and_truncates_window_preview(
+    tmp_path: Path,
+) -> None:
+    nscaffolds = 12
+    scaffold_width = 2
+    nsites = nscaffolds * scaffold_width
+    h5 = _write_test_h5(
+        tmp_path / "assembly.hdf5",
+        ["A" * nsites, "N" * nsites, "T" * nsites],
+        rows=[
+            (idx, idx * scaffold_width, (idx + 1) * scaffold_width, 1, scaffold_width)
+            for idx in range(nscaffolds)
+        ],
+        sample_names=["barbeyi-01", "barbeyi-02", "geyeri-01"],
+        scaffold_names=[f"chr{idx}" for idx in range(nscaffolds)],
+        scaffold_lengths=[scaffold_width] * nscaffolds,
+    )
+    imap = tmp_path / "imap.tsv"
+    imap.write_text("barbeyi*\tbarbeyi\ngeyeri*\tgeyeri\n", encoding="utf-8")
+    minmap = tmp_path / "minmap.tsv"
+    minmap.write_text("barbeyi\t1\ngeyeri\t1\n", encoding="utf-8")
+    tool = _make_wex(tmp_path, h5, force=True, imap=imap, minmap=minmap)
+
+    tool._write_to_phy()
+
+    stats = (tmp_path / "OUT" / "alignment.stats.txt").read_text(encoding="utf-8")
+    sections = _parse_hash_section_report(stats)
+    extract = _parse_key_value_section(sections["Extract Summary"])
+    filtering = _parse_key_value_section(sections["Filtering Summary"])
+    sample_rows = _parse_table_section(sections["Sample Summary"])
+
+    assert extract["windows_selected"] == "12"
+    assert extract["selected_windows_preview"].endswith("(12 total)")
+    assert filtering["populations"] == "barbeyi, geyeri"
+    assert filtering["min_sample_coverage_filter"] == "barbeyi=1, geyeri=1"
+    assert sample_rows == [
+        {"sample": "barbeyi-01", "population": "barbeyi", "percent_missing": "0.000"},
+        {"sample": "barbeyi-02", "population": "barbeyi", "percent_missing": "100.000"},
+        {"sample": "geyeri-01", "population": "geyeri", "percent_missing": "0.000"},
+    ]
 
 
 def test_wex_accepts_imap_and_minmap_files(tmp_path: Path) -> None:

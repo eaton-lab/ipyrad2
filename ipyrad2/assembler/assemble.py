@@ -3,11 +3,7 @@
 """Orchestrate the active end-to-end `ipyrad2 assemble` workflow."""
 
 from typing import List
-from contextlib import contextmanager
-import resource
 import shutil
-import sys
-import time
 from pathlib import Path
 from loguru import logger
 import pandas as pd
@@ -57,77 +53,7 @@ from .write_snps import write_snps_hdf5
 from ..utils.parallel import run_pipeline, run_with_pool
 from ..utils.exceptions import IPyradError
 from ..utils.pops import expand_imap_patterns, parse_imap, parse_pops_file
-
-
-def _format_peak_rss(value: int) -> str:
-    """Format ru_maxrss values across Linux/macOS into a compact string."""
-    factor = 1 if sys.platform == "darwin" else 1024
-    nbytes = max(0, int(value)) * factor
-    mib = nbytes / (1024 * 1024)
-    return f"{mib:.1f} MiB"
-
-
-def _current_self_rss_bytes() -> int | None:
-    """Return the current RSS for the main process when the platform exposes it."""
-    if sys.platform.startswith("linux"):
-        try:
-            with open("/proc/self/status", "rt", encoding="utf-8") as handle:
-                for line in handle:
-                    if line.startswith("VmRSS:"):
-                        parts = line.split()
-                        if len(parts) >= 2:
-                            return int(parts[1]) * 1024
-        except OSError:
-            return None
-    return None
-
-
-def _format_bytes(nbytes: int | None) -> str:
-    """Format byte counts consistently for debug profiling logs."""
-    if nbytes is None:
-        return "n/a"
-    mib = nbytes / (1024 * 1024)
-    return f"{mib:.1f} MiB"
-
-
-@contextmanager
-def _profile_stage(stage: str):
-    """Log elapsed time plus RSS deltas for one assemble stage."""
-    start_time = time.perf_counter()
-    start_self_rss = _current_self_rss_bytes()
-    start_self_peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    start_child_peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
-    try:
-        yield
-    finally:
-        elapsed = time.perf_counter() - start_time
-        end_self_rss = _current_self_rss_bytes()
-        end_self_peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        end_child_peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
-
-        rss_delta = None
-        if start_self_rss is not None and end_self_rss is not None:
-            rss_delta = end_self_rss - start_self_rss
-
-        peak_self_delta = end_self_peak - start_self_peak
-        peak_child_delta = end_child_peak - start_child_peak
-        logger.debug(
-            (
-                "stage profile {}: elapsed={:.2f}s, "
-                "self_rss_start={}, self_rss_end={}, self_rss_delta={}, "
-                "self_peak_delta={}, child_peak_delta={}, "
-                "self_peak_total={}, child_peak_total={}"
-            ),
-            stage,
-            elapsed,
-            _format_bytes(start_self_rss),
-            _format_bytes(end_self_rss),
-            _format_bytes(rss_delta),
-            _format_peak_rss(peak_self_delta),
-            _format_peak_rss(peak_child_delta),
-            _format_peak_rss(end_self_peak),
-            _format_peak_rss(end_child_peak),
-        )
+from ..utils.profiling import profile_stage
 
 
 def existing_results_force_or_raise(outdir, tmpdir, name, force):
@@ -378,61 +304,84 @@ def _load_reference_scaffold_lengths(tmpdir: Path) -> dict[str, int]:
     return lengths
 
 
-def _get_mapped_reference_contigs_from_bam(
+def _load_reference_scaffold_records(tmpdir: Path) -> list[tuple[str, int]]:
+    """Return ordered `(scaffold, length)` records from the assemble REF_info.txt file."""
+    ref_info = tmpdir / "REF_info.txt"
+    records: list[tuple[str, int]] = []
+    with ref_info.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 2 or not parts[0]:
+                continue
+            try:
+                records.append((parts[0], int(parts[1])))
+            except ValueError as exc:
+                raise IPyradError(
+                    f"Reference scaffold length file is malformed: {ref_info}"
+                ) from exc
+    if not records:
+        raise IPyradError(f"Reference scaffold length file is empty: {ref_info}")
+    return records
+
+
+def _get_bam_header_reference_records(
     bam_file: Path,
-) -> list[tuple[str, int, int]]:
-    """Return `(contig, contig_len, mapped_reads)` rows with mapped coverage."""
-    cmd = [BIN_SAM, "idxstats", str(bam_file)]
+) -> list[tuple[str, int]]:
+    """Return ordered `(contig, length)` records from BAM `@SQ` header lines."""
+    cmd = [BIN_SAM, "view", "-H", str(bam_file)]
     _, out, _ = run_pipeline([cmd])
     text = out.decode() if isinstance(out, bytes) else str(out)
-    rows: list[tuple[str, int, int]] = []
+    records: list[tuple[str, int]] = []
     for line_no, raw_line in enumerate(text.splitlines(), start=1):
         line = raw_line.strip()
-        if not line:
+        if not line or not line.startswith("@SQ"):
             continue
-        parts = line.split("\t")
-        if len(parts) < 4:
+        contig = None
+        contig_len = None
+        for field in line.split("\t")[1:]:
+            if field.startswith("SN:"):
+                contig = field[3:]
+            elif field.startswith("LN:"):
+                contig_len = field[3:]
+        if not contig or contig_len is None:
             raise IPyradError(
-                f"samtools idxstats output is malformed for {bam_file} on line {line_no}: {raw_line}"
+                f"BAM header @SQ line is malformed for {bam_file} on line {line_no}: {raw_line}"
             )
-        contig = parts[0]
         try:
-            contig_len = int(parts[1])
-            mapped_reads = int(parts[2])
+            records.append((contig, int(contig_len)))
         except ValueError as exc:
             raise IPyradError(
-                f"samtools idxstats output is malformed for {bam_file} on line {line_no}: {raw_line}"
+                f"BAM header @SQ line is malformed for {bam_file} on line {line_no}: {raw_line}"
             ) from exc
-        if contig == "*" or mapped_reads <= 0:
-            continue
-        rows.append((contig, contig_len, mapped_reads))
-    return rows
+    if not records:
+        raise IPyradError(f"BAM header contains no @SQ records: {bam_file}")
+    return records
 
 
-def _format_bam_reference_mismatch_summary(
-    *,
-    missing_contigs: list[tuple[str, int]],
-    length_mismatches: list[tuple[str, int, int, int]],
-) -> str:
-    """Format one compact per-sample BAM/reference mismatch summary."""
-    parts: list[str] = []
-    if missing_contigs:
-        items = [
-            f"{contig} ({mapped} mapped)"
-            for contig, mapped in missing_contigs[:3]
-        ]
-        if len(missing_contigs) > 3:
-            items.append(f"... ({len(missing_contigs) - 3} more)")
-        parts.append("missing contigs: " + ", ".join(items))
-    if length_mismatches:
-        items = [
-            f"{contig} (BAM {bam_len}, REF {ref_len}, {mapped} mapped)"
-            for contig, bam_len, ref_len, mapped in length_mismatches[:3]
-        ]
-        if len(length_mismatches) > 3:
-            items.append(f"... ({len(length_mismatches) - 3} more)")
-        parts.append("length mismatches: " + ", ".join(items))
-    return "; ".join(parts)
+def _describe_bam_reference_mismatch(
+    bam_records: list[tuple[str, int]],
+    reference_records: list[tuple[str, int]],
+) -> str | None:
+    """Return one compact description of the first BAM-header/reference mismatch."""
+    if len(bam_records) != len(reference_records):
+        return (
+            f"BAM header has {len(bam_records)} contigs, reference has "
+            f"{len(reference_records)}"
+        )
+    for bam_record, reference_record in zip(bam_records, reference_records):
+        bam_name, bam_len = bam_record
+        ref_name, ref_len = reference_record
+        if bam_name != ref_name:
+            return f"first differing @SQ contig is BAM {bam_name}, reference {ref_name}"
+        if bam_len != ref_len:
+            return (
+                f"first differing @SQ length is {bam_name} "
+                f"(BAM {bam_len}, reference {ref_len})"
+            )
+    return None
 
 
 def _validate_analysis_bams_match_reference(
@@ -440,26 +389,14 @@ def _validate_analysis_bams_match_reference(
     tmpdir: Path,
     reference: Path,
 ) -> None:
-    """Reject filtered BAMs whose mapped contigs do not match the current reference."""
-    reference_lengths = _load_reference_scaffold_lengths(tmpdir)
+    """Reject filtered BAMs whose header reference dictionary differs from `-r`."""
+    reference_records = _load_reference_scaffold_records(tmpdir)
     affected_samples: list[str] = []
     for sname, bam_file in sample_bams.items():
-        missing_contigs: list[tuple[str, int]] = []
-        length_mismatches: list[tuple[str, int, int, int]] = []
-        for contig, bam_len, mapped_reads in _get_mapped_reference_contigs_from_bam(
-            bam_file
-        ):
-            ref_len = reference_lengths.get(contig)
-            if ref_len is None:
-                missing_contigs.append((contig, mapped_reads))
-            elif ref_len != bam_len:
-                length_mismatches.append((contig, bam_len, ref_len, mapped_reads))
-        if missing_contigs or length_mismatches:
-            summary = _format_bam_reference_mismatch_summary(
-                missing_contigs=missing_contigs,
-                length_mismatches=length_mismatches,
-            )
-            affected_samples.append(f"{sname}: {summary}")
+        bam_records = _get_bam_header_reference_records(bam_file)
+        mismatch = _describe_bam_reference_mismatch(bam_records, reference_records)
+        if mismatch is not None:
+            affected_samples.append(f"{sname}: {mismatch}")
 
     if not affected_samples:
         return
@@ -468,9 +405,12 @@ def _validate_analysis_bams_match_reference(
     if len(affected_samples) > 5:
         sample_summaries += f" | ... ({len(affected_samples) - 5} more samples)"
     raise IPyradError(
-        "Filtered analysis BAMs contain mapped contigs that do not match the current "
-        f"reference passed to -r ({reference}). Remap these BAMs against that exact "
-        f"reference before running assemble. Affected samples: {sample_summaries}"
+        "Filtered analysis BAM headers do not match the current reference passed "
+        f"to -r ({reference}). These BAMs were mapped against a different reference "
+        "dictionary. If you reused the same reference path during mapping, stale "
+        "bwa-mem2 sidecar index files (.ann/.amb/.pac/.0123/.bwt.2bit.64) are a "
+        "likely cause. Remap these BAMs against that exact reference before "
+        f"running assemble. Affected samples: {sample_summaries}"
     )
 
 
@@ -1002,6 +942,7 @@ def _write_consensus_and_outputs(
     max_locus_variant_frequency: float,
     max_sample_hetero_frequency: float,
     consensus_workers: int,
+    final_vcf_mask_workers: int,
     workers: int,
     threads: int,
     log_level: str,
@@ -1035,7 +976,7 @@ def _write_consensus_and_outputs(
         consensus_workers,
         len(snames),
     )
-    with _profile_stage("consensus extraction"):
+    with profile_stage("consensus extraction"):
         run_with_pool(
             jobs, log_level, consensus_workers, msg="Extracting consensus sequences"
         )
@@ -1068,7 +1009,7 @@ def _write_consensus_and_outputs(
     # The final VCF is filtered to the trimmed/retained outdir BED, then the
     # SNP dataset is appended to the same output HDF5 for downstream analyses.
     logger.info("writing variants file (.vcf.gz)")
-    with _profile_stage("final VCF writing"):
+    with profile_stage("final VCF writing"):
         compact_resolved_vcf_to_final_loci_contigs(tmpdir, reference, final_loci_bed)
         final_vcf = write_vcf(name, outdir, tmpdir, threads)
 
@@ -1084,7 +1025,7 @@ def _write_consensus_and_outputs(
             final_vcf_masks = run_with_pool(
                 jobs,
                 log_level,
-                workers,
+                final_vcf_mask_workers,
                 msg="Merging final VCF masks",
             )
         if final_vcf_masks:
@@ -1127,7 +1068,7 @@ def _write_consensus_and_outputs(
             )
 
     logger.info("writing snps database (.hdf5)")
-    with _profile_stage("SNP HDF5 writing"):
+    with profile_stage("SNP HDF5 writing"):
         nsnps_written = write_snps_hdf5(name, outdir, snames, reference)
 
     logger.info("computing final sample depth summary")
@@ -1298,6 +1239,7 @@ def run_assembler(
     all_dict = wgs_dict | bam_dict
     snames = sorted(all_dict)
     consensus_workers = max(1, min(cores, len(snames)))
+    final_vcf_mask_workers = max(1, min(cores, len(snames)))
     all_dict = {i: all_dict[i] for i in snames}
     group_samples_file = None
     if populations is not None:
@@ -1451,7 +1393,7 @@ def run_assembler(
     # [3] Variant calling:
     # Jointly call variants across every filtered analysis BAM inside the
     # canonical shared loci, then apply project-wide genotype/site filtering.
-    with _profile_stage("variant calling"):
+    with profile_stage("variant calling"):
         _run_variant_stage(
             tmpdir=tmpdir,
             reference=reference,
@@ -1472,7 +1414,7 @@ def run_assembler(
     # Build low-depth masks for all samples, add sample-specific RAD paralog
     # masks where available, and build the merged consensus BED masks that
     # sample-specific FASTA generation consumes directly.
-    with _profile_stage("sample mask building"):
+    with profile_stage("sample mask building"):
         paralog_masks = _build_sample_masks(
             tmpdir=tmpdir,
             all_dict=all_dict,
@@ -1501,6 +1443,7 @@ def run_assembler(
         max_locus_variant_frequency=max_locus_variant_frequency,
         max_sample_hetero_frequency=max_sample_hetero_frequency,
         consensus_workers=consensus_workers,
+        final_vcf_mask_workers=final_vcf_mask_workers,
         workers=workers,
         threads=threads,
         log_level=log_level,

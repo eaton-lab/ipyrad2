@@ -17,8 +17,11 @@ from loguru import logger
 from ....utils.exceptions import IPyradError
 from ....utils.parallel import run_with_pool
 from ...extracters.sequence_common import build_sequence_imap_minmap
+from ...extracters.sequence_common import load_sequence_chunk_from_phy
 from ...extracters.sequence_common import normalize_sequence_population_inputs
+from ...extracters.sequence_common import plan_sequence_chunk_spans
 from ...extracters.sequence_common import resolve_sequence_sample_subset
+from ...extracters.sequence_common import SEQUENCE_CHUNK_SITES
 from ...extracters.sequence_common import sync_sequence_imap_after_sample_drop
 from ..common import build_sample_data_summary
 from .common import build_pairwise_stats_dataframe
@@ -33,8 +36,6 @@ from .estimators import summarize_sequence_block
 from .estimators import tajimas_d
 from .estimators import wattersons_theta
 
-
-SEQUENCE_CHUNK_SITES = 5000
 _HET_LOOKUP = np.zeros(256, dtype=bool)
 _MISSING_LOOKUP = np.zeros(256, dtype=bool)
 for _base in "RYSWKM":
@@ -160,28 +161,9 @@ def _plan_sequence_chunk_spans(
     target_sites: int = SEQUENCE_CHUNK_SITES,
 ) -> list[tuple[tuple[int, int], ...]]:
     """Group phymap spans into moderate-size chunks for I/O and parallel work."""
-    chunks: list[tuple[tuple[int, int], ...]] = []
-    current: list[tuple[int, int]] = []
-    current_sites = 0
-
     with h5py.File(data, "r") as io5:
-        for row in io5["phymap"]:
-            start = int(row[1])
-            end = int(row[2])
-            width = end - start
-            if current and current_sites + width > target_sites:
-                chunks.append(tuple(current))
-                current = []
-                current_sites = 0
-            if current and current[-1][1] == start:
-                current[-1] = (current[-1][0], end)
-            else:
-                current.append((start, end))
-            current_sites += width
-
-    if current:
-        chunks.append(tuple(current))
-    return chunks
+        spans = [(int(row[1]), int(row[2])) for row in io5["phymap"]]
+    return plan_sequence_chunk_spans(spans, target_sites=target_sites)
 
 
 def _load_sequence_chunk_from_phy(
@@ -189,16 +171,8 @@ def _load_sequence_chunk_from_phy(
     sidxs: list[int],
     spans: tuple[tuple[int, int], ...],
 ) -> np.ndarray:
-    """Load one `(samples, sites)` sequence chunk from one or more contiguous spans."""
-    total_sites = sum(end - start for start, end in spans)
-    block = np.empty((len(sidxs), total_sites), dtype=np.uint8)
-    offset = 0
-    for start, end in spans:
-        width = end - start
-        block[:, offset : offset + width] = phy[sidxs, start:end]
-        offset += width
-    block[block == 45] = 78
-    return block
+    """Compatibility wrapper around the shared sequence chunk loader."""
+    return load_sequence_chunk_from_phy(phy, sidxs, spans)
 
 
 def _count_sequence_missing(block: np.ndarray) -> np.ndarray:

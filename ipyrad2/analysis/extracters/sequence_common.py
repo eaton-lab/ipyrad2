@@ -8,6 +8,7 @@ from pathlib import Path
 import itertools
 
 import h5py
+import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -16,11 +17,58 @@ from ...utils.pops import expand_imap_patterns, parse_imap, parse_minmap, parse_
 
 
 REFERENCE_SAMPLE_NAME = "assembly_reference_sequence"
+SEQUENCE_CHUNK_SITES = 5000
 
 
 def _decode_h5_names(values) -> list[str]:
     """Decode HDF5 string arrays into a list of Python strings."""
     return [value.decode() if isinstance(value, bytes) else str(value) for value in values]
+
+
+def plan_sequence_chunk_spans(
+    spans: list[tuple[int, int]] | tuple[tuple[int, int], ...],
+    *,
+    target_sites: int = SEQUENCE_CHUNK_SITES,
+) -> list[tuple[tuple[int, int], ...]]:
+    """Pack ordered phy spans into moderate-size chunks for HDF5 reads."""
+    chunks: list[tuple[tuple[int, int], ...]] = []
+    current: list[tuple[int, int]] = []
+    current_sites = 0
+
+    for start, end in spans:
+        width = end - start
+        if width <= 0:
+            continue
+        if current and current_sites + width > target_sites:
+            chunks.append(tuple(current))
+            current = []
+            current_sites = 0
+        if current and current[-1][1] == start:
+            current[-1] = (current[-1][0], end)
+        else:
+            current.append((start, end))
+        current_sites += width
+
+    if current:
+        chunks.append(tuple(current))
+    return chunks
+
+
+def load_sequence_chunk_from_phy(
+    phy: h5py.Dataset,
+    sidxs: list[int],
+    spans: tuple[tuple[int, int], ...],
+) -> np.ndarray:
+    """Load one `(samples, sites)` sequence chunk from one or more phy spans."""
+    total_sites = sum(end - start for start, end in spans)
+    block = np.empty((len(sidxs), total_sites), dtype=np.uint8)
+    offset = 0
+    for start, end in spans:
+        width = end - start
+        block[:, offset : offset + width] = phy[sidxs, start:end]
+        offset += width
+    block[block == 45] = 78
+    return block
 
 
 def normalize_sequence_population_inputs(imap, minmap):
