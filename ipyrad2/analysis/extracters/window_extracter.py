@@ -42,7 +42,9 @@ from loguru import logger
 from ...utils.exceptions import IPyradError
 from .sequence_common import build_sequence_imap_minmap
 from .sequence_common import load_sequence_scaffold_table
+from .sequence_common import load_sequence_chunk_from_phy
 from .sequence_common import normalize_sequence_population_inputs
+from .sequence_common import plan_sequence_chunk_spans
 from .sequence_common import resolve_sequence_sample_subset
 
 
@@ -53,6 +55,49 @@ begin data;
   matrix
 """
 REFERENCE_SAMPLE_NAME = "assembly_reference_sequence"
+
+
+def _format_count(value: int) -> str:
+    """Format integer counts consistently for text reports."""
+    return f"{int(value):,}"
+
+
+def _format_float(value: int | float, digits: int = 3) -> str:
+    """Format floating-point values for text reports."""
+    return f"{float(value):.{digits}f}"
+
+
+def _format_fraction(value: int | float) -> str:
+    """Format fraction-like values consistently for text reports."""
+    return f"{float(value):.6f}"
+
+
+def _format_percent(value: int | float, digits: int = 3) -> str:
+    """Format one fraction as a percent string without a percent sign."""
+    return f"{100 * float(value):.{digits}f}"
+
+
+def _append_key_value_section(lines: list[str], title: str, rows: list[tuple[str, str]]) -> None:
+    """Append one key/value report section to a list of output lines."""
+    lines.append(f"# {title}")
+    if rows:
+        width = max(len(key) for key, _ in rows)
+        for key, value in rows:
+            lines.append(f"{key.ljust(width)}  {value}")
+    lines.append("")
+
+
+def _append_table_section(lines: list[str], title: str, headers: list[str], rows: list[list[str]]) -> None:
+    """Append one simple whitespace-aligned table section."""
+    lines.append(f"# {title}")
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for idx, value in enumerate(row):
+            widths[idx] = max(widths[idx], len(value))
+    lines.append("  ".join(header.ljust(widths[idx]) for idx, header in enumerate(headers)))
+    for row in rows:
+        lines.append("  ".join(value.ljust(widths[idx]) for idx, value in enumerate(row)))
+    lines.append("")
 
 
 class WindowExtracter:
@@ -99,6 +144,10 @@ class WindowExtracter:
         self.imap: Dict[str, List[str]] = {}
         self.minmap: Dict[str, int] = {}
         self.selected_windows: List[str] = []
+        self.seqarr: np.ndarray | None = None
+        self._selected_phy_spans: tuple[tuple[int, int], ...] = tuple()
+        self._chunk_spans: list[tuple[tuple[int, int], ...]] = []
+        self._imap_row_indices: Dict[str, np.ndarray] = {}
 
         # fills: snames, sidxs, scaffold_table
         self.scaffold_table = load_sequence_scaffold_table(self.data)
@@ -114,15 +163,18 @@ class WindowExtracter:
             imap=imap,
             minmap=minmap,
         )
+        self._imap_row_indices = {
+            pop: np.array([self.snames.index(name) for name in names], dtype=np.int64)
+            for pop, names in self.imap.items()
+        }
 
         # run commands
     def _run(self):
         # First two are fast
         self._get_phymap_windows()
         self._get_phymap()
-        # This call is slow as it is accessing the full hdf5 data
-        self._get_seqarr()
-        return self._filter_seqarr()
+        _, fnames, fseqarr = self._extract_filtered_alignment()
+        return fnames, fseqarr
 
     def _get_scaffold_table(self) -> None:
         """Store table with scaffold names and lengths in the order they are stored in H5."""
@@ -135,6 +187,10 @@ class WindowExtracter:
             include_reference=self.include_reference,
             imap=imap,
         )
+        self._imap_row_indices = {
+            pop: np.array([self.snames.index(name) for name in names], dtype=np.int64)
+            for pop, names in self.imap.items()
+        }
 
     def _parse_imap_minmap_inputs(self, imap, minmap):
         """Normalize imap/minmap inputs from dicts or files."""
@@ -148,6 +204,10 @@ class WindowExtracter:
             imap=imap,
             minmap=minmap,
         )
+        self._imap_row_indices = {
+            pop: np.array([self.snames.index(name) for name in names], dtype=np.int64)
+            for pop, names in self.imap.items()
+        }
 
     @staticmethod
     def _windows_overlap(start1: int, end1: int, start2: int, end2: int) -> bool:
@@ -181,6 +241,7 @@ class WindowExtracter:
 
     def _get_phymap_windows(self) -> None:
         """Check each window for a matching scaffold name, and position within its bounds."""
+        self._reset_selection_cache()
         windows: Dict[str, List[Tuple[int, int]]] = {}
         selected_windows: List[str] = []
 
@@ -300,6 +361,7 @@ class WindowExtracter:
 
     def _get_phymap(self) -> None:
         """Load the phymap for selecting windows from the seqs array."""
+        self._reset_selection_cache()
         with h5py.File(self.data, 'r') as io5:
             phymap = io5["phymap"]
             colnames = phymap.attrs["columns"]
@@ -307,86 +369,150 @@ class WindowExtracter:
             phymap = pd.DataFrame(phymap[mask], columns=colnames)
         self.phymap = phymap
 
-    def _get_seqarr(self) -> None:
-        """Fill .seqarr with data from .phymap_windows for samples in .sidx."""
-        phy_windows = []
+    def _reset_selection_cache(self) -> None:
+        """Drop cached selection spans after window or phymap changes."""
+        self.seqarr = None
+        self._selected_phy_spans = tuple()
+        self._chunk_spans = []
+
+    def _get_selected_phy_spans(self) -> tuple[tuple[int, int], ...]:
+        """Return ordered phy spans for the current window selection."""
+        if self._selected_phy_spans:
+            return self._selected_phy_spans
+
+        rows_by_scaffold: Dict[int, List[np.ndarray]] = {}
+        for row in self.phymap.to_numpy(copy=False):
+            rows_by_scaffold.setdefault(int(row[0]), []).append(row)
+
+        phy_spans: list[tuple[int, int]] = []
         for scaff_idx, windows in self.phymap_windows.items():
-            for (start, end) in windows:
-
-                # get subset rows of phymap containing the window
-                smap = self.phymap[self.phymap["scaff"] == scaff_idx]
-                mask1 = smap.pos1 >= start
-                mask2 = smap.pos0 <= end
-                mask = mask1 & mask2
-                block = smap.loc[mask, :]
-
-                # skip if block is empty
-                if not block.size:
+            rows = rows_by_scaffold.get(scaff_idx)
+            if rows is None:
+                continue
+            scaff_rows = np.asarray(rows, dtype=np.int64)
+            pos0 = scaff_rows[:, 3]
+            pos1 = scaff_rows[:, 4]
+            for start, end in windows:
+                overlap = (pos1 >= start) & (pos0 <= end)
+                overlap_rows = np.flatnonzero(overlap)
+                if overlap_rows.size == 0:
                     continue
 
-                # get how far past pos0 the window start is
-                wmin_offset = max(0, start - int(block.iloc[0, 3]))
-                # get phy start as phy0 + offset
-                wmin = int(block.iloc[0, 1]) + wmin_offset
+                first = scaff_rows[overlap_rows[0]]
+                last = scaff_rows[overlap_rows[-1]]
+                wmin_offset = max(0, start - int(first[3]))
+                wmin = int(first[1]) + wmin_offset
+                wmax_offset = max(0, int(last[4]) - end)
+                wmax = int(last[2]) - wmax_offset
+                if wmax > wmin:
+                    phy_spans.append((wmin, wmax))
 
-                # get how far back from pos1 the window end is
-                wmax_offset = max(0, int(block.iloc[-1, 4]) - end)
-                # get phy end as phy1 - offset
-                wmax = int(block.iloc[-1, 2]) - wmax_offset
+        if not phy_spans:
+            raise IPyradError(
+                "Selected windows contain zero data in the assembly. Try larger/different windows."
+            )
 
-                # store phy start, end indices
-                phy_windows.append((wmin, wmax))
+        self._selected_phy_spans = tuple(phy_spans)
+        self._chunk_spans = plan_sequence_chunk_spans(self._selected_phy_spans)
+        logger.debug(
+            "planned {} selected spans into {} HDF5 chunks",
+            len(self._selected_phy_spans),
+            len(self._chunk_spans),
+        )
+        return self._selected_phy_spans
 
-        # if no windows then raise error
-        if not phy_windows:
-            raise IPyradError("Selected windows contain zero data in the assembly. Try larger/different windows.")
-        logger.debug(phy_windows)
-        # extract sequences
-        with h5py.File(self.data, 'r') as io5:
-            lengths = [i[1] - i[0] for i in phy_windows]
-            nsites = sum(lengths)
-            seqarr = np.zeros((len(self.sidxs), nsites), dtype=np.uint8)
-            x = 0
-            for wlen, (start, end) in zip(lengths, phy_windows):
-                seqarr[:, x:x + wlen] = io5["phy"][self.sidxs, start:end]
-                x += wlen
-        logger.debug(f"Extracted {nsites} sites from {len(phy_windows)} windows.")
-        self.seqarr = seqarr
+    def _filter_block_sites(self, block: np.ndarray) -> np.ndarray:
+        """Apply the minmap filter to one loaded sequence block."""
+        if not block.size:
+            return block[:, 0:0]
 
-    def _filter_seqarr(self) -> Tuple[np.ndarray, List[str]]:
-        """..."""
-        # create a copy and convert - to N
-        seqs = self.seqarr.copy()
-        seqs[seqs == 45] = 78
-
-        # create and apply mask for sites (columns) that fail minmap filter
-        mask = np.zeros(seqs.shape[1], dtype=np.bool_)
-        for pop in self.imap:
-            pop_snames = self.imap[pop]
+        mask = np.zeros(block.shape[1], dtype=np.bool_)
+        for pop, pop_sidxs in self._imap_row_indices.items():
             pop_mincov = self.minmap[pop]
-            pop_sidxs = [self.snames.index(i) for i in pop_snames]
-            pop_arr = seqs[pop_sidxs, :]
-            mask += np.sum(pop_arr != 78, axis=0) < pop_mincov
-        seqs = seqs[:, np.invert(mask)]
-        if not seqs.size:
+            mask |= np.sum(block[pop_sidxs, :] != 78, axis=0) < pop_mincov
+        return block[:, np.invert(mask)]
+
+    def _summarize_filtered_selection(self) -> dict:
+        """Return filtering decisions and stats using bounded-memory chunk scans."""
+        self._get_selected_phy_spans()
+        missing_counts = np.zeros(len(self.snames), dtype=np.int64)
+        nsites_before = 0
+        nvariants_before = 0
+        nsites_after = 0
+        nvariants_after = 0
+
+        with h5py.File(self.data, "r") as io5:
+            phy = io5["phy"]
+            for spans in self._chunk_spans:
+                block = load_sequence_chunk_from_phy(phy, self.sidxs, spans)
+                nsites_before += int(block.shape[1])
+                nvariants_before += count_snps(block)
+                filtered = self._filter_block_sites(block)
+                if not filtered.size:
+                    continue
+                nsites_after += int(filtered.shape[1])
+                nvariants_after += count_snps(filtered)
+                missing_counts += np.sum(filtered == 78, axis=1).astype(np.int64, copy=False)
+
+        if nsites_after == 0:
             raise IPyradError("Selected windows contain zero data after filtering for coverage.")
 
-        # get list of ordered names remaining in the array
-        fnames = []
-        row_missing = np.sum(seqs == 78, axis=1) / seqs.shape[1]
-        mask = row_missing <= self.max_sample_missing
-        for sidx in np.where(mask)[0]:
-            fnames.append(self.snames[sidx])
-        # todo: log.debug the dropped samples
+        row_missing = missing_counts / nsites_after
+        keep_mask = row_missing <= self.max_sample_missing
+        keep_indices = np.flatnonzero(keep_mask).astype(np.int64, copy=False)
+        fnames = [self.snames[idx] for idx in keep_indices]
         if not fnames:
             raise IPyradError("No samples passed max_sample_missing filter.")
-        return fnames, seqs[mask, :]
+
+        return {
+            "fnames": fnames,
+            "keep_indices": keep_indices,
+            "row_missing": row_missing,
+            "samples_selected_initial": list(self.snames),
+            "samples_dropped_by_max_missing": [
+                self.snames[idx] for idx in np.flatnonzero(~keep_mask)
+            ],
+            "nsites_before": nsites_before,
+            "nvariants_before": nvariants_before,
+            "nsites_after": nsites_after,
+            "nvariants_after": nvariants_after,
+        }
+
+    def _iter_filtered_blocks(self, keep_indices: np.ndarray):
+        """Yield filtered blocks for the retained samples."""
+        self._get_selected_phy_spans()
+        with h5py.File(self.data, "r") as io5:
+            phy = io5["phy"]
+            for spans in self._chunk_spans:
+                block = load_sequence_chunk_from_phy(phy, self.sidxs, spans)
+                filtered = self._filter_block_sites(block)
+                if filtered.size:
+                    yield filtered[keep_indices, :]
+
+    def _collect_filtered_buffers(self, keep_indices: np.ndarray) -> list[bytearray]:
+        """Return per-sample sequence buffers without materializing the full matrix."""
+        buffers = [bytearray() for _ in range(len(keep_indices))]
+        for block in self._iter_filtered_blocks(keep_indices):
+            for idx in range(block.shape[0]):
+                buffers[idx].extend(block[idx].tobytes())
+        return buffers
+
+    def _extract_filtered_alignment(self) -> tuple[dict, list[str], np.ndarray]:
+        """Return summary stats and the fully filtered alignment matrix."""
+        summary = self._summarize_filtered_selection()
+        blocks = list(self._iter_filtered_blocks(summary["keep_indices"]))
+        if len(blocks) == 1:
+            fseqarr = blocks[0]
+        else:
+            fseqarr = np.concatenate(blocks, axis=1)
+        self.seqarr = fseqarr
+        return summary, summary["fnames"], fseqarr
 
     def _get_output_path(self, suffix: str) -> Path:
         return self.outdir / f"{self.name}.{suffix}"
 
     def _get_stats_path(self) -> Path:
-        return self.outdir / f"{self.name}.stats.tsv"
+        return self.outdir / f"{self.name}.stats.txt"
 
     def _prepare_output_paths(
         self,
@@ -419,15 +545,15 @@ class WindowExtracter:
             raise IPyradError("Internal error: missing output suffix.")
         return self._get_output_path(suffix)
 
-    def _build_stats_dict(self, fnames, fseqarr, outfile):
+    def _build_stats_dict(self, summary: dict, outfile):
         """Build stats for the extracted windows without writing them."""
         return {
             "nsamples_before_filtering": len(self.snames),
-            "nsites_in_windows_before_filtering": self.seqarr.shape[1],
-            "nvariants_in_windows_before_filtering": count_snps(self.seqarr),
-            "nsamples_after_filtering": len(fnames),
-            "nsites_in_windows_after_filtering": fseqarr.shape[1],
-            "nvariants_in_windows_after_filtering": count_snps(fseqarr),
+            "nsites_in_windows_before_filtering": summary["nsites_before"],
+            "nvariants_in_windows_before_filtering": summary["nvariants_before"],
+            "nsamples_after_filtering": len(summary["fnames"]),
+            "nsites_in_windows_after_filtering": summary["nsites_after"],
+            "nvariants_in_windows_after_filtering": summary["nvariants_after"],
             "infile": self.data,
             "outfile": outfile,
             "windows": self.selected_windows,
@@ -436,13 +562,118 @@ class WindowExtracter:
             "max_sample_missing_filter": self.max_sample_missing,
         }
 
-    def _write_stats_dict(self, stats_dict, stats_file: Path | None = None) -> None:
-        """Write a precomputed stats dictionary to disk."""
+    def _format_windows_preview(self, limit: int = 10) -> str:
+        """Return one readable preview of the selected windows."""
+        if not self.selected_windows:
+            return "(none)"
+        if len(self.selected_windows) <= limit:
+            return ", ".join(self.selected_windows)
+        preview = ", ".join(self.selected_windows[:limit])
+        return f"{preview}, ... ({len(self.selected_windows)} total)"
+
+    def _format_minmap(self) -> str:
+        """Return one readable `group=value` summary of the minmap filter."""
+        rows = []
+        for pop in sorted(self.minmap):
+            value = self.minmap[pop]
+            if isinstance(value, float) and not float(value).is_integer():
+                formatted = _format_fraction(value)
+            else:
+                formatted = _format_count(int(value))
+            rows.append(f"{pop}={formatted}")
+        return ", ".join(rows) if rows else "(none)"
+
+    def _build_sample_population_lookup(self) -> dict[str, str]:
+        """Return one inverse sample-to-population lookup."""
+        lookup = {}
+        for pop, names in self.imap.items():
+            for name in names:
+                lookup[name] = pop
+        return lookup
+
+    def _write_stats_report(
+        self,
+        summary: dict,
+        stats_dict: dict,
+        stats_file: Path | None = None,
+    ) -> None:
+        """Write the human-readable wex stats report to disk."""
         stats_path = self._get_stats_path() if stats_file is None else Path(stats_file)
         self.outdir.mkdir(exist_ok=True)
+        population_lookup = self._build_sample_population_lookup()
+        sample_rows: list[list[str]] = []
+        for name, missing in sorted(
+            zip(summary["samples_selected_initial"], summary["row_missing"], strict=True),
+            key=lambda item: item[0],
+        ):
+            sample_rows.append([
+                name,
+                population_lookup.get(name, "unassigned"),
+                _format_percent(missing),
+            ])
+
+        extract_rows = [
+            ("infile", str(stats_dict["infile"])),
+            ("outfile", str(stats_dict["outfile"])),
+            ("out_format", self.out_format),
+            ("windows_selected", _format_count(len(self.selected_windows))),
+            ("selected_windows_preview", self._format_windows_preview()),
+        ]
+        filtering_rows = [
+            ("populations", ", ".join(sorted(self.imap)) if self.imap else "(none)"),
+            ("min_sample_coverage_filter", self._format_minmap()),
+            ("max_sample_missing", _format_fraction(self.max_sample_missing)),
+            (
+                "samples_selected_initial",
+                _format_count(len(summary["samples_selected_initial"])),
+            ),
+            (
+                "samples_dropped_by_max_missing",
+                ", ".join(summary["samples_dropped_by_max_missing"])
+                if summary["samples_dropped_by_max_missing"]
+                else "(none)",
+            ),
+            ("samples_final", _format_count(len(summary["fnames"]))),
+        ]
+        alignment_rows = [
+            (
+                "nsamples_before_filtering",
+                _format_count(stats_dict["nsamples_before_filtering"]),
+            ),
+            (
+                "nsites_in_windows_before_filtering",
+                _format_count(stats_dict["nsites_in_windows_before_filtering"]),
+            ),
+            (
+                "nvariants_in_windows_before_filtering",
+                _format_count(stats_dict["nvariants_in_windows_before_filtering"]),
+            ),
+            (
+                "nsamples_after_filtering",
+                _format_count(stats_dict["nsamples_after_filtering"]),
+            ),
+            (
+                "nsites_in_windows_after_filtering",
+                _format_count(stats_dict["nsites_in_windows_after_filtering"]),
+            ),
+            (
+                "nvariants_in_windows_after_filtering",
+                _format_count(stats_dict["nvariants_in_windows_after_filtering"]),
+            ),
+        ]
+
+        lines: list[str] = []
+        _append_key_value_section(lines, "Extract Summary", extract_rows)
+        _append_key_value_section(lines, "Filtering Summary", filtering_rows)
+        _append_key_value_section(lines, "Alignment Summary", alignment_rows)
+        _append_table_section(
+            lines,
+            "Sample Summary",
+            ["sample", "population", "percent_missing"],
+            sample_rows,
+        )
         with open(stats_path, "w", encoding="utf-8") as out:
-            for key, val in stats_dict.items():
-                out.write(f"{key}\t{val}\n")
+            out.write("\n".join(lines).rstrip() + "\n")
         logger.info(f"wrote stats/log to: {stats_path}")
 
     def _write_to_phy(self, 
@@ -453,57 +684,81 @@ class WindowExtracter:
                       return_alignment: bool = False,
                       return_stats: bool = False):
         """Writes the .seqarr matrix as a string to .outfile."""
-        # get the filtered alignment
-        fnames, fseqarr = self._run()
         outfile = self._prepare_output_paths(
             "phy",
             write_stats=write_stats,
             return_locus=return_locus,
         )
+        prefix = prefix if prefix else ""
+        self._get_phymap_windows()
+        self._get_phymap()
+
+        if return_alignment or return_locus:
+            summary, fnames, fseqarr = self._extract_filtered_alignment()
+
+            # get padded names
+            longname = max(len(i) for i in fnames)
+            pnames = [i.ljust(longname + 5) for i in fnames]
+
+            phy = []
+            for idx, _ in enumerate(fnames):
+                seq = fseqarr[idx].tobytes().decode("utf-8")
+                phy.append(f"{prefix}{pnames[idx]} {seq}")
+
+            ntaxa = len(fnames)
+            nsites = fseqarr.shape[1]
+            bpp_sep = "\n" if bpp_format else ""
+            phy_text = "\n".join(phy)
+            alignment = f"{ntaxa} {nsites}\n{bpp_sep}{phy_text}\n"
+            stats_dict = self._build_stats_dict(summary, outfile)
+
+            if return_alignment:
+                if return_stats:
+                    return alignment, stats_dict
+                return alignment
+
+            if write_stats:
+                self._write_stats_report(summary, stats_dict)
+            if return_locus and return_stats:
+                return alignment, stats_dict
+            if return_locus:
+                return alignment
+            if return_stats:
+                return stats_dict
+            return None
+
+        summary = self._summarize_filtered_selection()
+        fnames = summary["fnames"]
+        seq_buffers = self._collect_filtered_buffers(summary["keep_indices"])
+        stats_dict = self._build_stats_dict(summary, outfile)
 
         # get padded names
         longname = max(len(i) for i in fnames)
         pnames = [i.ljust(longname + 5) for i in fnames]
-
-        # build phy
-        phy = []
-        prefix = prefix if prefix else ""
-        for idx, _ in enumerate(fnames):
-            seq = fseqarr[idx].tobytes().decode("utf-8")
-            phy.append(f"{prefix}{pnames[idx]} {seq}")
-
-        # write to temp file
         ntaxa = len(fnames)
-        nsites = fseqarr.shape[1]
-
-        bpp_sep = "\n" if bpp_format else ""
-        phy_text = "\n".join(phy)
-        alignment = f"{ntaxa} {nsites}\n{bpp_sep}{phy_text}\n"
-        stats_dict = self._build_stats_dict(fnames, fseqarr, outfile)
-
-        if return_alignment:
-            if return_stats:
-                return alignment, stats_dict
-            return alignment
+        nsites = summary["nsites_after"]
 
         # write to stdout
-        if return_locus:
-            pass
-        elif self.stdout:
+        if self.stdout:
             logger.debug("wrote alignment to stdout")
-            sys.stdout.write(alignment)
+            out = sys.stdout
+            out.write(f"{ntaxa} {nsites}\n")
+            if bpp_format:
+                out.write("\n")
+            for idx, seq in enumerate(seq_buffers):
+                out.write(f"{prefix}{pnames[idx]} {seq.decode('utf-8')}\n")
         else:
             with open(outfile, 'w', encoding="utf-8") as out:
-                out.write(alignment.rstrip("\n"))
+                out.write(f"{ntaxa} {nsites}\n")
+                if bpp_format:
+                    out.write("\n")
+                for idx, seq in enumerate(seq_buffers):
+                    out.write(f"{prefix}{pnames[idx]} {seq.decode('utf-8')}\n")
             logger.info(f"wrote alignment ({ntaxa}, {nsites}) to: {outfile}")
 
         if write_stats:
-            self._write_stats_dict(stats_dict)
+            self._write_stats_report(summary, stats_dict)
 
-        if return_locus and return_stats:
-            return alignment, stats_dict
-        if return_locus:
-            return alignment
         if return_stats:
             return stats_dict
 
@@ -514,82 +769,104 @@ class WindowExtracter:
         return_stats: bool = False,
     ):
         """Writes concatenated alignment to nex format..."""
-        # get the filtered alignment
-        fnames, fseqarr = self._run()
         outfile = self._prepare_output_paths("nex", write_stats=write_stats)
+        self._get_phymap_windows()
+        self._get_phymap()
+        if return_alignment:
+            summary, fnames, fseqarr = self._extract_filtered_alignment()
 
-        # get padded names
+            longname = max(len(i) for i in fnames)
+            pnames = [i.ljust(longname + 5) for i in fnames]
+            ntaxa = len(fnames)
+            nsites = fseqarr.shape[1]
+
+            lines = [NEXHEADER.format(ntaxa, nsites)]
+            for block in range(0, fseqarr.shape[1], 100):
+                stop = min(block + 100, fseqarr.shape[1])
+                for idx, name in enumerate(pnames):
+                    seq = fseqarr[idx, block:stop].tobytes().decode()
+                    lines.append(f"  {name}{seq}\n")
+                lines.append("\n")
+            lines.append("  ;\nend;")
+            alignment = "".join(lines)
+            stats_dict = self._build_stats_dict(summary, outfile)
+
+            if return_alignment:
+                if return_stats:
+                    return alignment, stats_dict
+                return alignment
+
+        summary = self._summarize_filtered_selection()
+        fnames = summary["fnames"]
+        seq_buffers = self._collect_filtered_buffers(summary["keep_indices"])
         longname = max(len(i) for i in fnames)
         pnames = [i.ljust(longname + 5) for i in fnames]
-
-        # write to temp file
         ntaxa = len(fnames)
-        nsites = fseqarr.shape[1]
+        nsites = summary["nsites_after"]
+        stats_dict = self._build_stats_dict(summary, outfile)
 
-        # write the header
-        lines = []
-        lines.append(NEXHEADER.format(ntaxa, nsites))
-
-        # grab a big block of data
-        for block in range(0, fseqarr.shape[1], 100):
-            # store interleaved seqs 100 chars with longname+2 before
-            stop = min(block + 100, fseqarr.shape[1])
-            for idx, name in enumerate(pnames):
-                seq = fseqarr[idx, block:stop].tobytes().decode()
-                lines.append(f"  {name}{seq}\n")
-            lines.append("\n")
-        lines.append("  ;\nend;")
-        alignment = "".join(lines)
-        stats_dict = self._build_stats_dict(fnames, fseqarr, outfile)
-
-        if return_alignment:
-            if return_stats:
-                return alignment, stats_dict
-            return alignment
+        def _write_nexus(out) -> None:
+            out.write(NEXHEADER.format(ntaxa, nsites))
+            for block in range(0, nsites, 100):
+                stop = min(block + 100, nsites)
+                for idx, name in enumerate(pnames):
+                    seq = bytes(seq_buffers[idx][block:stop]).decode("utf-8")
+                    out.write(f"  {name}{seq}\n")
+                out.write("\n")
+            out.write("  ;\nend;")
 
         # write to stdout
         if self.stdout:
             logger.debug("wrote alignment to stdout")
-            sys.stdout.write(alignment)
+            _write_nexus(sys.stdout)
         else:
             with open(outfile, 'w', encoding="utf-8") as out:
-                out.write(alignment)
+                _write_nexus(out)
             logger.info(f"wrote alignment ({ntaxa}, {nsites}) to: {outfile}")
         if write_stats:
-            self._write_stats_dict(stats_dict)
+            self._write_stats_report(summary, stats_dict)
         if return_stats:
             return stats_dict
 
     def _write_to_fa(self, write_stats: bool = True, return_stats: bool = False):
         """Write the extracted alignment as FASTA."""
-        fnames, fseqarr = self._run()
         outfile = self._prepare_output_paths("fa", write_stats=write_stats)
-
-        records = []
-        for idx, name in enumerate(fnames):
-            seq = fseqarr[idx].tobytes().decode("utf-8")
-            records.append(f">{name}\n{seq}")
-
-        contents = "\n".join(records) + "\n"
-        stats_dict = self._build_stats_dict(fnames, fseqarr, outfile)
+        self._get_phymap_windows()
+        self._get_phymap()
+        summary = self._summarize_filtered_selection()
+        fnames = summary["fnames"]
+        seq_buffers = self._collect_filtered_buffers(summary["keep_indices"])
+        stats_dict = self._build_stats_dict(summary, outfile)
         if self.stdout:
             logger.debug("wrote alignment to stdout")
-            sys.stdout.write(contents)
+            for idx, name in enumerate(fnames):
+                sys.stdout.write(f">{name}\n{seq_buffers[idx].decode('utf-8')}\n")
         else:
             with open(outfile, "w", encoding="utf-8") as out:
-                out.write(contents)
+                for idx, name in enumerate(fnames):
+                    out.write(f">{name}\n{seq_buffers[idx].decode('utf-8')}\n")
             logger.info(
-                f"wrote alignment ({len(fnames)}, {fseqarr.shape[1]}) to: {outfile}"
+                f"wrote alignment ({len(fnames)}, {summary['nsites_after']}) to: {outfile}"
             )
 
         if write_stats:
-            self._write_stats_dict(stats_dict)
+            self._write_stats_report(summary, stats_dict)
         if return_stats:
             return stats_dict
 
     def _write_stats(self, fnames, fseqarr, outfile):
         """Write stats for the extracted windows."""
-        self._write_stats_dict(self._build_stats_dict(fnames, fseqarr, outfile))
+        summary = {
+            "fnames": fnames,
+            "row_missing": np.sum(fseqarr == 78, axis=1) / fseqarr.shape[1],
+            "samples_selected_initial": list(fnames),
+            "samples_dropped_by_max_missing": [],
+            "nsites_before": self.seqarr.shape[1],
+            "nvariants_before": count_snps(self.seqarr),
+            "nsites_after": fseqarr.shape[1],
+            "nvariants_after": count_snps(fseqarr),
+        }
+        self._write_stats_report(summary, self._build_stats_dict(summary, outfile))
 
 
 def count_snps(arr):

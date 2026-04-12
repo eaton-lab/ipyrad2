@@ -234,7 +234,7 @@ def test_get_coverage_bed_graphs_uses_layout_specific_bamtobed_command(
     assert observed["cmds"][10] == [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
 
 
-def test_get_mapped_reference_contigs_from_bam_ignores_zero_mapped_and_unmapped(
+def test_get_bam_header_reference_records_reads_sq_lines(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -243,41 +243,43 @@ def test_get_mapped_reference_contigs_from_bam_ignores_zero_mapped_and_unmapped(
 
     def _fake_run_pipeline(cmds, outfile=None, **kwargs):
         del outfile, kwargs
-        assert cmds == [[BIN_SAM, "idxstats", str(bam_file)]]
+        assert cmds == [[BIN_SAM, "view", "-H", str(bam_file)]]
         return 0, (
-            "chr1\t10\t3\t0\n"
-            "chr2\t20\t0\t4\n"
-            "*\t0\t0\t5\n"
+            "@HD\tVN:1.6\tSO:coordinate\n"
+            "@SQ\tSN:chr2\tLN:20\n"
+            "@SQ\tSN:chr1\tLN:10\n"
+            "@RG\tID:sample\tSM:sample\n"
         ).encode(), b""
 
     monkeypatch.setattr("ipyrad2.assembler.assemble.run_pipeline", _fake_run_pipeline)
 
-    assert assemble_module._get_mapped_reference_contigs_from_bam(bam_file) == [
-        ("chr1", 10, 3)
+    assert assemble_module._get_bam_header_reference_records(bam_file) == [
+        ("chr2", 20),
+        ("chr1", 10),
     ]
 
 
-def test_validate_analysis_bams_match_reference_rejects_missing_contigs(
+def test_validate_analysis_bams_match_reference_rejects_header_count_mismatch(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     tmpdir = tmp_path / "assembly_tmpdir"
     tmpdir.mkdir()
-    (tmpdir / "REF_info.txt").write_text("chr1\t10\n", encoding="utf-8")
+    (tmpdir / "REF_info.txt").write_text("chr1\t10\nchr2\t20\n", encoding="utf-8")
     bam_file = tmp_path / "sample.bam"
     bam_file.write_text("", encoding="utf-8")
     reference = tmp_path / "ref.fa"
-    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    reference.write_text(">chr1\nACGT\n>chr2\nACGT\n", encoding="utf-8")
 
     monkeypatch.setattr(
         assemble_module,
-        "_get_mapped_reference_contigs_from_bam",
-        lambda _bam_file: [("chr1", 10, 3), ("locus_10005_2", 81, 4)],
+        "_get_bam_header_reference_records",
+        lambda _bam_file: [("chr1", 10)],
     )
 
     with pytest.raises(
         IPyradError,
-        match="sample: missing contigs: locus_10005_2",
+        match=r"BAM header has 1 contigs, reference has 2",
     ):
         assemble_module._validate_analysis_bams_match_reference(
             {"sample": bam_file},
@@ -286,7 +288,36 @@ def test_validate_analysis_bams_match_reference_rejects_missing_contigs(
         )
 
 
-def test_validate_analysis_bams_match_reference_rejects_length_mismatches(
+def test_validate_analysis_bams_match_reference_rejects_header_name_mismatches(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    tmpdir = tmp_path / "assembly_tmpdir"
+    tmpdir.mkdir()
+    (tmpdir / "REF_info.txt").write_text("chr1\t10\nchr2\t20\n", encoding="utf-8")
+    bam_file = tmp_path / "sample.bam"
+    bam_file.write_text("", encoding="utf-8")
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\nACGT\n>chr2\nACGT\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        assemble_module,
+        "_get_bam_header_reference_records",
+        lambda _bam_file: [("chr1", 10), ("chrX", 20)],
+    )
+
+    with pytest.raises(
+        IPyradError,
+        match=r"sample: first differing @SQ contig is BAM chrX, reference chr2",
+    ):
+        assemble_module._validate_analysis_bams_match_reference(
+            {"sample": bam_file},
+            tmpdir,
+            reference,
+        )
+
+
+def test_validate_analysis_bams_match_reference_rejects_header_length_mismatches(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -300,13 +331,42 @@ def test_validate_analysis_bams_match_reference_rejects_length_mismatches(
 
     monkeypatch.setattr(
         assemble_module,
-        "_get_mapped_reference_contigs_from_bam",
-        lambda _bam_file: [("chr1", 12, 5)],
+        "_get_bam_header_reference_records",
+        lambda _bam_file: [("chr1", 12)],
     )
 
     with pytest.raises(
         IPyradError,
-        match=r"sample: length mismatches: chr1 \(BAM 12, REF 10, 5 mapped\)",
+        match=r"sample: first differing @SQ length is chr1 \(BAM 12, reference 10\)",
+    ):
+        assemble_module._validate_analysis_bams_match_reference(
+            {"sample": bam_file},
+            tmpdir,
+            reference,
+        )
+
+
+def test_validate_analysis_bams_match_reference_mentions_stale_bwa_indexes(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    tmpdir = tmp_path / "assembly_tmpdir"
+    tmpdir.mkdir()
+    (tmpdir / "REF_info.txt").write_text("chr1\t10\nchr2\t20\n", encoding="utf-8")
+    bam_file = tmp_path / "sample.bam"
+    bam_file.write_text("", encoding="utf-8")
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\nACGT\n>chr2\nACGT\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        assemble_module,
+        "_get_bam_header_reference_records",
+        lambda _bam_file: [("chr1", 10)],
+    )
+
+    with pytest.raises(
+        IPyradError,
+        match=r"stale bwa-mem2 sidecar index files",
     ):
         assemble_module._validate_analysis_bams_match_reference(
             {"sample": bam_file},
@@ -440,6 +500,7 @@ def test_write_consensus_and_outputs_uses_one_pool_with_stage_specific_consensus
             max_locus_variant_frequency=1.0,
             max_sample_hetero_frequency=0.10,
             consensus_workers=3,
+            final_vcf_mask_workers=3,
             workers=1,
             threads=1,
             log_level="WARNING",
@@ -1648,7 +1709,7 @@ def test_run_assembler_uses_filtered_analysis_bams_downstream(
     assert pool_calls[1][2] == 1
     assert pool_calls[2][2] == 1
     assert pool_calls[7][2] == 2
-    assert pool_calls[8][2] == 1
+    assert pool_calls[8][2] == 2
     assert pool_calls[9][2] == 1
 
     filter_jobs = pool_calls[0][1]
@@ -2595,6 +2656,7 @@ def test_write_consensus_and_outputs_fails_cleanly_when_no_loci_survive(
             max_locus_variant_frequency=1.0,
             max_sample_hetero_frequency=0.10,
             consensus_workers=1,
+            final_vcf_mask_workers=1,
             workers=1,
             threads=1,
             log_level="WARNING",

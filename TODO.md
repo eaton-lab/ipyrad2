@@ -1,12 +1,10 @@
 # WORKING
 - [x] refine bedgraph method
 - [x] get min-cov masks from bedgraph
-- filter with phasing
-- call variants individually
-- keep phased results?
+- [] support individual-level variant calling by default; optional group called variants
 - [] consensus writing exclude if >X% variants are lowQual Ns.
-- [] soft clip filters should only apply to rad, not wgs samples.
-
+- [] should soft clip counting be used to filter mapped reads before variant calling, or also for paralog detection?
+- [] should/can we get/keep phased results?
 
 # TODO
 - trim: collect and summarize trim stats files into one file.

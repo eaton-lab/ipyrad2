@@ -2,6 +2,14 @@
 # ipyrad
 Integrative assembly and analysis of RAD-seq datasets
 
+## Documentation
+Draft documentation now lives in [`docs/`](docs/) and is configured by [`zensical.toml`](zensical.toml).
+
+To preview the docs locally with Zensical:
+```bash
+zensical serve
+```
+
 ## Usage
 ```bash
 # help message for subcommand options
