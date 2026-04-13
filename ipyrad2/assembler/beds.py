@@ -29,6 +29,43 @@ def get_name_from_bam(bam_file: Path) -> str:
     return out.decode().strip().split()[0]
 
 
+def get_names_from_bams(bam_files: list[Path]) -> dict[Path, str]:
+    """Return the first reported sample name for each requested BAM."""
+    if not bam_files:
+        return {}
+
+    expected = {str(path): path for path in bam_files}
+    cmd = [BIN_SAM, "samples", "-h"]
+    stdin_text = "".join(f"{path}\n" for path in bam_files)
+    _, out, _ = run_pipeline([cmd], stdin_text=stdin_text)
+    text = out.decode() if isinstance(out, bytes) else str(out)
+
+    resolved: dict[Path, str] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = raw_line.split("\t", 1)
+        if len(fields) != 2:
+            fields = raw_line.split(None, 1)
+        if len(fields) != 2:
+            raise IPyradError(f"Could not parse `samtools samples` output: {raw_line}")
+        sample_name, bam_path = fields[0].strip(), fields[1].strip()
+        bam_file = expected.get(bam_path)
+        if bam_file is None or bam_file in resolved:
+            continue
+        if sample_name and sample_name != ".":
+            resolved[bam_file] = sample_name
+
+    missing = [str(path) for path in bam_files if path not in resolved]
+    if missing:
+        shown = ", ".join(missing[:5])
+        if len(missing) > 5:
+            shown += f", ... ({len(missing) - 5} more)"
+        raise IPyradError(f"Could not determine sample name from BAM header(s): {shown}")
+    return resolved
+
+
 def samtools_index_reference(reference: Path, threads: int) -> None:
     """Refresh the reference FASTA index with samtools."""
     del threads
