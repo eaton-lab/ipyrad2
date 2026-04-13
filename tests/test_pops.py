@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import pytest
 
+from ipyrad2.utils import pops
 from ipyrad2.utils.exceptions import IPyradError
 from ipyrad2.utils.pops import expand_imap_patterns
+from ipyrad2.utils.pops import parse_imap
 
 
 def test_expand_imap_patterns_supports_exact_and_glob_matches() -> None:
@@ -50,3 +52,40 @@ def test_expand_imap_patterns_rejects_unmatched_entries_in_strict_mode() -> None
             {"pop1": ["califo*"]},
             ["barbeyi-01"],
         )
+
+
+def test_parse_imap_reports_missing_file(tmp_path) -> None:
+    missing = tmp_path / "missing.tsv"
+
+    with pytest.raises(IPyradError) as excinfo:
+        parse_imap(missing)
+
+    assert str(excinfo.value) == f"Populations file not found - {missing}"
+
+
+def test_parse_imap_reports_generic_read_failures(monkeypatch, tmp_path) -> None:
+    popfile = tmp_path / "imap.tsv"
+
+    def _raise_read_failure(*args, **kwargs):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(pops.pd, "read_csv", _raise_read_failure)
+
+    with pytest.raises(IPyradError) as excinfo:
+        parse_imap(popfile)
+
+    assert str(excinfo.value) == f"Failed to read populations file - {popfile}"
+
+
+def test_parse_imap_keeps_malformed_message_for_parse_failures(monkeypatch, tmp_path) -> None:
+    popfile = tmp_path / "imap.tsv"
+
+    def _raise_parse_failure(*args, **kwargs):
+        raise ValueError("bad table")
+
+    monkeypatch.setattr(pops.pd, "read_csv", _raise_parse_failure)
+
+    with pytest.raises(IPyradError) as excinfo:
+        parse_imap(popfile)
+
+    assert str(excinfo.value) == f"  Populations file malformed - {popfile}"

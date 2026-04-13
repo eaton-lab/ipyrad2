@@ -784,7 +784,7 @@ class SNPsExtracter:
         if reference is None:
             raise IPyradError(
                 "PLINK export requires the HDF5 `reference` dataset. "
-                "Rebuild the SNP HDF5 with a current assemble or analysis vcf-to-hdf5 run."
+                "Rebuild the SNP HDF5 with a current assemble or `ipyrad2 vcf2hdf5` run."
             )
 
         paths = {
@@ -889,7 +889,7 @@ def _reconstruct_snp_chars(
     if reference is None:
         raise IPyradError(
             "SNP character reconstruction requires the HDF5 `reference` dataset. "
-            "Rebuild the SNP HDF5 with a current assemble or analysis vcf-to-hdf5 run."
+            "Rebuild the SNP HDF5 with a current assemble or `ipyrad2 vcf2hdf5` run."
         )
     out = np.empty(genos.shape, dtype=np.uint8)
     for idx in range(genos.shape[1]):
@@ -1004,7 +1004,7 @@ def _prepare_snp_export(
         raise IPyradError(
             "Global SNP imputation for snpex requires the HDF5 `reference` dataset so all "
             "written outputs, including the SNP character matrix, can be reconstructed. "
-            "Rebuild the SNP HDF5 with a current assemble or analysis vcf-to-hdf5 run."
+            "Rebuild the SNP HDF5 with a current assemble or `ipyrad2 vcf2hdf5` run."
         )
 
     imputation = summarize_imputation(view.genos, method)

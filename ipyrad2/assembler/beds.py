@@ -11,6 +11,7 @@ import numpy as np
 from loguru import logger
 from ..utils.exceptions import IPyradError
 from ..utils.parallel import run_pipeline
+from ..utils.parallel import PipelineTimeoutError
 from ..utils.parallel import stream_pipeline_lines
 
 BIN = Path(sys.prefix) / "bin"
@@ -18,6 +19,7 @@ BIN_SAM = str(BIN / "samtools")
 BIN_BED = str(BIN / "bedtools")
 BIN_BCF = str(BIN / "bcftools")
 CALLABLE_REFERENCE_BASES = frozenset("ACGT")
+COVERAGE_PIPELINE_TIMEOUT_S = 3600.0
 
 
 def get_name_from_bam(bam_file: Path) -> str:
@@ -205,7 +207,6 @@ def get_coverage_bed_graphs(
     bed_dir = tmpdir / "beds"
     bed_dir.mkdir(parents=True, exist_ok=True)
     coll_dir = tmpdir / f"{sname}.collate"
-    coll_dir.mkdir(exist_ok=True)
     out_bed_count = bed_dir / f"{sname}.fragments.bedgraph"  # has counts
     out_bed_merge = bed_dir / f"{sname}.fragments.merged.bed"  # merged, no counts
     ref_info = tmpdir / "REF_info.txt"
@@ -213,91 +214,95 @@ def get_coverage_bed_graphs(
         raise IPyradError(
             f"Reference scaffold order file not found before coverage delimiting: {ref_info}"
         )
+    bedgraph_cmds: list[list[str]] = []
+    merge_cmds: list[list[str]]
 
-    # Collate keeps read mates adjacent before converting to BED/BEDPE. The
-    # resulting bedgraph is later reused for low-depth masking and depth stats.
-    cmd1 = [
-        BIN_SAM,
-        "collate",
-        "-@",
-        str(min(threads, 4)),  # doesn't benefit from >4
-        "-T",
-        str(coll_dir / f"{sname}"),
-        "-r",
-        "1000000",
-        "-u",
-        "-O",
-        str(bam_file),
-    ]
-    # compute bedpe table for each pair record (skipping pairs if one was filtered out), e.g.,
-    # Chr1    60908424        60908533        Chr1    60908434        60908543        LH00150:341:22HGMLLT3:3:1160:35876:20034        49      -       +
-    # Chr3    5915120         5915253         Chr3    5915131         5915265         LH00150:341:22HGMLLT3:3:2236:23034:9892         57      +       -
-    # Chr2    109898149       109898235       Chr2    109898287       109898367       LH00150:341:22HGMLLT3:3:1287:23015:18000        54      +       -
-    cmd2 = [BIN_BED, "bamtobed"]
-    if is_paired:
-        cmd2.append("-bedpe")
-    cmd2.extend(["-i", "-"])
-    # extract only the records from this table where the mean mapq passes this steps filter
-    # Chr1    60908424        60908533        Chr1    60908434        60908543        LH00150:341:22HGMLLT3:3:1160:35876:20034        49      -       +
-    # Chr3    5915120         5915253         Chr3    5915131         5915265         LH00150:341:22HGMLLT3:3:2236:23034:9892         57      +       -
-    # Chr2    109898149       109898235       Chr2    109898287       109898367       LH00150:341:22HGMLLT3:3:1287:23015:18000        54      +       -
-    cmd3 = ["awk", "-v", f"q={min_map_q}"]
-    if is_paired:
-        cmd3 += [r'BEGIN{OFS="\t"} ($8+0) >= q']
-    else:
-        cmd3 += [r'BEGIN{OFS="\t"} ($5+0) >= q']
-    # check start/end values and extract only (chrom, start, end)
-    # Chr4    108577598       108577715
-    # Chr4    106107228       106107344
-    # Chr1    45721044        45721144
-    if is_paired:
-        cmd4 = [
-            "awk",
-            r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}',
+    try:
+        if is_paired:
+            coll_dir.mkdir(exist_ok=True)
+            # Collate keeps read mates adjacent before converting to BEDPE.
+            bedgraph_cmds.append([
+                BIN_SAM,
+                "collate",
+                "-@",
+                str(min(threads, 4)),  # doesn't benefit from >4
+                "-T",
+                str(coll_dir / f"{sname}"),
+                "-r",
+                "1000000",
+                "-u",
+                "-O",
+                str(bam_file),
+            ])
+            # compute bedpe table for each pair record (skipping pairs if one
+            # was filtered out), e.g.,
+            # Chr1 60908424 60908533 Chr1 60908434 60908543 ... 49 - +
+            bedgraph_cmds.append([BIN_BED, "bamtobed", "-bedpe", "-i", "-"])
+        else:
+            # Single-end coverage does not need mate collation.
+            bedgraph_cmds.append([BIN_BED, "bamtobed", "-i", str(bam_file)])
+
+        # extract only the records from this table where the mapq passes this
+        # stage's filter
+        cmd3 = ["awk", "-v", f"q={min_map_q}"]
+        if is_paired:
+            cmd3 += [r'BEGIN{OFS="\t"} ($8+0) >= q']
+        else:
+            cmd3 += [r'BEGIN{OFS="\t"} ($5+0) >= q']
+        bedgraph_cmds.append(cmd3)
+        # check start/end values and extract only (chrom, start, end)
+        if is_paired:
+            bedgraph_cmds.append([
+                "awk",
+                r'BEGIN{OFS="\t"} $1==$4 {s=($2<$5?$2:$5); e=($3>$6?$3:$6); print $1,s,e}',
+            ])
+        else:
+            bedgraph_cmds.append(["awk", r'BEGIN{OFS="\t"} {print $1,$2,$3}'])
+        # sort beds by genome coordinates then compute the per-site depth
+        bedgraph_cmds.append([BIN_BED, "sort", "-i", "-", "-g", str(ref_info)])
+        bedgraph_cmds.append([BIN_BED, "genomecov", "-i", "-", "-g", str(ref_info), "-bg"])
+        bedgraph_cmds.append(["awk", "-v", f"MIN={min_sample_depth}", r"$4>=MIN", "-"])
+
+        try:
+            run_pipeline(
+                bedgraph_cmds,
+                out_bed_count,
+                timeout_s=COVERAGE_PIPELINE_TIMEOUT_S,
+            )
+        except PipelineTimeoutError as exc:
+            raise IPyradError(
+                f"Coverage-bed pipeline timed out for sample {sname} during bedgraph "
+                f"generation after {COVERAGE_PIPELINE_TIMEOUT_S:.0f}s. "
+                "This indicates a stuck coverage-bed job rather than a global "
+                "assemble deadlock."
+            ) from exc
+
+        # Merge beds within MIN_MERGE_DISTANCE of each other. The saved bedgraph
+        # is later reused for low-depth masking and depth stats, so the merge
+        # stage now reads from that file rather than a live tee split.
+        merge_cmds = [
+            ["cut", "-f1-3", str(out_bed_count)],
+            ["sort", "-k1,1", "-k2,2n", "-T", str(tmpdir)],
+            [BIN_BED, "merge", "-d", str(min_merge_distance), "-i", "-"],
+            [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)],
         ]
-    else:
-        cmd4 = ["awk", r'BEGIN{OFS="\t"} {print $1,$2,$3}']
-    # sort beds by genome coordinates
-    # Chr1    825268  825547
-    # Chr1    825268  825547
-    # Chr1    825268  825547
-    # Chr1    833321  833418
-    # Chr1    833321  833418
-    # Chr1    833321  833418
-    cmd5 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
-    # get coverage in bedgraph format with counts within regions
-    # Chr1    833321  833418  14
-    # Chr1    833419  833520  2
-    # Chr1    837052  837165  4
-    # Chr1    837165  837230  18
-    # Chr1    837230  837240  14
-    cmd6 = [BIN_BED, "genomecov", "-i", "-", "-g", str(ref_info), "-bg"]
-    # filter out sites below MIN_DEPTH coverage
-    # Chr1    833321  833418  14
-    # Chr1    837052  837165  4
-    # Chr1    837165  837230  18
-    # Chr1    837230  837240  14
-    cmd7 = ["awk", "-v", f"MIN={min_sample_depth}", r"$4>=MIN", "-"]
-    # pipe one stream forward and save another to file. This saved file
-    # has the per-site depths that will be used later for...
-    cmd8 = ["tee", str(out_bed_count)]
-    # merge beds within MIN_MERGE_DISTANCE of each other.
-    # -d should always be >0 to merge across small low depth or alignment
-    # gaps within samples. The default value of 300 should generally be
-    # sufficient to group paired reads. Larger values can also merge
-    # neighboring (linked) loci.
-    # bedtools merge expects plain coordinate order; denovo locus ids such as
-    # locus_3_8 / locus_3_16 can be valid in reference order but fail that check.
-    cmd9 = ["sort", "-k1,1", "-k2,2n", "-T", str(tmpdir)]
-    cmd10 = [BIN_BED, "merge", "-d", str(min_merge_distance), "-i", "-"]
-    cmd11 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
-    # Chr1    833321  833418
-    # Chr1    837052  837240
-    run_pipeline(
-        [cmd1, cmd2, cmd3, cmd4, cmd5, cmd6, cmd7, cmd8, cmd9, cmd10, cmd11],
-        out_bed_merge,
-    )
-    shutil.rmtree(coll_dir)
+        try:
+            run_pipeline(
+                merge_cmds,
+                out_bed_merge,
+                timeout_s=COVERAGE_PIPELINE_TIMEOUT_S,
+            )
+        except PipelineTimeoutError as exc:
+            raise IPyradError(
+                f"Coverage-bed pipeline timed out for sample {sname} during interval "
+                f"merging after {COVERAGE_PIPELINE_TIMEOUT_S:.0f}s. "
+                "This indicates a stuck coverage-bed job rather than a global "
+                "assemble deadlock."
+            ) from exc
+    finally:
+        if coll_dir.exists():
+            shutil.rmtree(coll_dir, ignore_errors=True)
+
     logger.debug(f"wrote bed graph for {sname}")
     return out_bed_merge
 

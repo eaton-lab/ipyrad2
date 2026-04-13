@@ -11,7 +11,12 @@ from .cli_trim import _setup_trim_subparser, validate_trim_args
 from .cli_denovo import _setup_denovo_subparser, validate_denovo_args
 from .cli_map import _setup_map_subparser
 from .cli_assemble import _setup_assemble_subparser
-from .cli_analysis import _setup_analysis_subparser, run_analysis_tool
+from .cli_analysis import (
+    ANALYSIS_TOOL_NAMES,
+    RESERVED_TOOL_NAMES,
+    _setup_analysis_tool_subparsers,
+    run_analysis_tool,
+)
 
 import importlib
 # from ..demuxer import run_demuxer
@@ -33,40 +38,81 @@ Interactive assembly and analysis of RAD-seq data
 
 DESCRIPTION = "ipyrad2 command line tool. Select a positional subcommand:"
 
-EPILOG = """\
+TOP_LEVEL_HELP = f"""{HEADER}
+{DESCRIPTION}
+
+assembly subcommands
+    demux                                    Demultiplex pooled data to samples by index or barcode.
+    trim                                     Trim reads for quality, adapters, and cutsite motifs using 'fastp'.
+    denovo                                   Optionally construct a reference library by de novo clustering reads.
+    map                                      Map reads to a reference with 'bwa-mem2' and 'samtools' to write coordinate-sorted BAMs.
+    assemble                                 Delimit loci, call variants, and write assembled outputs, stats, and database (HDF5)
+
+data export/conversion subcommands
+    wex                                      Extract loci from HDF5 file, filter, and write as concatenated matrix to various formats
+    lex                                      Extract loci from HDF5 file, filter, and write as multi-locus data to various formats
+    snpex                                    Extract SNPs from HDF5 file, filter, optionally impute, and write to various formats
+    vcf2hdf5                                 Convert an external VCF to HDF5 for use in analysis tools below.
+
+analysis subcommands
+    pca                                      Infer population structure from pca, tsne, or umap on filtered SNPs
+    dapc                                     Infer population genetic clustering by discriminant analysis of principal components
+    snmf                                     Infer population genetic clustering by non-negative matrix factorization
+    admixture                                Infer population genetic clustering with external ADMIXTURE
+    popgen                                   Infer population genetic statistics for one or more populations
+    bpp                                      Infer species tree; species delim; or MSC+ model from multi-locus data
+    baba                                     Infer admixture metrics from ABBA/BABA and related SNP patterns
+    treeslider                               Infer gene trees for each qualified locus or refmapped genomic window of loci
+
+options:
+  -v, --version                              show program's version number and exit
+
 Note
 ----
 Each subcommand has its own help screen, e.g.,:
 $ ipyrad2 demux -h
 
-Examples
---------
-# demux: demultiplexing data to samples by index or barcode
-$ ipyrad2 demux -d RAW/*.fastq.gz -b BARCODES.csv -m 1 -c 10 -o ./demux
+Assembly pipeline
+-----------------
+$ ipyrad2 demux    -d RAW/*.fastq.gz     -o DATA/    -b BARCODES.csv -m 1 -c 10
+$ ipyrad2 trim     -d DATA/*.fastq.gz    -o TRIMMED/ -q 20 -n 5 -c 10
+$ ipyrad2 map      -d TRIMMED/*.fastq.gz -o MAPPED   -r REF.fa -c 10
+$ ipyrad2 assemble -d MAPPED/*.bam       -o OUT      -r REF.fa -m 4 -qm 20 -c 10
 
-# trim: trim reads for quality, adapters, and cutsite motifs
-$ ipyrad2 trim -d DATA/*.fastq.gz -o TRIMMED/ -q 20 -n 5 -c 10
+Export/Conversion examples
+--------------------------
+$ ipyrad2 wex -d OUT/HDF5 -m 10
+$ ipyrad2 lex -d OUT/HDF5 -N 1000 -L 100 -m 10
 
-# map: map reads to a reference genome and write coordinate-sorted BAMs
-$ ipyrad2 map -d DATA/*.fastq.gz -r REF.fa -o BAMs -c 10
-
-# assemble: delimit loci, call variants, and write assembled outputs
-$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -o OUT -m 4 -qm 20 -c 10
+Analysis examples
+-----------------
+$ ipyrad2 popgen -d OUT/HDF5 -i IMAP -g MINMAP
+$ ipyrad2 pca -d OUT/HDF5 -i IMAP -g MINMAP -I sample --plot
 """
+
+
+class TopLevelParser(argparse.ArgumentParser):
+    """Root parser with grouped top-level help text."""
+
+    def format_help(self) -> str:
+        return TOP_LEVEL_HELP
 
 
 def setup_parsers() -> argparse.ArgumentParser:
     """Setup and return an ArgumentParser w/ subcommands."""
-    parser = argparse.ArgumentParser(
+    parser = TopLevelParser(
         prog="ipyrad2",
         description=f"{HEADER}\n{DESCRIPTION}",
-        epilog=EPILOG,
         formatter_class=RAW_HELP_FORMATTER,
         add_help=False,
     )
     parser.add_argument('-h', '--help', action='help', help=argparse.SUPPRESS)
     parser.add_argument("-v", "--version", action='version', version=f"ipyrad2 {VERSION}")
-    subparser = parser.add_subparsers(help="sub-commands", dest="subcommand")
+    subparser = parser.add_subparsers(
+        help="sub-commands",
+        dest="subcommand",
+        parser_class=argparse.ArgumentParser,
+    )
 
     # add subcommands: these messages are subcommand headers
     _setup_demux_subparser(subparser, f"{HEADER}\nipyrad2 demux: demultiplex pooled reads to sample files by barcode or index")
@@ -74,7 +120,7 @@ def setup_parsers() -> argparse.ArgumentParser:
     _setup_denovo_subparser(subparser, f"{HEADER}\nipyrad2 denovo: construct a reference locus library")
     _setup_map_subparser(subparser, f"{HEADER}\nipyrad2 map: map reads and write coordinate-sorted BAM files")
     _setup_assemble_subparser(subparser, f"{HEADER}\nipyrad2 assemble: delimit loci, call variants, and write outputs")
-    _setup_analysis_subparser(subparser, f"{HEADER}\nipyrad2 analysis: utilities for downstream analyses")
+    _setup_analysis_tool_subparsers(subparser, HEADER)
     return parser
 
 
@@ -124,7 +170,7 @@ def command_line():
     if hasattr(args, "log_level"):
         set_log_level(args.log_level)
 
-    if args.subcommand not in ["demux", "trim", "denovo", "map", "assemble", "analysis"]:
+    if args.subcommand is None:
         # NO SUBCOMMAND: print help
         parser.print_help()
         sys.exit(0)
@@ -311,10 +357,14 @@ def run_subcommand(args, _exit=True):
         )
         if _exit: sys.exit(0)  # noqa: E701
 
-    # ANALYSIS: ---------------------------------------------------
-    if args.subcommand == "analysis":
-        run_analysis_tool(args)
-        sys.exit(0)
+    # EXPORT / ANALYSIS: -----------------------------------------
+    if args.subcommand in ANALYSIS_TOOL_NAMES:
+        run_analysis_tool(args, _exit=_exit)
+        return
+
+    if args.subcommand in RESERVED_TOOL_NAMES:
+        run_analysis_tool(args, _exit=_exit)
+        return
 
 
 if __name__ == "__main__":

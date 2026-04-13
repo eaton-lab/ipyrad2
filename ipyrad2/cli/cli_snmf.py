@@ -11,10 +11,10 @@ from .common import RAW_HELP_FORMATTER
 EPILOG = r"""
 Examples
 --------
-$ ipyrad2 analysis snmf -d snps.hdf5 -o OUT/ -k 2
-$ ipyrad2 analysis snmf -d snps.hdf5 -o OUT/ --k-range 2:5
-$ ipyrad2 analysis snmf -d snps.hdf5 -o OUT/ -k 3 --impute-method none
-$ ipyrad2 analysis snmf -d snps.hdf5 -o OUT/ --k-range 2:6 --alpha-w 1e-3 --n-init 20
+$ ipyrad2 snmf -d snps.hdf5 -o OUT/ -k 2
+$ ipyrad2 snmf -d snps.hdf5 -o OUT/ --k-range 2:5
+$ ipyrad2 snmf -d snps.hdf5 -o OUT/ -k 3 --impute-method none
+$ ipyrad2 snmf -d snps.hdf5 -o OUT/ --k-range 2:6 --alpha-w 1e-3 --n-init 20
 """
 
 
@@ -22,7 +22,7 @@ def _setup_snmf_subparser(
     subparsers: argparse._SubParsersAction,
     header: str = None,
 ) -> None:
-    """Add `ipyrad2 analysis snmf` subcommand parser."""
+    """Add `ipyrad2 snmf` subcommand parser."""
     tool = subparsers.add_parser(
         "snmf",
         description=header,
@@ -35,7 +35,7 @@ def _setup_snmf_subparser(
     core = tool.add_argument_group("Core inputs")
     core.add_argument(
         "-d", "--data", metavar="Path", type=Path, required=True,
-        help="Path to an SNP-capable HDF5 file. Convert VCF first with `analysis vcf-to-hdf5`.",
+        help="Path to an SNP-capable HDF5 file. Convert VCF first with `ipyrad2 vcf2hdf5`.",
     )
     core.add_argument(
         "-n", "--name", metavar="str", type=str, default="snmf",

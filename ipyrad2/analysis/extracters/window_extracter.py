@@ -4,7 +4,7 @@
 
 Command
 -------
-$ ipyrad2 analysis wex -d ... -w ... -o ... -O phy
+$ ipyrad2 wex -d ... -w ... -o ... -O phy
 
 Output file example
 -------------------
@@ -17,7 +17,7 @@ D    CCAGGATCCGAAA...
 
 Stats file example
 ------------------
-CMD: ipyrad2 analysis wex -d ... -o ... ...
+CMD: ipyrad2 wex -d ... -o ... ...
 windows: Chr1:X-Y Chr1:A-B ...
 populations: A B C
 min_sample_coverage: A=1 B=2 C=3

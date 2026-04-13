@@ -11,12 +11,12 @@ from .common import RAW_HELP_FORMATTER
 EPILOG = r"""
 Examples
 --------
-$ ipyrad2 analysis pca -d snps.hdf5 -o OUT/
-$ ipyrad2 analysis pca -d snps.hdf5 -o OUT/ --plot
-$ ipyrad2 analysis pca -d snps.hdf5 -o OUT/ --plot --plot-width 520 --plot-height 360
-$ ipyrad2 analysis pca -d snps.hdf5 -o OUT/ -M tsne --perplexity 8
-$ ipyrad2 analysis pca -d snps.hdf5 -o OUT/ -M umap --n-neighbors 10
-$ ipyrad2 analysis pca -d snps.hdf5 -o OUT/ --no-subsample --impute-method zero
+$ ipyrad2 pca -d snps.hdf5 -o OUT/
+$ ipyrad2 pca -d snps.hdf5 -o OUT/ --plot
+$ ipyrad2 pca -d snps.hdf5 -o OUT/ --plot --plot-width 520 --plot-height 360
+$ ipyrad2 pca -d snps.hdf5 -o OUT/ -M tsne --perplexity 8
+$ ipyrad2 pca -d snps.hdf5 -o OUT/ -M umap --n-neighbors 10
+$ ipyrad2 pca -d snps.hdf5 -o OUT/ --no-subsample --impute-method zero
 """
 
 
@@ -24,7 +24,7 @@ def _setup_pca_subparser(
     subparsers: argparse._SubParsersAction,
     header: str = None,
 ) -> None:
-    """Add `ipyrad2 analysis pca` subcommand parser."""
+    """Add `ipyrad2 pca` subcommand parser."""
     tool = subparsers.add_parser(
         "pca",
         description=header,
@@ -37,7 +37,7 @@ def _setup_pca_subparser(
     core = tool.add_argument_group("Core inputs")
     core.add_argument(
         "-d", "--data", metavar="Path", type=Path, required=True,
-        help="Path to an SNP-capable HDF5 file. Convert VCF first with `analysis vcf-to-hdf5`.",
+        help="Path to an SNP-capable HDF5 file. Convert VCF first with `ipyrad2 vcf2hdf5`.",
     )
     core.add_argument(
         "-n", "--name", metavar="str", type=str, default="pca",
@@ -63,7 +63,7 @@ def _setup_pca_subparser(
     )
     method.add_argument(
         "--seed", metavar="int", type=int,
-        help="Random seed for SNP subsampling, imputation, and method initialization.",
+        help="Random seed for SNP subsampling, imputation, and serial method initialization.",
     )
     method.add_argument(
         "--perplexity", metavar="float", type=float, default=5.0,
@@ -137,7 +137,7 @@ def _setup_pca_subparser(
     performance = tool.add_argument_group("Performance and overwrite")
     performance.add_argument(
         "-c", "--cores", metavar="int", type=int, default=1,
-        help="Number of cores to use during chunked SNP filtering. [default=1]",
+        help="Number of cores to use during chunked SNP filtering and UMAP embedding. [default=1]",
     )
     performance.add_argument(
         "-f", "--force", action="store_true",

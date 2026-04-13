@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import h5py
 import numpy as np
@@ -6,6 +7,8 @@ import pandas as pd
 import pytest
 from loguru import logger
 
+from ipyrad2.analysis.methods import pca as pca_methods
+from ipyrad2.analysis.methods.common import NumericalInput
 from ipyrad2.analysis.methods.pca import run_pca_analysis, run_pca_method
 from ipyrad2.utils.exceptions import IPyradError
 
@@ -125,6 +128,20 @@ def _write_assembly_style_phase2_snps_h5(path: Path) -> Path:
     return path
 
 
+def _build_mock_umap_inputs() -> tuple[SimpleNamespace, dict[int, int], dict[int, NumericalInput]]:
+    extracter = SimpleNamespace(
+        snames=["a1", "a2"],
+        sample_missing=pd.Series([0.0, 0.0], index=["a1", "a2"], dtype=float),
+    )
+    prepared = NumericalInput(
+        extracter=extracter,
+        view=None,
+        matrix=np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float64),
+        imputation=None,
+    )
+    return extracter, {0: 12345}, {0: prepared}
+
+
 def test_run_pca_method_writes_expected_outputs(tmp_path: Path) -> None:
     h5 = _write_phase2_snps_h5(tmp_path / "snps.hdf5")
 
@@ -155,10 +172,8 @@ def test_run_pca_method_writes_expected_outputs(tmp_path: Path) -> None:
 
     coords = pd.read_csv(tmp_path / "OUT" / "phase2.coords.tsv", sep="\t")
     variance = pd.read_csv(tmp_path / "OUT" / "phase2.variance.tsv", sep="\t")
-    sample_summary = pd.read_csv(
-        tmp_path / "OUT" / "phase2.sample_data_summary.tsv",
-        sep="\t",
-    )
+    sample_summary_path = tmp_path / "OUT" / "phase2.sample_data_summary.tsv"
+    sample_summary = pd.read_csv(sample_summary_path, sep="\t")
     stats = (tmp_path / "OUT" / "phase2.stats.txt").read_text(encoding="utf-8")
 
     assert coords["method"].unique().tolist() == ["pca"]
@@ -168,11 +183,13 @@ def test_run_pca_method_writes_expected_outputs(tmp_path: Path) -> None:
     assert set(variance.columns) == {"replicate", "axis", "explained_variance_ratio"}
     assert {
         "sample",
+        "population",
         "missing_fraction",
         "post_imputation_missing_fraction",
         "imputation_algorithm",
         "imputed_genotype_fraction",
     }.issubset(sample_summary.columns)
+    assert sample_summary["population"].eq("all").all()
     assert sample_summary["imputation_algorithm"].eq("sample").all()
     assert np.allclose(sample_summary["post_imputation_missing_fraction"], 0.0)
     assert np.allclose(
@@ -188,7 +205,117 @@ def test_run_pca_method_writes_expected_outputs(tmp_path: Path) -> None:
     assert "imputation_algorithm: sample" in stats
     assert "imputed_snp_fraction:" in stats
     assert "imputed_genotype_fraction:" in stats
+    assert "samples_selected_initial_count: 6" in stats
+    assert "samples_dropped_by_max_missing_count: 0" in stats
+    assert "samples_final_count: 6" in stats
+    assert "population_count: 1" in stats
+    assert "Population sample counts" in stats
+    assert "all: 6" in stats
+    assert "samples_selected_initial: ['a1'" not in stats
+    assert "samples_final: ['a1'" not in stats
+    assert "imap: {'all'" not in stats
     assert "exported_snps: 3" in stats
+    assert sample_summary_path.read_text(encoding="utf-8").count("0.000") > 0
+
+
+def test_run_pca_method_writes_population_assignments_and_three_decimal_sample_summary(
+    tmp_path: Path,
+) -> None:
+    h5 = _write_phase2_snps_h5(tmp_path / "snps.hdf5")
+    imap = {
+        "alpha": ["a1", "a2", "a3"],
+        "beta": ["b1", "b2", "b3"],
+    }
+
+    run_pca_method(
+        data=h5,
+        name="phase2",
+        outdir=tmp_path / "OUT",
+        method="pca",
+        min_sample_coverage=2,
+        max_sample_missing=1.0,
+        min_minor_allele_frequency=0.0,
+        imap=imap,
+        minmap=None,
+        exclude=None,
+        include_reference=False,
+        impute_method="sample",
+        subsample=False,
+        random_seed=7,
+        replicates=1,
+        perplexity=5.0,
+        max_iter=1000,
+        n_neighbors=15,
+        plot=False,
+        cores=1,
+        force=True,
+        log_level="INFO",
+    )
+
+    sample_summary_path = tmp_path / "OUT" / "phase2.sample_data_summary.tsv"
+    sample_summary = pd.read_csv(sample_summary_path, sep="\t")
+    text = sample_summary_path.read_text(encoding="utf-8")
+
+    assert sample_summary["population"].tolist() == [
+        "alpha",
+        "alpha",
+        "alpha",
+        "beta",
+        "beta",
+        "beta",
+    ]
+    assert "a3\talpha\t0.167\t0.000\tsample\t0.167" in text
+    assert "b3\tbeta\t0.167\t0.000\tsample\t0.167" in text
+
+
+def test_run_pca_method_stats_report_sample_counts_after_missing_filter(tmp_path: Path) -> None:
+    h5 = _write_phase2_snps_h5(tmp_path / "snps.hdf5")
+    imap = {
+        "alpha": ["a1", "a2", "a3"],
+        "beta": ["b1", "b2", "b3"],
+    }
+
+    run_pca_method(
+        data=h5,
+        name="phase2",
+        outdir=tmp_path / "OUT",
+        method="pca",
+        min_sample_coverage=2,
+        max_sample_missing=0.15,
+        min_minor_allele_frequency=0.0,
+        imap=imap,
+        minmap=None,
+        exclude=None,
+        include_reference=False,
+        impute_method="sample",
+        subsample=False,
+        random_seed=7,
+        replicates=1,
+        perplexity=5.0,
+        max_iter=1000,
+        n_neighbors=15,
+        plot=False,
+        cores=1,
+        force=True,
+        log_level="INFO",
+    )
+
+    sample_summary = pd.read_csv(
+        tmp_path / "OUT" / "phase2.sample_data_summary.tsv",
+        sep="\t",
+    )
+    stats = (tmp_path / "OUT" / "phase2.stats.txt").read_text(encoding="utf-8")
+
+    assert sample_summary["sample"].tolist() == ["a1", "a2", "b1", "b2"]
+    assert sample_summary["population"].tolist() == ["alpha", "alpha", "beta", "beta"]
+    assert "samples_selected_initial_count: 6" in stats
+    assert "samples_dropped_by_max_missing_count: 2" in stats
+    assert "samples_final_count: 4" in stats
+    assert "population_count: 2" in stats
+    assert "alpha: 2" in stats
+    assert "beta: 2" in stats
+    assert "samples_selected_initial: ['a1'" not in stats
+    assert "samples_final: ['a1'" not in stats
 
 
 def test_run_pca_method_supports_tsne_and_umap_without_variance_file(tmp_path: Path) -> None:
@@ -252,6 +379,142 @@ def test_run_pca_method_supports_tsne_and_umap_without_variance_file(tmp_path: P
     assert not (tmp_path / "UMAP" / "umap.variance.tsv").exists()
     assert "impute_method: zero-fill" in tsne_stats
     assert "imputation_algorithm: zero-fill" in tsne_stats
+
+
+def test_run_umap_analysis_uses_parallel_jobs_without_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extracter, seeds, prepared_inputs = _build_mock_umap_inputs()
+    calls: dict[str, object] = {}
+    messages: list[str] = []
+
+    monkeypatch.setattr(pca_methods, "_build_extracter", lambda **kwargs: extracter)
+
+    def _fake_prepare_inputs(**kwargs):
+        calls["prepare_random_seed"] = kwargs["random_seed"]
+        return seeds, prepared_inputs
+
+    def _fake_run_umap_once(
+        matrix: np.ndarray,
+        *,
+        n_neighbors: int,
+        embedding_random_state: int | None,
+        n_jobs: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        calls["n_neighbors"] = n_neighbors
+        calls["embedding_random_state"] = embedding_random_state
+        calls["n_jobs"] = n_jobs
+        return np.zeros((matrix.shape[0], 2), dtype=np.float64), np.array([], dtype=np.float64)
+
+    monkeypatch.setattr(pca_methods, "_prepare_inputs", _fake_prepare_inputs)
+    monkeypatch.setattr(pca_methods, "_run_umap_once", _fake_run_umap_once)
+    sink_id = logger.add(messages.append, format="{message}", level="WARNING")
+    try:
+        result = pca_methods.run_umap_analysis(
+            data=Path("dummy.hdf5"),
+            random_seed=None,
+            n_neighbors=3,
+            cores=4,
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert result.method == "umap"
+    assert calls["prepare_random_seed"] is None
+    assert calls["n_neighbors"] == 3
+    assert calls["embedding_random_state"] is None
+    assert calls["n_jobs"] == 4
+    assert not messages
+
+
+def test_run_umap_analysis_honors_embedding_seed_when_serial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extracter, seeds, prepared_inputs = _build_mock_umap_inputs()
+    calls: dict[str, object] = {}
+    messages: list[str] = []
+
+    monkeypatch.setattr(pca_methods, "_build_extracter", lambda **kwargs: extracter)
+
+    def _fake_prepare_inputs(**kwargs):
+        calls["prepare_random_seed"] = kwargs["random_seed"]
+        return seeds, prepared_inputs
+
+    def _fake_run_umap_once(
+        matrix: np.ndarray,
+        *,
+        n_neighbors: int,
+        embedding_random_state: int | None,
+        n_jobs: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        calls["embedding_random_state"] = embedding_random_state
+        calls["n_jobs"] = n_jobs
+        return np.zeros((matrix.shape[0], 2), dtype=np.float64), np.array([], dtype=np.float64)
+
+    monkeypatch.setattr(pca_methods, "_prepare_inputs", _fake_prepare_inputs)
+    monkeypatch.setattr(pca_methods, "_run_umap_once", _fake_run_umap_once)
+    sink_id = logger.add(messages.append, format="{message}", level="WARNING")
+    try:
+        pca_methods.run_umap_analysis(
+            data=Path("dummy.hdf5"),
+            random_seed=7,
+            n_neighbors=3,
+            cores=1,
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert calls["prepare_random_seed"] == 7
+    assert calls["embedding_random_state"] == seeds[0]
+    assert calls["n_jobs"] == 1
+    assert not messages
+
+
+def test_run_umap_analysis_warns_and_ignores_embedding_seed_when_parallel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extracter, seeds, prepared_inputs = _build_mock_umap_inputs()
+    calls: dict[str, object] = {}
+    messages: list[str] = []
+
+    monkeypatch.setattr(pca_methods, "_build_extracter", lambda **kwargs: extracter)
+
+    def _fake_prepare_inputs(**kwargs):
+        calls["prepare_random_seed"] = kwargs["random_seed"]
+        return seeds, prepared_inputs
+
+    def _fake_run_umap_once(
+        matrix: np.ndarray,
+        *,
+        n_neighbors: int,
+        embedding_random_state: int | None,
+        n_jobs: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        calls["embedding_random_state"] = embedding_random_state
+        calls["n_jobs"] = n_jobs
+        return np.zeros((matrix.shape[0], 2), dtype=np.float64), np.array([], dtype=np.float64)
+
+    monkeypatch.setattr(pca_methods, "_prepare_inputs", _fake_prepare_inputs)
+    monkeypatch.setattr(pca_methods, "_run_umap_once", _fake_run_umap_once)
+    sink_id = logger.add(messages.append, format="{message}", level="WARNING")
+    try:
+        pca_methods.run_umap_analysis(
+            data=Path("dummy.hdf5"),
+            random_seed=7,
+            n_neighbors=3,
+            cores=4,
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert calls["prepare_random_seed"] == 7
+    assert calls["embedding_random_state"] is None
+    assert calls["n_jobs"] == 4
+    assert any(
+        "parallel UMAP does not support exact reproducibility" in msg
+        and "Use --cores 1 for reproducible UMAP embeddings" in msg
+        for msg in messages
+    )
 
 
 def test_run_pca_method_writes_svg_plot_when_requested(tmp_path: Path) -> None:

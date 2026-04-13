@@ -159,7 +159,8 @@ def _run_umap_once(
     matrix: np.ndarray,
     *,
     n_neighbors: int,
-    seed: int,
+    embedding_random_state: int | None,
+    n_jobs: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Run one UMAP embedding."""
     umap = require_umap()
@@ -167,9 +168,29 @@ def _run_umap_once(
     coords = umap.UMAP(
         n_neighbors=n_neighbors,
         init="spectral",
-        random_state=seed,
+        random_state=embedding_random_state,
+        n_jobs=n_jobs,
     ).fit_transform(matrix)
     return coords, np.array([], dtype=np.float64)
+
+
+def _resolve_umap_embedding_config(
+    *,
+    random_seed: int | None,
+    embedding_seed: int,
+    cores: int,
+) -> tuple[int | None, int]:
+    """Return UMAP embedding random_state and thread count."""
+    if random_seed is None:
+        return None, cores
+    if cores == 1:
+        return embedding_seed, 1
+    logger.warning(
+        "parallel UMAP does not support exact reproducibility; ignoring the UMAP "
+        "embedding seed while keeping the provided random seed for preprocessing "
+        "(subsampling/imputation). Use --cores 1 for reproducible UMAP embeddings."
+    )
+    return None, cores
 
 
 def _write_coords(
@@ -331,6 +352,36 @@ def _build_summary(
         "max_iter": max_iter if result.method == "tsne" else "NA",
         "n_neighbors": n_neighbors if result.method == "umap" else "NA",
     }
+
+
+def _add_population_assignments(
+    sample_summary: pd.DataFrame,
+    *,
+    extracter: SNPsExtracter,
+) -> pd.DataFrame:
+    """Insert one final-population label column into the retained-sample summary."""
+    sample_to_population: dict[str, str] = {}
+    for population, names in extracter.imap.items():
+        for name in names:
+            if name in sample_to_population:
+                raise IPyradError(f"Sample {name!r} was assigned to multiple populations.")
+            sample_to_population[name] = population
+    missing = [
+        str(name)
+        for name in sample_summary["sample"].tolist()
+        if str(name) not in sample_to_population
+    ]
+    if missing:
+        raise IPyradError(
+            "Sample summary is missing population assignments for: " + ", ".join(missing)
+        )
+    result = sample_summary.copy()
+    result.insert(
+        1,
+        "population",
+        [sample_to_population[str(name)] for name in result["sample"].tolist()],
+    )
+    return result
 
 
 def run_pca_analysis(
@@ -515,10 +566,16 @@ def run_umap_analysis(
     )
     seed = seeds[0]
     prepared = prepared_inputs[0]
+    embedding_random_state, umap_n_jobs = _resolve_umap_embedding_config(
+        random_seed=random_seed,
+        embedding_seed=seed,
+        cores=cores,
+    )
     coords, variance = _run_umap_once(
         prepared.matrix,
         n_neighbors=n_neighbors,
-        seed=seed,
+        embedding_random_state=embedding_random_state,
+        n_jobs=umap_n_jobs,
     )
     return _build_result(
         method="umap",
@@ -659,8 +716,16 @@ def run_pca_method(
         )
         for prepared in result.prepared_inputs_by_replicate.values()
     )
+    sample_summary = _add_population_assignments(
+        sample_summary,
+        extracter=result.extracter,
+    )
     _write_coords(paths["coords"], result.samples, result.coords_by_replicate, method)
-    write_sample_data_summary(paths["sample_data_summary"], sample_summary)
+    write_sample_data_summary(
+        paths["sample_data_summary"],
+        sample_summary,
+        float_format="%.3f",
+    )
     if method == "pca":
         _write_variance(paths["variance"], result.variance_by_replicate)
     if plot:
@@ -687,6 +752,7 @@ def run_pca_method(
             max_iter=max_iter,
             n_neighbors=n_neighbors,
         ),
+        sample_reporting="counts",
     )
     logger.info("wrote PCA-family coordinates to {}", paths["coords"])
     logger.info(

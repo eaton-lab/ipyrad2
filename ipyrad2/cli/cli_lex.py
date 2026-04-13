@@ -11,9 +11,9 @@ from .common import RAW_HELP_FORMATTER
 EPILOG = r"""
 Examples
 --------
-$ ipyrad2 analysis lex -d assembly.hdf5 -o OUT/ -n TEST -m 10 -N 100 -L 150
-$ ipyrad2 analysis lex -d assembly.hdf5 -o OUT/ -w Chr1 Chr2 -N 50 -O nex
-$ ipyrad2 analysis lex -d assembly.hdf5 -o OUT/ -w Chr1:1-50000 -N 25 -L 300 -O bpp
+$ ipyrad2 lex -d assembly.hdf5 -o OUT/ -n TEST -m 10 -N 100 -L 150
+$ ipyrad2 lex -d assembly.hdf5 -o OUT/ -w Chr1 Chr2 -N 50 -O nex
+$ ipyrad2 lex -d assembly.hdf5 -o OUT/ -w Chr1:1-50000 -N 25 -L 300 -O bpp
 """
 
 
@@ -21,7 +21,7 @@ def _setup_lex_subparser(
     subparsers: argparse._SubParsersAction,
     header: str = None,
 ) -> None:
-    """Add `ipyrad2 analysis lex` subcommand parser."""
+    """Add `ipyrad2 lex` subcommand parser."""
     tool = subparsers.add_parser(
         "lex",
         description=header,

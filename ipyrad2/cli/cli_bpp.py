@@ -11,11 +11,11 @@ from .common import RAW_HELP_FORMATTER
 EPILOG = r"""
 Examples
 --------
-$ ipyrad2 analysis bpp -d assembly.hdf5 -o OUT/ -n demo --tree species.nwk -i IMAP.txt -g MINMAP.txt -N 1000 -L 100 --threads 50 --seed 123 --tauprior 3 0.05
-$ ipyrad2 analysis bpp -d assembly.hdf5 -o OUT/ -n demo --tree species_msci.nwk -i IMAP.txt -g MINMAP.txt -N 1000 -L 100 --threads 50 --seed 123 --tauprior 3 0.05 --msc-i --phiprior 1 1
-$ ipyrad2 analysis bpp -d assembly.hdf5 -o OUT/ -n demo --tree species_mscm.nwk -i IMAP.txt -g MINMAP.txt -N 1000 -L 100 --threads 50 --seed 123 --msc-m 0,1 1,0 2,3 3,2 "(0,1),2" --wprior 2 200
-$ ipyrad2 analysis bpp -d assembly.hdf5 -o OUT/ -n demo --tree species.nwk -i IMAP.txt -g MINMAP.txt -N 1000 -L 100 --threads 50 --seed 123 --speciestree --speciesmodelprior 1
-$ ipyrad2 analysis bpp -d assembly.hdf5 -o OUT/ -n demo --tree species.nwk -i IMAP.txt -g MINMAP.txt -N 1000 -L 100 --threads 50 --seed 123 --speciesdelimitation --speciesmodelprior 1
+$ ipyrad2 bpp -d assembly.hdf5 -o OUT/ -n demo --tree species.nwk -i IMAP.txt -g MINMAP.txt -N 1000 -L 100 --threads 50 --seed 123 --tauprior 3 0.05
+$ ipyrad2 bpp -d assembly.hdf5 -o OUT/ -n demo --tree species_msci.nwk -i IMAP.txt -g MINMAP.txt -N 1000 -L 100 --threads 50 --seed 123 --tauprior 3 0.05 --msc-i --phiprior 1 1
+$ ipyrad2 bpp -d assembly.hdf5 -o OUT/ -n demo --tree species_mscm.nwk -i IMAP.txt -g MINMAP.txt -N 1000 -L 100 --threads 50 --seed 123 --msc-m 0,1 1,0 2,3 3,2 "(0,1),2" --wprior 2 200
+$ ipyrad2 bpp -d assembly.hdf5 -o OUT/ -n demo --tree species.nwk -i IMAP.txt -g MINMAP.txt -N 1000 -L 100 --threads 50 --seed 123 --speciestree --speciesmodelprior 1
+$ ipyrad2 bpp -d assembly.hdf5 -o OUT/ -n demo --tree species.nwk -i IMAP.txt -g MINMAP.txt -N 1000 -L 100 --threads 50 --seed 123 --speciesdelimitation --speciesmodelprior 1
 """
 
 
@@ -23,7 +23,7 @@ def _setup_bpp_subparser(
     subparsers: argparse._SubParsersAction,
     header: str = None,
 ) -> None:
-    """Add `ipyrad2 analysis bpp` subcommand parser."""
+    """Add `ipyrad2 bpp` subcommand parser."""
     tool = subparsers.add_parser(
         "bpp",
         description=header,

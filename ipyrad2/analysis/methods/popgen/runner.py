@@ -32,8 +32,8 @@ def _detect_hdf5_capabilities(data: Path) -> tuple[bool, bool]:
     """Return `(has_sequence, has_snp)` for one analysis HDF5 file."""
     if str(data).endswith((".vcf", ".vcf.gz")):
         raise IPyradError(
-            "`ipyrad2 analysis popgen` requires an analysis HDF5 input. "
-            "Convert VCF first with `ipyrad2 analysis vcf-to-hdf5`."
+            "`ipyrad2 popgen` requires an analysis HDF5 input. "
+            "Convert VCF first with `ipyrad2 vcf2hdf5`."
         )
     with h5py.File(data, "r") as io5:
         has_sequence = "phy" in io5 and "phymap" in io5

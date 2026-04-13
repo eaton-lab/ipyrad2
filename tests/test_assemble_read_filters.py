@@ -10,6 +10,7 @@ import pytest
 
 from ipyrad2.assembler import run_assembler as exported_run_assembler
 from ipyrad2.assembler import assemble as assemble_module
+from ipyrad2.assembler import beds as beds_module
 from ipyrad2.assembler.assemble import _run_variant_stage
 from ipyrad2.assembler.assemble import _run_paralog_stage
 from ipyrad2.assembler.assemble import _write_consensus_and_outputs
@@ -53,6 +54,7 @@ from ipyrad2.assembler.variants import load_variant_resolution_stats
 from ipyrad2.assembler.variants import write_vcf
 from ipyrad2.assembler.write_seqs import write_seqs_hdf5
 from ipyrad2.assembler.write_snps import write_snps_hdf5
+from ipyrad2.utils.parallel import PipelineTimeoutError
 from ipyrad2.utils.parallel import run_pipeline
 from ipyrad2.utils.exceptions import IPyradError
 
@@ -184,17 +186,17 @@ def test_bam_appears_paired_reflects_layout_classifier(monkeypatch, tmp_path: Pa
 
 
 @pytest.mark.parametrize(
-    ("is_paired", "expected_cmd2"),
+    ("is_paired", "expected_first_cmds"),
     [
-        (False, [BIN_BED, "bamtobed", "-i", "-"]),
-        (True, [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]),
+        (False, [[BIN_BED, "bamtobed", "-i", None]]),
+        (True, [None, [BIN_BED, "bamtobed", "-bedpe", "-i", "-"]]),
     ],
 )
-def test_get_coverage_bed_graphs_uses_layout_specific_bamtobed_command(
+def test_get_coverage_bed_graphs_uses_layout_specific_pipeline_and_timeout(
     monkeypatch,
     tmp_path: Path,
     is_paired: bool,
-    expected_cmd2: list[str],
+    expected_first_cmds: list[list[str] | None],
 ) -> None:
     bam_file = tmp_path / "sample.bam"
     bam_file.write_text("", encoding="utf-8")
@@ -203,11 +205,10 @@ def test_get_coverage_bed_graphs_uses_layout_specific_bamtobed_command(
     ref_info = tmp_path / "TMP" / "REF_info.txt"
     ref_info.parent.mkdir(parents=True, exist_ok=True)
     ref_info.write_text("chr1\t4\n", encoding="utf-8")
-    observed: dict[str, object] = {}
+    observed_calls: list[tuple[list[list[str]], Path | None, dict[str, object]]] = []
 
     def _fake_run_pipeline(cmds, outfile=None, **kwargs):
-        del kwargs
-        observed["cmds"] = cmds
+        observed_calls.append((cmds, outfile, dict(kwargs)))
         if outfile is not None:
             outfile.parent.mkdir(parents=True, exist_ok=True)
             outfile.write_text("", encoding="utf-8")
@@ -228,10 +229,142 @@ def test_get_coverage_bed_graphs_uses_layout_specific_bamtobed_command(
     )
 
     assert out_bed == tmp_path / "TMP" / "beds" / "sample.fragments.merged.bed"
-    assert observed["cmds"][1] == expected_cmd2
-    assert observed["cmds"][4] == [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
-    assert observed["cmds"][5] == [BIN_BED, "genomecov", "-i", "-", "-g", str(ref_info), "-bg"]
-    assert observed["cmds"][10] == [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
+    assert len(observed_calls) == 2
+
+    bedgraph_cmds, bedgraph_outfile, bedgraph_kwargs = observed_calls[0]
+    merge_cmds, merge_outfile, merge_kwargs = observed_calls[1]
+
+    assert bedgraph_outfile == tmp_path / "TMP" / "beds" / "sample.fragments.bedgraph"
+    assert merge_outfile == tmp_path / "TMP" / "beds" / "sample.fragments.merged.bed"
+    assert bedgraph_kwargs["timeout_s"] == beds_module.COVERAGE_PIPELINE_TIMEOUT_S
+    assert merge_kwargs["timeout_s"] == beds_module.COVERAGE_PIPELINE_TIMEOUT_S
+
+    if is_paired:
+        assert bedgraph_cmds[1] == expected_first_cmds[1]
+        assert bedgraph_cmds[4] == [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
+        assert bedgraph_cmds[5] == [BIN_BED, "genomecov", "-i", "-", "-g", str(ref_info), "-bg"]
+        assert bedgraph_cmds[0][:4] == [BIN_SAM, "collate", "-@", "2"]
+        assert bedgraph_cmds[0][-1] == str(bam_file)
+    else:
+        assert bedgraph_cmds[0] == [BIN_BED, "bamtobed", "-i", str(bam_file)]
+        assert bedgraph_cmds[3] == [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
+        assert bedgraph_cmds[4] == [BIN_BED, "genomecov", "-i", "-", "-g", str(ref_info), "-bg"]
+
+    assert merge_cmds[0] == ["cut", "-f1-3", str(bedgraph_outfile)]
+    assert merge_cmds[1] == ["sort", "-k1,1", "-k2,2n", "-T", str(tmp_path / "TMP")]
+    assert merge_cmds[3] == [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
+
+
+def test_get_coverage_bed_graphs_reports_bedgraph_timeout(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    bam_file = tmp_path / "sample.bam"
+    bam_file.write_text("", encoding="utf-8")
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    ref_info = tmp_path / "TMP" / "REF_info.txt"
+    ref_info.parent.mkdir(parents=True, exist_ok=True)
+    ref_info.write_text("chr1\t4\n", encoding="utf-8")
+
+    def _fake_run_pipeline(cmds, outfile=None, **kwargs):
+        del cmds, outfile, kwargs
+        raise PipelineTimeoutError("pipeline timed out")
+
+    monkeypatch.setattr("ipyrad2.assembler.beds.run_pipeline", _fake_run_pipeline)
+
+    with pytest.raises(
+        IPyradError,
+        match=r"Coverage-bed pipeline timed out for sample sample during bedgraph generation",
+    ):
+        get_coverage_bed_graphs(
+            sname="sample",
+            bam_file=bam_file,
+            is_paired=False,
+            reference=reference,
+            tmpdir=tmp_path / "TMP",
+            min_map_q=10,
+            min_sample_depth=1,
+            min_merge_distance=50,
+            threads=2,
+        )
+
+
+def test_get_coverage_bed_graphs_reports_merge_timeout(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    bam_file = tmp_path / "sample.bam"
+    bam_file.write_text("", encoding="utf-8")
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    ref_info = tmp_path / "TMP" / "REF_info.txt"
+    ref_info.parent.mkdir(parents=True, exist_ok=True)
+    ref_info.write_text("chr1\t4\n", encoding="utf-8")
+    calls = {"count": 0}
+
+    def _fake_run_pipeline(cmds, outfile=None, **kwargs):
+        del cmds, kwargs
+        calls["count"] += 1
+        if calls["count"] == 1:
+            assert outfile is not None
+            outfile.parent.mkdir(parents=True, exist_ok=True)
+            outfile.write_text("chr1\t0\t4\t5\n", encoding="utf-8")
+            return 0, b"", b""
+        raise PipelineTimeoutError("pipeline timed out")
+
+    monkeypatch.setattr("ipyrad2.assembler.beds.run_pipeline", _fake_run_pipeline)
+
+    with pytest.raises(
+        IPyradError,
+        match=r"Coverage-bed pipeline timed out for sample sample during interval merging",
+    ):
+        get_coverage_bed_graphs(
+            sname="sample",
+            bam_file=bam_file,
+            is_paired=False,
+            reference=reference,
+            tmpdir=tmp_path / "TMP",
+            min_map_q=10,
+            min_sample_depth=1,
+            min_merge_distance=50,
+            threads=2,
+        )
+
+
+def test_get_coverage_bed_graphs_cleans_paired_collate_dir_on_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    bam_file = tmp_path / "sample.bam"
+    bam_file.write_text("", encoding="utf-8")
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    ref_info = tmp_path / "TMP" / "REF_info.txt"
+    ref_info.parent.mkdir(parents=True, exist_ok=True)
+    ref_info.write_text("chr1\t4\n", encoding="utf-8")
+    coll_dir = tmp_path / "TMP" / "sample.collate"
+
+    def _fake_run_pipeline(cmds, outfile=None, **kwargs):
+        del cmds, outfile, kwargs
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("ipyrad2.assembler.beds.run_pipeline", _fake_run_pipeline)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        get_coverage_bed_graphs(
+            sname="sample",
+            bam_file=bam_file,
+            is_paired=True,
+            reference=reference,
+            tmpdir=tmp_path / "TMP",
+            min_map_q=10,
+            min_sample_depth=1,
+            min_merge_distance=50,
+            threads=2,
+        )
+
+    assert not coll_dir.exists()
 
 
 def test_get_bam_header_reference_records_reads_sq_lines(

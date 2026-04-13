@@ -78,8 +78,12 @@ def parse_imap(popfile: Path) -> Dict[str, List[str]]:
             popdat.groupby("pops")}
 
 
-    except (ValueError, IOError):
-        raise IPyradError("  Populations file malformed - {}".format(popfile))
+    except FileNotFoundError as exc:
+        raise IPyradError(f"Populations file not found - {popfile}") from exc
+    except OSError as exc:
+        raise IPyradError(f"Failed to read populations file - {popfile}") from exc
+    except ValueError as exc:
+        raise IPyradError(f"  Populations file malformed - {popfile}") from exc
 
     return popdict
 
