@@ -224,7 +224,7 @@ def run_admixture_method(
     if view.reference is None:
         raise IPyradError(
             "ADMIXTURE export requires the HDF5 `reference` dataset. "
-            "Rebuild the SNP HDF5 with a current assemble or analysis vcf-to-hdf5 run."
+            "Rebuild the SNP HDF5 with a current assemble or `ipyrad2 vcf2hdf5` run."
         )
 
     nsamples = len(extracter.snames)

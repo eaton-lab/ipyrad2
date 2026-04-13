@@ -11,8 +11,8 @@ from .common import RAW_HELP_FORMATTER
 EPILOG = r"""
 Examples
 --------
-$ ipyrad2 analysis vcf-to-hdf5 -d variants.vcf.gz -o OUT/
-$ ipyrad2 analysis vcf-to-hdf5 -d variants.vcf.gz -o OUT/ -n snps -b 20000
+$ ipyrad2 vcf2hdf5 -d variants.vcf.gz -o OUT/
+$ ipyrad2 vcf2hdf5 -d variants.vcf.gz -o OUT/ -n snps -b 20000
 """
 
 
@@ -20,9 +20,9 @@ def _setup_vcf_to_hdf5_subparser(
     subparsers: argparse._SubParsersAction,
     header: str = None,
 ) -> None:
-    """Add `ipyrad2 analysis vcf-to-hdf5` subcommand parser."""
+    """Add `ipyrad2 vcf2hdf5` subcommand parser."""
     tool = subparsers.add_parser(
-        "vcf-to-hdf5",
+        "vcf2hdf5",
         description=header,
         help="Convert a VCF file into an SNP-capable HDF5 database.",
         epilog=EPILOG,
@@ -40,8 +40,8 @@ def _setup_vcf_to_hdf5_subparser(
         help="Prefix name for the converted HDF5 database. [default=snps]",
     )
     core.add_argument(
-        "-o", "--out", metavar="Path", type=Path, default="output-vcf-to-hdf5",
-        help="Directory to write the converted HDF5 database. [default=output-vcf-to-hdf5]",
+        "-o", "--out", metavar="Path", type=Path, default="output-vcf2hdf5",
+        help="Directory to write the converted HDF5 database. [default=output-vcf2hdf5]",
     )
 
     conversion = tool.add_argument_group("Conversion")

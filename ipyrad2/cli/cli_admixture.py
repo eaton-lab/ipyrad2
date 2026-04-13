@@ -11,9 +11,9 @@ from .common import RAW_HELP_FORMATTER
 EPILOG = r"""
 Examples
 --------
-$ ipyrad2 analysis admixture -d snps.hdf5 -o OUT/ -k 2
-$ ipyrad2 analysis admixture -d snps.hdf5 -o OUT/ --k-range 2:5
-$ ipyrad2 analysis admixture -d snps.hdf5 -o OUT/ -k 3 --impute-method none --keep-intermediates
+$ ipyrad2 admixture -d snps.hdf5 -o OUT/ -k 2
+$ ipyrad2 admixture -d snps.hdf5 -o OUT/ --k-range 2:5
+$ ipyrad2 admixture -d snps.hdf5 -o OUT/ -k 3 --impute-method none --keep-intermediates
 """
 
 
@@ -21,7 +21,7 @@ def _setup_admixture_subparser(
     subparsers: argparse._SubParsersAction,
     header: str = None,
 ) -> None:
-    """Add `ipyrad2 analysis admixture` subcommand parser."""
+    """Add `ipyrad2 admixture` subcommand parser."""
     tool = subparsers.add_parser(
         "admixture",
         description=header,
@@ -34,7 +34,7 @@ def _setup_admixture_subparser(
     core = tool.add_argument_group("Core inputs")
     core.add_argument(
         "-d", "--data", metavar="Path", type=Path, required=True,
-        help="Path to an SNP-capable HDF5 file. Convert VCF first with `analysis vcf-to-hdf5`.",
+        help="Path to an SNP-capable HDF5 file. Convert VCF first with `ipyrad2 vcf2hdf5`.",
     )
     core.add_argument(
         "-n", "--name", metavar="str", type=str, default="admixture",

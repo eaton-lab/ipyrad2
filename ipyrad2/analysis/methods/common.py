@@ -58,8 +58,8 @@ def require_hdf5_input(data: Path | str, tool_name: str) -> Path:
     text = str(path)
     if text.endswith((".vcf", ".vcf.gz")):
         raise IPyradError(
-            f"`ipyrad2 analysis {tool_name}` requires an SNP-capable HDF5 input. "
-            "Convert VCF first with `ipyrad2 analysis vcf-to-hdf5`."
+            f"`ipyrad2 {tool_name}` requires an SNP-capable HDF5 input. "
+            "Convert VCF first with `ipyrad2 vcf2hdf5`."
         )
     return path
 
@@ -441,9 +441,14 @@ def aggregate_sample_data_summaries(summaries: Iterable[pd.DataFrame]) -> pd.Dat
     )
 
 
-def write_sample_data_summary(path: Path, data: pd.DataFrame) -> None:
+def write_sample_data_summary(
+    path: Path,
+    data: pd.DataFrame,
+    *,
+    float_format: str | None = None,
+) -> None:
     """Write the shared per-sample missingness/imputation summary table."""
-    data.to_csv(path, sep="\t", index=False)
+    data.to_csv(path, sep="\t", index=False, float_format=float_format)
 
 
 def write_membership(path: Path, samples: list[str], membership: np.ndarray) -> None:
@@ -501,6 +506,7 @@ def write_stats_file(
     impute_method: str | None,
     summary: Dict[str, object],
     filter_stats: bool = True,
+    sample_reporting: str = "names",
 ) -> None:
     """Write a human-readable stats file with shared SNP-extracter context."""
     with open(path, "w", encoding="utf-8") as out:
@@ -508,10 +514,23 @@ def write_stats_file(
         out.write("-------\n")
         out.write(f"tool: {tool}\n")
         out.write(f"infile: {extracter.data}\n")
-        out.write(f"samples_selected_initial: {extracter.initial_snames}\n")
-        out.write(f"samples_dropped_by_max_missing: {extracter.dropped_samples_by_missing}\n")
-        out.write(f"samples_final: {extracter.snames}\n")
-        out.write(f"imap: {extracter.imap}\n")
+        if sample_reporting == "names":
+            out.write(f"samples_selected_initial: {extracter.initial_snames}\n")
+            out.write(
+                f"samples_dropped_by_max_missing: {extracter.dropped_samples_by_missing}\n"
+            )
+            out.write(f"samples_final: {extracter.snames}\n")
+            out.write(f"imap: {extracter.imap}\n")
+        elif sample_reporting == "counts":
+            out.write(f"samples_selected_initial_count: {len(extracter.initial_snames)}\n")
+            out.write(
+                "samples_dropped_by_max_missing_count: "
+                f"{len(extracter.dropped_samples_by_missing)}\n"
+            )
+            out.write(f"samples_final_count: {len(extracter.snames)}\n")
+            out.write(f"population_count: {len(extracter.imap)}\n")
+        else:
+            raise IPyradError(f"Unsupported stats sample reporting mode: {sample_reporting}")
         out.write(f"minmap: {extracter.minmap}\n")
         out.write(f"include_reference: {extracter.include_reference}\n")
         out.write(f"subsample: {subsample}\n")
@@ -519,6 +538,12 @@ def write_stats_file(
         out.write(f"impute_method: {normalize_impute_method(impute_method)}\n")
         for key, value in summary.items():
             out.write(f"{key}: {value}\n")
+        if sample_reporting == "counts":
+            out.write("\n")
+            out.write("Population sample counts\n")
+            out.write("------------------------\n")
+            for group, names in extracter.imap.items():
+                out.write(f"{group}: {len(names)}\n")
         if filter_stats:
             out.write("\n")
             out.write("Filter statistics\n")

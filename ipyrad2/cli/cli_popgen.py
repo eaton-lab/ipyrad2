@@ -12,12 +12,12 @@ from .common import RAW_HELP_FORMATTER
 EPILOG = r"""
 Examples
 --------
-$ ipyrad2 analysis popgen -d assembly.hdf5 -o OUT/
-$ ipyrad2 analysis popgen -d assembly.hdf5 -o OUT/ --stats pi,dxy,fst,tajima_d,theta_w,fis,fit
-$ ipyrad2 analysis popgen -d assembly.hdf5 -o OUT/ --stats pi,fst,fis,fit --window-size 100000 --step-size 50000
-$ ipyrad2 analysis popgen -d assembly.hdf5 -o OUT/ --stats pi,fst --loci-per-window 25 --locus-step 10
-$ ipyrad2 analysis popgen -d snps.hdf5 -o OUT/ --stats fst,heterozygosity,fis,fit,sfs --subsample-unlinked --seed 7
-$ ipyrad2 analysis popgen -d assembly.hdf5 -o OUT/ -i POPS.txt -g MINMAP.txt
+$ ipyrad2 popgen -d assembly.hdf5 -o OUT/
+$ ipyrad2 popgen -d assembly.hdf5 -o OUT/ --stats pi,dxy,fst,tajima_d,theta_w,fis,fit
+$ ipyrad2 popgen -d assembly.hdf5 -o OUT/ --stats pi,fst,fis,fit --window-size 100000 --step-size 50000
+$ ipyrad2 popgen -d assembly.hdf5 -o OUT/ --stats pi,fst --loci-per-window 25 --locus-step 10
+$ ipyrad2 popgen -d snps.hdf5 -o OUT/ --stats fst,heterozygosity,fis,fit,sfs --subsample-unlinked --seed 7
+$ ipyrad2 popgen -d assembly.hdf5 -o OUT/ -i POPS.txt -g MINMAP.txt
 """
 
 SUPPORTED_STATS = ",".join(ORDERED_STATS)
@@ -27,7 +27,7 @@ def _setup_popgen_subparser(
     subparsers: argparse._SubParsersAction,
     header: str = None,
 ) -> None:
-    """Add `ipyrad2 analysis popgen` subcommand parser."""
+    """Add `ipyrad2 popgen` subcommand parser."""
     tool = subparsers.add_parser(
         "popgen",
         description=header,

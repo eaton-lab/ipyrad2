@@ -1,4 +1,3 @@
-from pathlib import Path
 from types import SimpleNamespace
 
 from loguru import logger
@@ -53,11 +52,11 @@ def test_format_logged_command_truncates_assemble_rad_and_wgs_lists_independentl
 
 
 def test_format_logged_command_does_not_truncate_analysis_data_arg() -> None:
-    argv = ["analysis", "wex", "-d", "seqs.hdf5", "-o", "OUT", "-n", "TEST"]
+    argv = ["wex", "-d", "seqs.hdf5", "-o", "OUT", "-n", "TEST"]
 
     result = format_logged_command(argv)
 
-    assert result == "ipyrad2 analysis wex -d seqs.hdf5 -o OUT -n TEST"
+    assert result == "ipyrad2 wex -d seqs.hdf5 -o OUT -n TEST"
 
 
 def test_run_subcommand_logs_truncated_command_for_trim(monkeypatch) -> None:

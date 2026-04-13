@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 
-"""Analysis command-line entrypoints."""
+"""Top-level export and analysis command registration and dispatch."""
+
+from __future__ import annotations
 
 import argparse
 import sys
@@ -29,6 +31,7 @@ from ..analysis.methods.dapc import run_dapc_method
 from ..analysis.methods.admixture import run_admixture_method
 from ..analysis.methods.popgen import run_popgen_method
 from ..analysis.methods.bpp import run_bpp_method
+from ..utils.exceptions import IPyradError
 from ipyrad2 import __version__ as VERSION
 
 
@@ -39,86 +42,123 @@ Interactive assembly and analysis of RAD-seq data
 -------------------------------------------------------------\
 """
 
-DESCRIPTION = "ipyrad2 analysis command line. Select a positional subcommand:"
+ANALYSIS_TOOL_NAMES = (
+    "wex",
+    "lex",
+    "snpex",
+    "vcf2hdf5",
+    "pca",
+    "snmf",
+    "dapc",
+    "admixture",
+    "popgen",
+    "bpp",
+)
+
+RESERVED_TOOL_NAMES = (
+    "baba",
+    "treeslider",
+)
 
 
-EPILOG = r"""
-Examples
---------
-$ ipyrad2 analysis wex -d assembly.hdf5 --print-scaffold-table
-$ ipyrad2 analysis wex -d assembly.hdf5 -o OUT/ -n TEST -m 10 -w Chr1
-$ ipyrad2 analysis lex -d assembly.hdf5 -o OUT/ -N 100 -L 150
-$ ipyrad2 analysis snpex -d assembly.hdf5 -o SNP_OUT/ -n SNPSET
-$ ipyrad2 analysis vcf-to-hdf5 -d variants.vcf.gz -o SNP_HDF5/
-$ ipyrad2 analysis pca -d snps.hdf5 -o PCA_OUT/
-$ ipyrad2 analysis snmf -d snps.hdf5 -o SNMF_OUT/ -k 2
-$ ipyrad2 analysis dapc -d snps.hdf5 -o DAPC_OUT/ --k-range 2:5
-$ ipyrad2 analysis admixture -d snps.hdf5 -o ADMIX_OUT/ --k-range 2:5
-$ ipyrad2 analysis popgen -d assembly.hdf5 -o POPGEN_OUT/
-$ ipyrad2 analysis bpp -d assembly.hdf5 -o BPP_OUT/ -n demo --tree species.nwk -i IMAP.txt -g MINMAP.txt -N 500 -L 100 --write-only
-"""
-
-
-def _setup_analysis_subparser(subparser: argparse._SubParsersAction, header: str = None) -> None:
-    """Add `ipyrad2 analysis` subcommand parser."""
-    analysis_parser = subparser.add_parser(
-        "analysis",
-        #description=f"{HEADER}\n{DESCRIPTION}",
+def _setup_reserved_tool_subparser(
+    subparsers: argparse._SubParsersAction,
+    *,
+    name: str,
+    help_text: str,
+    header: str,
+) -> None:
+    """Add one reserved top-level command placeholder."""
+    tool = subparsers.add_parser(
+        name,
         description=header,
-        help="Utilities for downstream analysis",
-        formatter_class=RAW_HELP_FORMATTER)
+        help=help_text,
+        epilog=(
+            "Reserved command placeholder.\n"
+            "This command is not implemented yet."
+        ),
+        formatter_class=RAW_HELP_FORMATTER,
+        add_help=False,
+    )
+    logging = tool.add_argument_group("Logging")
+    logging.add_argument(
+        "-h", "--help", action="help",
+        help="Show this help message and exit.",
+    )
 
-    analysis_subparser = analysis_parser.add_subparsers(
-        dest="tool",
-        required=True)
+
+def _setup_analysis_tool_subparsers(
+    subparsers: argparse._SubParsersAction,
+    header: str = None,
+) -> None:
+    """Add top-level export and analysis subcommand parsers."""
+    header = HEADER if header is None else header
     _setup_wex_subparser(
-        analysis_subparser,
-        f"{HEADER}\nipyrad2 analysis wex: extract one alignment from selected genomic windows",
+        subparsers,
+        f"{header}\nipyrad2 wex: extract one alignment from selected genomic windows",
     )
     _setup_lex_subparser(
-        analysis_subparser,
-        f"{HEADER}\nipyrad2 analysis lex: extract delimited loci from HDF5 database",
+        subparsers,
+        f"{header}\nipyrad2 lex: extract delimited loci from HDF5 database",
     )
     _setup_snpex_subparser(
-        analysis_subparser,
-        f"{HEADER}\nipyrad2 analysis snpex: extract filtered SNP matrices from HDF5 database",
+        subparsers,
+        f"{header}\nipyrad2 snpex: extract filtered SNP matrices from HDF5 database",
     )
     _setup_vcf_to_hdf5_subparser(
-        analysis_subparser,
-        f"{HEADER}\nipyrad2 analysis vcf-to-hdf5: convert VCF to SNP-capable HDF5 database",
+        subparsers,
+        f"{header}\nipyrad2 vcf2hdf5: convert VCF to SNP-capable HDF5 database",
     )
     _setup_pca_subparser(
-        analysis_subparser,
-        f"{HEADER}\nipyrad2 analysis pca: run PCA, t-SNE, or UMAP on SNP HDF5 data",
+        subparsers,
+        f"{header}\nipyrad2 pca: run PCA, t-SNE, or UMAP on SNP HDF5 data",
     )
     _setup_snmf_subparser(
-        analysis_subparser,
-        f"{HEADER}\nipyrad2 analysis snmf: run sNMF-style clustering on SNP HDF5 data",
+        subparsers,
+        f"{header}\nipyrad2 snmf: run sNMF-style clustering on SNP HDF5 data",
     )
     _setup_dapc_subparser(
-        analysis_subparser,
-        f"{HEADER}\nipyrad2 analysis dapc: run DAPC-style clustering on SNP HDF5 data",
+        subparsers,
+        f"{header}\nipyrad2 dapc: run DAPC-style clustering on SNP HDF5 data",
     )
     _setup_admixture_subparser(
-        analysis_subparser,
-        f"{HEADER}\nipyrad2 analysis admixture: run external ADMIXTURE on SNP HDF5 data",
+        subparsers,
+        f"{header}\nipyrad2 admixture: run external ADMIXTURE on SNP HDF5 data",
     )
     _setup_popgen_subparser(
-        analysis_subparser,
-        f"{HEADER}\nipyrad2 analysis popgen: compute genome-wide population-genetic statistics",
+        subparsers,
+        f"{header}\nipyrad2 popgen: compute genome-wide population-genetic statistics",
     )
     _setup_bpp_subparser(
-        analysis_subparser,
-        f"{HEADER}\nipyrad2 analysis bpp: stage one BPP analysis from sequence HDF5 data",
+        subparsers,
+        f"{header}\nipyrad2 bpp: stage one BPP analysis from sequence HDF5 data",
+    )
+    _setup_reserved_tool_subparser(
+        subparsers,
+        name="baba",
+        help_text="Reserved ABBA/BABA admixture metrics command.",
+        header=f"{header}\nipyrad2 baba: reserved ABBA/BABA admixture metrics command",
+    )
+    _setup_reserved_tool_subparser(
+        subparsers,
+        name="treeslider",
+        help_text="Reserved per-locus or per-window gene-tree command.",
+        header=f"{header}\nipyrad2 treeslider: reserved per-locus or per-window gene-tree command",
     )
 
 
-def run_analysis_tool(args):
+def _tool_name(args) -> str:
+    """Return the active top-level export or analysis command name."""
+    return getattr(args, "tool", args.subcommand)
 
-    # WEX: --------------------------------------------------------
-    if args.tool == "wex":
+
+def run_analysis_tool(args, _exit: bool = True) -> None:
+    """Dispatch one top-level export or analysis command."""
+    tool = _tool_name(args)
+
+    if tool == "wex":
         logger.info("-------------------------------------------------------")
-        logger.info("----- ipyrad2 analysis wex: extract alignments from windows -----")
+        logger.info("----- ipyrad2 wex: extract alignments from windows -----")
         logger.info("-------------------------------------------------------")
         logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
         run_window_extracter(
@@ -137,11 +177,13 @@ def run_analysis_tool(args):
             stdout=args.stdout,
             force=args.force,
         )
-        sys.exit(0)
+        if _exit:
+            sys.exit(0)
+        return
 
-    if args.tool == "lex":
+    if tool == "lex":
         logger.info("-------------------------------------------------------")
-        logger.info("---- ipyrad2 analysis lex: extract delimited loci from HDF5 database ----")
+        logger.info("---- ipyrad2 lex: extract delimited loci from HDF5 database ----")
         logger.info("-------------------------------------------------------")
         logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
         run_locus_extracter(
@@ -162,12 +204,13 @@ def run_analysis_tool(args):
             stdout=args.stdout,
             force=args.force,
         )
+        if _exit:
+            sys.exit(0)
+        return
 
-        sys.exit(0)
-
-    if args.tool == "snpex":
+    if tool == "snpex":
         logger.info("------------------------------------------------------------")
-        logger.info("---- ipyrad2 analysis snpex: extract filtered SNP matrices ----")
+        logger.info("---- ipyrad2 snpex: extract filtered SNP matrices ----")
         logger.info("------------------------------------------------------------")
         logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
         run_snps_extracter(
@@ -194,12 +237,14 @@ def run_analysis_tool(args):
             write_eems=args.eems,
             impute_method=args.impute_method,
         )
-        sys.exit(0)
+        if _exit:
+            sys.exit(0)
+        return
 
-    if args.tool == "vcf-to-hdf5":
-        logger.info("-----------------------------------------------------------")
-        logger.info("---- ipyrad2 analysis vcf-to-hdf5: convert VCF to HDF5 ----")
-        logger.info("-----------------------------------------------------------")
+    if tool == "vcf2hdf5":
+        logger.info("--------------------------------------------------")
+        logger.info("---- ipyrad2 vcf2hdf5: convert VCF to HDF5 ----")
+        logger.info("--------------------------------------------------")
         logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
         run_vcf_to_hdf5(
             data=args.data,
@@ -208,12 +253,14 @@ def run_analysis_tool(args):
             ld_block_size=args.ld_block_size,
             force=args.force,
         )
-        sys.exit(0)
+        if _exit:
+            sys.exit(0)
+        return
 
-    if args.tool == "pca":
-        logger.info("----------------------------------------------------------")
-        logger.info("---- ipyrad2 analysis pca: numerical PCA-family methods ----")
-        logger.info("----------------------------------------------------------")
+    if tool == "pca":
+        logger.info("-------------------------------------------------")
+        logger.info("---- ipyrad2 pca: numerical PCA-family methods ----")
+        logger.info("-------------------------------------------------")
         logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
         run_pca_method(
             data=args.data,
@@ -242,12 +289,14 @@ def run_analysis_tool(args):
             force=args.force,
             log_level=args.log_level,
         )
-        sys.exit(0)
+        if _exit:
+            sys.exit(0)
+        return
 
-    if args.tool == "snmf":
-        logger.info("------------------------------------------------------------")
-        logger.info("---- ipyrad2 analysis snmf: numerical clustering on SNPs ----")
-        logger.info("------------------------------------------------------------")
+    if tool == "snmf":
+        logger.info("-------------------------------------------------------")
+        logger.info("---- ipyrad2 snmf: numerical clustering on SNPs ----")
+        logger.info("-------------------------------------------------------")
         logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
         run_snmf_method(
             data=args.data,
@@ -275,12 +324,14 @@ def run_analysis_tool(args):
             cv_holdout=args.cv_holdout,
             log_level=args.log_level,
         )
-        sys.exit(0)
+        if _exit:
+            sys.exit(0)
+        return
 
-    if args.tool == "dapc":
-        logger.info("------------------------------------------------------------")
-        logger.info("---- ipyrad2 analysis dapc: numerical clustering on SNPs ----")
-        logger.info("------------------------------------------------------------")
+    if tool == "dapc":
+        logger.info("-------------------------------------------------------")
+        logger.info("---- ipyrad2 dapc: numerical clustering on SNPs ----")
+        logger.info("-------------------------------------------------------")
         logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
         run_dapc_method(
             data=args.data,
@@ -303,12 +354,14 @@ def run_analysis_tool(args):
             force=args.force,
             log_level=args.log_level,
         )
-        sys.exit(0)
+        if _exit:
+            sys.exit(0)
+        return
 
-    if args.tool == "admixture":
-        logger.info("----------------------------------------------------------------")
-        logger.info("---- ipyrad2 analysis admixture: external clustering on SNPs ----")
-        logger.info("----------------------------------------------------------------")
+    if tool == "admixture":
+        logger.info("-----------------------------------------------------------")
+        logger.info("---- ipyrad2 admixture: external clustering on SNPs ----")
+        logger.info("-----------------------------------------------------------")
         logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
         run_admixture_method(
             data=args.data,
@@ -332,12 +385,14 @@ def run_analysis_tool(args):
             force=args.force,
             log_level=args.log_level,
         )
-        sys.exit(0)
+        if _exit:
+            sys.exit(0)
+        return
 
-    if args.tool == "popgen":
-        logger.info("------------------------------------------------------------")
-        logger.info("---- ipyrad2 analysis popgen: genome-wide population genetics ----")
-        logger.info("------------------------------------------------------------")
+    if tool == "popgen":
+        logger.info("-------------------------------------------------------")
+        logger.info("---- ipyrad2 popgen: genome-wide population genetics ----")
+        logger.info("-------------------------------------------------------")
         logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
         run_popgen_method(
             data=args.data,
@@ -361,12 +416,14 @@ def run_analysis_tool(args):
             force=args.force,
             log_level=args.log_level,
         )
-        sys.exit(0)
+        if _exit:
+            sys.exit(0)
+        return
 
-    if args.tool == "bpp":
-        logger.info("------------------------------------------------------------")
-        logger.info("---- ipyrad2 analysis bpp: single-run BPP staging and execution ----")
-        logger.info("------------------------------------------------------------")
+    if tool == "bpp":
+        logger.info("-------------------------------------------------------")
+        logger.info("---- ipyrad2 bpp: single-run BPP staging and execution ----")
+        logger.info("-------------------------------------------------------")
         logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
         run_bpp_method(
             data=args.data,
@@ -398,4 +455,11 @@ def run_analysis_tool(args):
             force=args.force,
             log_level=args.log_level,
         )
-        sys.exit(0)
+        if _exit:
+            sys.exit(0)
+        return
+
+    if tool in RESERVED_TOOL_NAMES:
+        raise IPyradError(f"`ipyrad2 {tool}` is reserved but not implemented yet.")
+
+    raise IPyradError(f"Unknown export or analysis command: {tool}")

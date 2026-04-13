@@ -11,14 +11,14 @@ from .common import RAW_HELP_FORMATTER
 EPILOG = r"""
 Examples
 --------
-$ ipyrad2 analysis wex -d HDF5 --print-scaffold-table
-$ ipyrad2 analysis wex -d HDF5 -o OUT/
-$ ipyrad2 analysis wex -d HDF5 -o OUT/ -n TEST -m 10 -w Chr1
-$ ipyrad2 analysis wex -d HDF5 -o OUT/ -n TEST -m 10 -w Chr1 Chr2 Chr3
-$ ipyrad2 analysis wex -d HDF5 -o OUT/ -n TEST -m 10 -w Chr[1-3]
-$ ipyrad2 analysis wex -d HDF5 -o OUT/ -w Chr1:1-1000
-$ ipyrad2 analysis wex -d HDF5 -o OUT/ -w windows.bed -O fa
-$ ipyrad2 analysis wex -d HDF5 -o OUT/ -w windows.bed -i POPs.txt -g MINs.txt
+$ ipyrad2 wex -d HDF5 --print-scaffold-table
+$ ipyrad2 wex -d HDF5 -o OUT/
+$ ipyrad2 wex -d HDF5 -o OUT/ -n TEST -m 10 -w Chr1
+$ ipyrad2 wex -d HDF5 -o OUT/ -n TEST -m 10 -w Chr1 Chr2 Chr3
+$ ipyrad2 wex -d HDF5 -o OUT/ -n TEST -m 10 -w Chr[1-3]
+$ ipyrad2 wex -d HDF5 -o OUT/ -w Chr1:1-1000
+$ ipyrad2 wex -d HDF5 -o OUT/ -w windows.bed -O fa
+$ ipyrad2 wex -d HDF5 -o OUT/ -w windows.bed -i POPs.txt -g MINs.txt
 """
 
 
@@ -26,7 +26,7 @@ def _setup_wex_subparser(
     subparsers: argparse._SubParsersAction,
     header: str = None,
 ) -> None:
-    """Add `ipyrad2 analysis wex` subcommand parser."""
+    """Add `ipyrad2 wex` subcommand parser."""
     tool = subparsers.add_parser(
         "wex",
         description=header,
