@@ -175,7 +175,7 @@ def test_unmatched_r1_r2_tokens_are_quiet_single_end(
     assert logger.warnings == []
 
 
-def test_low_complete_pair_ratio_warns_and_falls_back(
+def test_low_complete_pair_ratio_is_quiet_and_falls_back(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -200,10 +200,10 @@ def test_low_complete_pair_ratio_warns_and_falls_back(
         "sample_R1": (fastqs[0], None),
         "sample_R2": (fastqs[1], None),
     }
-    assert any("complete auto-detected pairs cover 2/5" in warning for warning in logger.warnings)
+    assert logger.warnings == []
 
 
-def test_majority_complete_split_pairs_warn_and_fall_back_to_single_end(
+def test_majority_complete_split_pairs_are_quiet_and_fall_back_to_single_end(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -222,10 +222,10 @@ def test_majority_complete_split_pairs_warn_and_fall_back_to_single_end(
         "sample_R1_002-sub": (fastq1b, None),
         "sample_R2_001-sub": (fastq2a, None),
     }
-    assert any("complete auto-detected pairs cover 2/3" in warning for warning in logger.warnings)
+    assert logger.warnings == []
 
 
-def test_mixed_paired_end_and_unrecognized_layout_warns_and_falls_back(
+def test_mixed_paired_end_and_unrecognized_layout_is_quiet_below_warning_threshold(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -244,8 +244,36 @@ def test_mixed_paired_end_and_unrecognized_layout_warns_and_falls_back(
         "sample_R2": (fastq2, None),
         "sample_extra": (weird, None),
     }
+    assert logger.warnings == []
+
+
+def test_high_complete_pair_ratio_still_warns_and_falls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logger = _StubLogger()
+    monkeypatch.setattr(names_module, "logger", logger)
+    fastqs = [
+        tmp_path / "sampleA_R1.fastq.gz",
+        tmp_path / "sampleA_R2.fastq.gz",
+        tmp_path / "sampleB_R1.fastq.gz",
+        tmp_path / "sampleB_R2.fastq.gz",
+        tmp_path / "weird.fastq.gz",
+    ]
+    for fastq in fastqs:
+        fastq.touch()
+
+    result = names_module.get_name_to_fastq_dict(fastqs, None, None)
+
+    assert result == {
+        "sampleA_R1": (fastqs[0], None),
+        "sampleA_R2": (fastqs[1], None),
+        "sampleB_R1": (fastqs[2], None),
+        "sampleB_R2": (fastqs[3], None),
+        "weird": (fastqs[4], None),
+    }
     assert any("unrecognized alongside paired-end-looking files" in warning for warning in logger.warnings)
-    assert any("complete auto-detected pairs cover 2/3" in warning for warning in logger.warnings)
+    assert any("complete auto-detected pairs cover 4/5" in warning for warning in logger.warnings)
 
 
 def test_delim_parsing_raises_on_ambiguous_non_paired_groups(tmp_path: Path) -> None:

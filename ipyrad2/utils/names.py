@@ -69,6 +69,8 @@ LITERAL_MATE_PATTERNS = (
     ),
 )
 
+PAIR_WARNING_MIN_COMPLETE_FRACTION = 0.8
+
 
 def expand_path(p: str | Path) -> Path:
     """Returns an absolute path after expanding ~ and env variables"""
@@ -356,7 +358,7 @@ def _warn_incomplete_pair_evidence(
     fastqs: List[Path],
     evidences,
 ) -> None:
-    """Warn for incomplete pairing only when at least one complete pair exists."""
+    """Warn for incomplete pairing only when complete-pair coverage is strong."""
     scored = []
     for groups, parsed_count, parser, source in evidences:
         complete_pair_files = _count_complete_pair_files(groups, parser)
@@ -370,6 +372,8 @@ def _warn_incomplete_pair_evidence(
         scored,
         key=lambda item: (item[0], item[1]),
     )
+    if (complete_pair_files / len(fastqs)) < PAIR_WARNING_MIN_COMPLETE_FRACTION:
+        return
     message = _paired_name_error_message(
         fastqs=fastqs,
         groups=groups,
