@@ -45,7 +45,6 @@ from .variants import (
     load_variant_postfilter_stats,
     summarize_variant_support_by_sample_type,
     get_vcf_with_indels_resolved,
-    apply_sample_region_masks_to_resolved_vcf,
     compact_resolved_vcf_to_final_loci_contigs,
     load_variant_resolution_stats,
     write_vcf,
@@ -1062,11 +1061,6 @@ def _write_consensus_and_outputs(
     logger.info("writing variants file (.vcf.gz)")
     with profile_stage("final VCF writing"):
         compact_resolved_vcf_to_final_loci_contigs(tmpdir, reference, final_loci_bed)
-        final_vcf = write_vcf(name, outdir, tmpdir, threads)
-
-        # Consensus already sees the merged per-sample BED masks directly, so keep
-        # the larger resolved VCF untouched during the memory-heavy middle stages.
-        # Apply the per-sample genotype masking only once here on the final SNP VCF.
         final_vcf_masks = {}
         if snames:
             jobs = {
@@ -1077,12 +1071,17 @@ def _write_consensus_and_outputs(
                 jobs,
                 log_level,
                 final_vcf_mask_workers,
-                msg="Merging final VCF masks",
+                msg="Merging final VCF mask BEDs",
             )
-        if final_vcf_masks:
-            apply_sample_region_masks_to_resolved_vcf(
-                tmpdir, final_vcf_masks, vcf_gz=final_vcf
-            )
+        final_vcf = write_vcf(
+            name,
+            outdir,
+            tmpdir,
+            threads,
+            sample_masks=final_vcf_masks,
+            cores=cores,
+            log_level=log_level,
+        )
 
     mixed_run_summary: dict[str, int] | None = None
     rad_samples = sorted(rad_samples or [])
@@ -1255,6 +1254,7 @@ def run_assembler(
         )
 
     # Load the RAD BAMs that define loci when no explicit loci BED is supplied.
+    logger.info("loading sample meta-data")
     bam_dict, rad_renamed = _collect_named_bams(expanded_rad_bams, rename_map)
     if bam_dict:
         logger.info(f"loaded {len(bam_dict)} RAD samples")

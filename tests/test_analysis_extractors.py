@@ -217,12 +217,27 @@ def test_wex_phy_output_writes_stats_and_keeps_filtered_rows_aligned(
     assert "# Filtering Summary" in stats
     assert "# Alignment Summary" in stats
     assert "# Sample Summary" in stats
-    assert filtering["samples_dropped_by_max_missing"] == "s2"
+    assert filtering["samples_dropped_by_max_missing"] == "1"
     assert alignment["nvariants_in_windows_after_filtering"] == "1"
     assert sample_rows == [
-        {"sample": "s1", "population": "all", "percent_missing": "0.000"},
-        {"sample": "s2", "population": "all", "percent_missing": "100.000"},
-        {"sample": "s3", "population": "all", "percent_missing": "0.000"},
+        {
+            "sample": "s1",
+            "population": "all",
+            "percent_missing": "0.000",
+            "dropped_by_max_missing": "no",
+        },
+        {
+            "sample": "s2",
+            "population": "all",
+            "percent_missing": "100.000",
+            "dropped_by_max_missing": "yes",
+        },
+        {
+            "sample": "s3",
+            "population": "all",
+            "percent_missing": "0.000",
+            "dropped_by_max_missing": "no",
+        },
     ]
 
 
@@ -442,10 +457,26 @@ def test_wex_stats_report_uses_imap_population_labels_and_truncates_window_previ
     assert extract["selected_windows_preview"].endswith("(12 total)")
     assert filtering["populations"] == "barbeyi, geyeri"
     assert filtering["min_sample_coverage_filter"] == "barbeyi=1, geyeri=1"
+    assert filtering["samples_dropped_by_max_missing"] == "0"
     assert sample_rows == [
-        {"sample": "barbeyi-01", "population": "barbeyi", "percent_missing": "0.000"},
-        {"sample": "barbeyi-02", "population": "barbeyi", "percent_missing": "100.000"},
-        {"sample": "geyeri-01", "population": "geyeri", "percent_missing": "0.000"},
+        {
+            "sample": "barbeyi-01",
+            "population": "barbeyi",
+            "percent_missing": "0.000",
+            "dropped_by_max_missing": "no",
+        },
+        {
+            "sample": "barbeyi-02",
+            "population": "barbeyi",
+            "percent_missing": "100.000",
+            "dropped_by_max_missing": "no",
+        },
+        {
+            "sample": "geyeri-01",
+            "population": "geyeri",
+            "percent_missing": "0.000",
+            "dropped_by_max_missing": "no",
+        },
     ]
 
 
