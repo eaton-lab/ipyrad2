@@ -11,61 +11,92 @@ from loguru import logger
 
 from ..utils.exceptions import IPyradError
 from ..utils.parallel import run_pipeline
+from ..utils.parallel import stream_pipeline_lines
 
 
 BIN = Path(sys.prefix) / "bin"
 BIN_SAM = str(BIN / "samtools")
 
 _PRIMARY_MAPPED_EXCLUDE_FLAGS = 0x904
-_PRIMARY_MAPPED_SINGLE_EXCLUDE_FLAGS = 0x905
+_LAYOUT_PROBE_READ_LIMIT = 1000
 
 
-def _count_bam_records(
+def _iter_bam_view_lines(
     bam_file: Path,
     *,
-    require_flags: int | None = None,
     exclude_flags: int | None = None,
-) -> int:
-    """Return one `samtools view -c` count for a BAM under the requested flag masks."""
-    cmd = [BIN_SAM, "view", "-c"]
+):
+    """Yield `samtools view` output lines for one BAM under optional exclusions."""
+    cmd = [BIN_SAM, "view"]
     if exclude_flags:
         cmd.extend(["-F", hex(int(exclude_flags))])
-    if require_flags:
-        cmd.extend(["-f", hex(int(require_flags))])
     cmd.append(str(bam_file))
-    _, out, _ = run_pipeline([cmd])
-    if isinstance(out, bytes):
-        out = out.decode()
-    text = out.strip() if isinstance(out, str) else str(out).strip()
-    return int(text or "0")
+    return stream_pipeline_lines([cmd])
+
+
+def _parse_sam_flag(line: str, bam_file: Path) -> int:
+    """Return the FLAG column from one SAM alignment line."""
+    fields = line.split("\t", 2)
+    if len(fields) < 2:
+        raise IPyradError(f"Could not parse BAM record while probing layout: {bam_file}")
+    try:
+        return int(fields[1])
+    except ValueError as exc:
+        raise IPyradError(f"Could not parse BAM FLAG while probing layout: {bam_file}") from exc
+
+
+def _sample_primary_mapped_layout(bam_file: Path) -> str | None:
+    """Classify layout from the first sampled primary mapped reads, if any."""
+    saw_paired = False
+    saw_single = False
+    sampled = 0
+    with _iter_bam_view_lines(
+        bam_file,
+        exclude_flags=_PRIMARY_MAPPED_EXCLUDE_FLAGS,
+    ) as lines:
+        for line in lines:
+            flag = _parse_sam_flag(line, bam_file)
+            if flag & 0x1:
+                saw_paired = True
+            else:
+                saw_single = True
+            sampled += 1
+            if saw_paired and saw_single:
+                raise IPyradError(
+                    "BAM contains mixed single-end and paired-end primary mapped reads; "
+                    "mixed layouts are supported across samples, not within one BAM: "
+                    f"{bam_file}"
+                )
+            if sampled >= _LAYOUT_PROBE_READ_LIMIT:
+                break
+
+    if sampled == 0:
+        return None
+    return "paired" if saw_paired else "single"
+
+
+def _sample_any_paired_record(bam_file: Path) -> bool:
+    """Return True when any sampled alignment record advertises paired layout."""
+    sampled = 0
+    with _iter_bam_view_lines(bam_file) as lines:
+        for line in lines:
+            if _parse_sam_flag(line, bam_file) & 0x1:
+                return True
+            sampled += 1
+            if sampled >= _LAYOUT_PROBE_READ_LIMIT:
+                break
+    return False
 
 
 def classify_bam_layout(bam_file: Path) -> str:
-    """Return `paired` or `single` for one BAM, rejecting hybrid primary layouts."""
-    paired_primary = _count_bam_records(
-        bam_file,
-        require_flags=0x1,
-        exclude_flags=_PRIMARY_MAPPED_EXCLUDE_FLAGS,
-    )
-    single_primary = _count_bam_records(
-        bam_file,
-        exclude_flags=_PRIMARY_MAPPED_SINGLE_EXCLUDE_FLAGS,
-    )
-    if paired_primary and single_primary:
-        raise IPyradError(
-            "BAM contains mixed single-end and paired-end primary mapped reads; "
-            "mixed layouts are supported across samples, not within one BAM: "
-            f"{bam_file}"
-        )
-    if paired_primary:
-        return "paired"
-    if single_primary:
-        return "single"
+    """Return `paired` or `single` for one BAM from a sampled read probe."""
+    primary_layout = _sample_primary_mapped_layout(bam_file)
+    if primary_layout is not None:
+        return primary_layout
 
     # Preserve legacy behavior for pathological/empty inputs where no primary
     # mapped reads are present by falling back to the broader paired-read probe.
-    any_paired = _count_bam_records(bam_file, require_flags=0x1)
-    return "paired" if any_paired else "single"
+    return "paired" if _sample_any_paired_record(bam_file) else "single"
 
 
 def bam_appears_paired(bam_file: Path) -> bool:

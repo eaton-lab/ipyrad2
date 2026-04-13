@@ -24,6 +24,7 @@ from ipyrad2.assembler.hdf5_utils import get_fai_values
 from ipyrad2.assembler.beds import BIN_BED
 from ipyrad2.assembler.beds import get_across_sample_loci_bed
 from ipyrad2.assembler.beds import get_coverage_bed_graphs
+from ipyrad2.assembler.beds import get_names_from_bams
 from ipyrad2.assembler.beds import get_sample_depth_stats_in_final_loci
 from ipyrad2.assembler.read_filters import BIN_SAM
 from ipyrad2.assembler.read_filters import bam_appears_paired
@@ -124,28 +125,64 @@ def test_build_mapped_read_filter_expr_ignores_pair_filters_for_single_end() -> 
     assert expr is None
 
 
-def test_classify_bam_layout_uses_primary_mapped_counts(monkeypatch, tmp_path: Path) -> None:
+def test_get_names_from_bams_batches_lookup(monkeypatch, tmp_path: Path) -> None:
+    bam1 = tmp_path / "a.bam"
+    bam2 = tmp_path / "b.bam"
+    bam1.write_text("", encoding="utf-8")
+    bam2.write_text("", encoding="utf-8")
+    observed: dict[str, object] = {}
+
+    def _fake_run_pipeline(cmds, outfile=None, stdin_text=None, **kwargs):
+        del outfile, kwargs
+        observed["cmds"] = cmds
+        observed["stdin_text"] = stdin_text
+        return (
+            0,
+            (
+                "#SM\tPATH\n"
+                f"sample_a\t{bam1}\n"
+                f"sample_b\t{bam2}\n"
+            ).encode(),
+            b"",
+        )
+
+    monkeypatch.setattr("ipyrad2.assembler.beds.run_pipeline", _fake_run_pipeline)
+
+    assert get_names_from_bams([bam1, bam2]) == {
+        bam1: "sample_a",
+        bam2: "sample_b",
+    }
+    assert observed["cmds"] == [[BIN_SAM, "samples", "-h"]]
+    assert observed["stdin_text"] == f"{bam1}\n{bam2}\n"
+
+
+def test_classify_bam_layout_uses_sampled_primary_reads(monkeypatch, tmp_path: Path) -> None:
     bam_file = tmp_path / "sample.bam"
     bam_file.write_text("", encoding="utf-8")
-    observed_cmds: list[list[list[str]]] = []
+    observed_exclusions: list[int | None] = []
 
-    def _fake_run_pipeline(cmds, outfile=None, **kwargs):
-        del outfile, kwargs
-        observed_cmds.append(cmds)
-        cmd = cmds[0]
-        if cmd == [BIN_SAM, "view", "-c", "-F", "0x904", "-f", "0x1", str(bam_file)]:
-            return 0, b"12\n", b""
-        if cmd == [BIN_SAM, "view", "-c", "-F", "0x905", str(bam_file)]:
-            return 0, b"0\n", b""
-        raise AssertionError(f"unexpected command: {cmd}")
+    class _FakeLineStream:
+        def __init__(self, lines):
+            self._lines = iter(lines)
 
-    monkeypatch.setattr("ipyrad2.assembler.read_filters.run_pipeline", _fake_run_pipeline)
+        def __enter__(self):
+            return self._lines
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def _fake_iter_bam_view_lines(path: Path, *, exclude_flags=None):
+        assert path == bam_file
+        observed_exclusions.append(exclude_flags)
+        return _FakeLineStream(["q1\t99", "q2\t147"])
+
+    monkeypatch.setattr(
+        "ipyrad2.assembler.read_filters._iter_bam_view_lines",
+        _fake_iter_bam_view_lines,
+    )
 
     assert classify_bam_layout(bam_file) == "paired"
-    assert observed_cmds == [
-        [[BIN_SAM, "view", "-c", "-F", "0x904", "-f", "0x1", str(bam_file)]],
-        [[BIN_SAM, "view", "-c", "-F", "0x905", str(bam_file)]],
-    ]
+    assert observed_exclusions == [0x904]
 
 
 def test_classify_bam_layout_rejects_hybrid_primary_mapped_layout(
@@ -155,22 +192,60 @@ def test_classify_bam_layout_rejects_hybrid_primary_mapped_layout(
     bam_file = tmp_path / "hybrid.bam"
     bam_file.write_text("", encoding="utf-8")
 
-    def _fake_run_pipeline(cmds, outfile=None, **kwargs):
-        del outfile, kwargs
-        cmd = cmds[0]
-        if cmd == [BIN_SAM, "view", "-c", "-F", "0x904", "-f", "0x1", str(bam_file)]:
-            return 0, b"4\n", b""
-        if cmd == [BIN_SAM, "view", "-c", "-F", "0x905", str(bam_file)]:
-            return 0, b"3\n", b""
-        raise AssertionError(f"unexpected command: {cmd}")
+    class _FakeLineStream:
+        def __init__(self, lines):
+            self._lines = iter(lines)
 
-    monkeypatch.setattr("ipyrad2.assembler.read_filters.run_pipeline", _fake_run_pipeline)
+        def __enter__(self):
+            return self._lines
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        "ipyrad2.assembler.read_filters._iter_bam_view_lines",
+        lambda path, *, exclude_flags=None: _FakeLineStream(["q1\t99", "q2\t0"]),
+    )
 
     with pytest.raises(
         IPyradError,
         match="mixed single-end and paired-end primary mapped reads",
     ):
         classify_bam_layout(bam_file)
+
+
+def test_classify_bam_layout_falls_back_to_any_paired_record_when_no_primary_reads(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    bam_file = tmp_path / "sample.bam"
+    bam_file.write_text("", encoding="utf-8")
+    observed_exclusions: list[int | None] = []
+
+    class _FakeLineStream:
+        def __init__(self, lines):
+            self._lines = iter(lines)
+
+        def __enter__(self):
+            return self._lines
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def _fake_iter_bam_view_lines(path: Path, *, exclude_flags=None):
+        assert path == bam_file
+        observed_exclusions.append(exclude_flags)
+        if exclude_flags == 0x904:
+            return _FakeLineStream([])
+        return _FakeLineStream(["q1\t1"])
+
+    monkeypatch.setattr(
+        "ipyrad2.assembler.read_filters._iter_bam_view_lines",
+        _fake_iter_bam_view_lines,
+    )
+
+    assert classify_bam_layout(bam_file) == "paired"
+    assert observed_exclusions == [0x904, None]
 
 
 def test_bam_appears_paired_reflects_layout_classifier(monkeypatch, tmp_path: Path) -> None:
@@ -1542,17 +1617,32 @@ def test_run_assembler_uses_filtered_analysis_bams_downstream(
             }
         return {sname: None for sname in jobs}
 
+    startup_probe: dict[str, object] = {}
+
     monkeypatch.setattr("ipyrad2.assembler.assemble.get_name_from_bam", _fake_get_name_from_bam)
     monkeypatch.setattr(
-        "ipyrad2.assembler.assemble.classify_bam_layout",
-        lambda path: "paired" if path.stem == "rad" else "single",
+        "ipyrad2.assembler.assemble._collect_bam_metadata",
+        lambda bam_dict, log_level, max_workers: startup_probe.update(
+            {
+                "snames": sorted(bam_dict),
+                "log_level": log_level,
+                "max_workers": max_workers,
+            }
+        )
+        or {
+            sname: {
+                "layout": "paired" if sname == "rad" else "single",
+                "header_records": [("chr1", 100)],
+            }
+            for sname in bam_dict
+        },
     )
     monkeypatch.setattr(
         "ipyrad2.assembler.assemble.get_reference_sort_order",
         lambda _reference, tmpdir: (tmpdir / "REF_info.txt").write_text("chr1\t100\n", encoding="utf-8"),
     )
     monkeypatch.setattr(
-        "ipyrad2.assembler.assemble._validate_analysis_bams_match_reference",
+        "ipyrad2.assembler.assemble._validate_bam_header_records_match_reference",
         lambda *args, **kwargs: None,
     )
 
@@ -1844,6 +1934,11 @@ def test_run_assembler_uses_filtered_analysis_bams_downstream(
     assert pool_calls[7][2] == 2
     assert pool_calls[8][2] == 2
     assert pool_calls[9][2] == 1
+    assert startup_probe == {
+        "snames": ["rad", "wgs"],
+        "log_level": "WARNING",
+        "max_workers": 2,
+    }
 
     filter_jobs = pool_calls[0][1]
     assert filter_jobs["rad"][0].__name__ == "prepare_filtered_analysis_bam"
@@ -1919,7 +2014,13 @@ def test_run_assembler_rejects_bam_reference_mismatch_before_coverage_delimiting
     pool_messages: list[str] = []
 
     monkeypatch.setattr("ipyrad2.assembler.assemble.get_name_from_bam", lambda path: path.stem)
-    monkeypatch.setattr("ipyrad2.assembler.assemble.classify_bam_layout", lambda _path: "single")
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._collect_bam_metadata",
+        lambda bam_dict, log_level, max_workers: {
+            sname: {"layout": "single", "header_records": [("chr1", 4)]}
+            for sname in bam_dict
+        },
+    )
     monkeypatch.setattr(
         "ipyrad2.assembler.assemble.get_reference_sort_order",
         lambda _reference, tmpdir: (tmpdir / "REF_info.txt").write_text("chr1\t4\n", encoding="utf-8"),
@@ -1937,7 +2038,7 @@ def test_run_assembler_rejects_bam_reference_mismatch_before_coverage_delimiting
 
     monkeypatch.setattr("ipyrad2.assembler.assemble.run_with_pool", _fake_run_with_pool)
     monkeypatch.setattr(
-        "ipyrad2.assembler.assemble._validate_analysis_bams_match_reference",
+        "ipyrad2.assembler.assemble._validate_bam_header_records_match_reference",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             IPyradError("remap against the current reference")
         ),
@@ -1983,7 +2084,7 @@ def test_run_assembler_rejects_bam_reference_mismatch_before_coverage_delimiting
             log_level="WARNING",
         )
 
-    assert pool_messages == ["Filtering mapped reads"]
+    assert pool_messages == []
 
 
 def test_run_assembler_rejects_duplicate_sample_names_across_rad_and_wgs(
@@ -2056,7 +2157,13 @@ def test_run_assembler_rename_bams_overrides_header_names_for_populations_and_ou
     observed: dict[str, object] = {}
 
     monkeypatch.setattr("ipyrad2.assembler.assemble.get_name_from_bam", lambda _path: "header_name")
-    monkeypatch.setattr("ipyrad2.assembler.assemble.classify_bam_layout", lambda _path: "paired")
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._collect_bam_metadata",
+        lambda bam_dict, log_level, max_workers: {
+            sname: {"layout": "paired", "header_records": [("chr1", 4)]}
+            for sname in bam_dict
+        },
+    )
     monkeypatch.setattr(
         "ipyrad2.assembler.assemble.get_reference_sort_order",
         lambda _reference, tmpdir: (tmpdir / "REF_info.txt").write_text("chr1\t4\n", encoding="utf-8"),
@@ -2069,7 +2176,7 @@ def test_run_assembler_rename_bams_overrides_header_names_for_populations_and_ou
         },
     )
     monkeypatch.setattr(
-        "ipyrad2.assembler.assemble._validate_analysis_bams_match_reference",
+        "ipyrad2.assembler.assemble._validate_bam_header_records_match_reference",
         lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
@@ -2264,7 +2371,13 @@ def test_run_assembler_accepts_loci_bed_without_rad_samples(
     coverage_job_names: list[str] = []
 
     monkeypatch.setattr("ipyrad2.assembler.assemble.get_name_from_bam", lambda path: path.stem)
-    monkeypatch.setattr("ipyrad2.assembler.assemble.classify_bam_layout", lambda _path: "single")
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._collect_bam_metadata",
+        lambda bam_dict, log_level, max_workers: {
+            sname: {"layout": "single", "header_records": [("chr1", 12), ("chr2", 12)]}
+            for sname in bam_dict
+        },
+    )
     monkeypatch.setattr(
         "ipyrad2.assembler.assemble.get_reference_sort_order",
         lambda _reference, tmpdir: (tmpdir / "REF_info.txt").write_text("chr2\t12\nchr1\t12\n", encoding="utf-8"),
@@ -2277,7 +2390,7 @@ def test_run_assembler_accepts_loci_bed_without_rad_samples(
         },
     )
     monkeypatch.setattr(
-        "ipyrad2.assembler.assemble._validate_analysis_bams_match_reference",
+        "ipyrad2.assembler.assemble._validate_bam_header_records_match_reference",
         lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(

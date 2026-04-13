@@ -9,6 +9,7 @@ from loguru import logger
 import pandas as pd
 from .beds import (
     get_name_from_bam,
+    get_names_from_bams,
     get_reference_sort_order,
     get_coverage_bed_graphs,
     get_across_sample_loci_bed,
@@ -50,7 +51,7 @@ from .variants import (
     write_vcf,
 )
 from .write_snps import write_snps_hdf5
-from ..utils.parallel import run_pipeline, run_with_pool
+from ..utils.parallel import run_pipeline, run_with_pool, run_with_pool_iter
 from ..utils.exceptions import IPyradError
 from ..utils.pops import expand_imap_patterns, parse_imap, parse_pops_file
 from ..utils.profiling import profile_stage
@@ -384,16 +385,15 @@ def _describe_bam_reference_mismatch(
     return None
 
 
-def _validate_analysis_bams_match_reference(
-    sample_bams: dict[str, Path],
+def _validate_bam_header_records_match_reference(
+    sample_bam_records: dict[str, list[tuple[str, int]]],
     tmpdir: Path,
     reference: Path,
 ) -> None:
-    """Reject filtered BAMs whose header reference dictionary differs from `-r`."""
+    """Reject BAM headers whose reference dictionary differs from `-r`."""
     reference_records = _load_reference_scaffold_records(tmpdir)
     affected_samples: list[str] = []
-    for sname, bam_file in sample_bams.items():
-        bam_records = _get_bam_header_reference_records(bam_file)
+    for sname, bam_records in sample_bam_records.items():
         mismatch = _describe_bam_reference_mismatch(bam_records, reference_records)
         if mismatch is not None:
             affected_samples.append(f"{sname}: {mismatch}")
@@ -405,12 +405,29 @@ def _validate_analysis_bams_match_reference(
     if len(affected_samples) > 5:
         sample_summaries += f" | ... ({len(affected_samples) - 5} more samples)"
     raise IPyradError(
-        "Filtered analysis BAM headers do not match the current reference passed "
+        "BAM headers do not match the current reference passed "
         f"to -r ({reference}). These BAMs were mapped against a different reference "
         "dictionary. If you reused the same reference path during mapping, stale "
         "bwa-mem2 sidecar index files (.ann/.amb/.pac/.0123/.bwt.2bit.64) are a "
         "likely cause. Remap these BAMs against that exact reference before "
         f"running assemble. Affected samples: {sample_summaries}"
+    )
+
+
+def _validate_analysis_bams_match_reference(
+    sample_bams: dict[str, Path],
+    tmpdir: Path,
+    reference: Path,
+) -> None:
+    """Reject BAMs whose header reference dictionary differs from `-r`."""
+    sample_bam_records = {
+        sname: _get_bam_header_reference_records(bam_file)
+        for sname, bam_file in sample_bams.items()
+    }
+    _validate_bam_header_records_match_reference(
+        sample_bam_records,
+        tmpdir,
+        reference,
     )
 
 
@@ -547,16 +564,50 @@ def _collect_named_bams(
     """Resolve final sample names for BAM inputs from header names plus overrides."""
     bam_dict: dict[str, Path] = {}
     renamed: list[tuple[str, str]] = []
+    unresolved = [bam_file for bam_file in bam_paths if bam_file.name not in rename_map]
+    if len(unresolved) == 1:
+        unresolved_names = {unresolved[0]: get_name_from_bam(unresolved[0])}
+    else:
+        unresolved_names = get_names_from_bams(unresolved)
     for bam_file in bam_paths:
         sname = rename_map.get(bam_file.name)
         if sname is None:
-            sname = get_name_from_bam(bam_file)
+            sname = unresolved_names[bam_file]
         else:
             renamed.append((sname, bam_file.name))
         if sname in bam_dict:
             raise IPyradError(f"Multiple input files of sample name {sname}")
         bam_dict[sname] = bam_file
     return bam_dict, renamed
+
+
+def _probe_bam_metadata(bam_file: Path) -> dict[str, object]:
+    """Return sampled layout and ordered `@SQ` records for one BAM."""
+    return {
+        "layout": classify_bam_layout(bam_file),
+        "header_records": _get_bam_header_reference_records(bam_file),
+    }
+
+
+def _collect_bam_metadata(
+    bam_dict: dict[str, Path],
+    log_level: str,
+    max_workers: int,
+) -> dict[str, dict[str, object]]:
+    """Collect startup BAM metadata in parallel without progress logging."""
+    jobs_iter = (
+        (sname, (_probe_bam_metadata, {"bam_file": bam_file}))
+        for sname, bam_file in bam_dict.items()
+    )
+    return {
+        sname: result
+        for sname, result in run_with_pool_iter(
+            jobs_iter,
+            log_level,
+            max_workers=max_workers,
+            max_inflight=max_workers,
+        )
+    }
 
 
 def _normalize_populations_file(
@@ -1238,6 +1289,7 @@ def run_assembler(
     # filtered analysis BAMs that downstream assemble stages should consume.
     all_dict = wgs_dict | bam_dict
     snames = sorted(all_dict)
+    startup_workers = max(1, min(cores, len(snames)))
     consensus_workers = max(1, min(cores, len(snames)))
     final_vcf_mask_workers = max(1, min(cores, len(snames)))
     all_dict = {i: all_dict[i] for i in snames}
@@ -1262,9 +1314,10 @@ def run_assembler(
             )
         logger.debug("normalized grouped-calling samples file: {}", group_samples_file)
 
+    bam_metadata = _collect_bam_metadata(all_dict, log_level, startup_workers)
     sample_layouts = {
-        sname: (classify_bam_layout(bam_file) == "paired")
-        for sname, bam_file in all_dict.items()
+        sname: (bam_metadata[sname]["layout"] == "paired")
+        for sname in snames
     }
     n_paired = sum(sample_layouts.values())
     n_single = len(sample_layouts) - n_paired
@@ -1277,6 +1330,18 @@ def run_assembler(
         logger.info(
             "mixed single-end and paired-end BAMs detected across samples; paired-end samples use fragment-span coverage and single-end samples use read-span coverage during locus delimiting"
         )
+
+    logger.debug("fetching reference scaffold order")
+    get_reference_sort_order(reference, tmpdir)
+    logger.info("validating input BAMs against the current reference")
+    _validate_bam_header_records_match_reference(
+        {
+            sname: bam_metadata[sname]["header_records"]
+            for sname in snames
+        },
+        tmpdir,
+        reference,
+    )
 
     all_dict = _prepare_analysis_bams(
         bam_dict=all_dict,
@@ -1299,10 +1364,6 @@ def run_assembler(
     logger.info(
         f"using up to {cores} cores (up to {workers} multi-threaded jobs using {threads} threads)"
     )
-    logger.debug("fetching reference scaffold order")
-    get_reference_sort_order(reference, tmpdir)
-    logger.info("validating filtered analysis BAMs against the current reference")
-    _validate_analysis_bams_match_reference(all_dict, tmpdir, reference)
     normalized_loci_bed = None
     if loci_bed is not None:
         normalized_loci_bed, input_locus_count = _normalize_user_loci_bed(
