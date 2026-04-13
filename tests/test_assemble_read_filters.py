@@ -1578,8 +1578,7 @@ def test_run_assembler_uses_filtered_analysis_bams_downstream(
         return path.stem
 
     pool_calls: list[tuple[str, dict, int | None]] = []
-    applied_paralog_masks: dict[str, Path] = {}
-    masked_vcf: dict[str, Path] = {}
+    final_vcf_call: dict[str, object] = {}
     built_database: dict[str, object] = {}
     seqs_hdf5_call: dict[str, object] = {}
     compacted_vcf: dict[str, Path] = {}
@@ -1610,7 +1609,7 @@ def test_run_assembler_uses_filtered_analysis_bams_downstream(
                 }
                 for sname in jobs
             }
-        if msg == "Merging final VCF masks":
+        if msg == "Merging final VCF mask BEDs":
             return {
                 sname: tmp_path / "OUT" / "assembly_tmpdir" / "beds" / f"{sname}.final.vcf.mask.bed"
                 for sname in jobs
@@ -1762,10 +1761,6 @@ def test_run_assembler_uses_filtered_analysis_bams_downstream(
         return path
 
     monkeypatch.setattr("ipyrad2.assembler.assemble.get_reference_in_loci_beds", _fake_get_reference_in_loci_beds)
-    monkeypatch.setattr(
-        "ipyrad2.assembler.assemble.apply_sample_region_masks_to_resolved_vcf",
-        lambda tmpdir, sample_masks, vcf_gz=None: applied_paralog_masks.update(sample_masks) or masked_vcf.update({"path": vcf_gz}) or (vcf_gz if vcf_gz is not None else tmpdir / "vcfs" / "variants.resolved.vcf.gz"),
-    )
     def _fake_write_final_outputs(
         *,
         snames,
@@ -1853,10 +1848,19 @@ def test_run_assembler_uses_filtered_analysis_bams_downstream(
     )
     monkeypatch.setattr(
         "ipyrad2.assembler.assemble.write_vcf",
-        lambda name, outdir, tmpdir, threads: (
+        lambda name, outdir, tmpdir, threads, **kwargs: (
+            final_vcf_call.update(
+                {
+                    "name": name,
+                    "outdir": outdir,
+                    "tmpdir": tmpdir,
+                    "threads": threads,
+                    **kwargs,
+                }
+            ),
             (outdir / f"{name}.vcf.gz").write_text("", encoding="utf-8"),
             outdir / f"{name}.vcf.gz",
-        )[1],
+        )[2],
     )
     monkeypatch.setattr(
         "ipyrad2.assembler.assemble.load_variant_resolution_stats",
@@ -1924,7 +1928,7 @@ def test_run_assembler_uses_filtered_analysis_bams_downstream(
         "Building sample-specific paralog masks",
         "Merging sample masks",
         "Extracting consensus sequences",
-        "Merging final VCF masks",
+        "Merging final VCF mask BEDs",
         "Summarizing final sample depths",
     ]
 
@@ -1967,6 +1971,7 @@ def test_run_assembler_uses_filtered_analysis_bams_downstream(
     consensus_jobs = pool_calls[7][1]
     assert consensus_jobs["rad"][1]["reference_fasta"].name == "assembly_reference_sequence.consensus.fa"
     assert consensus_jobs["wgs"][1]["reference_fasta"].name == "assembly_reference_sequence.consensus.fa"
+    assert pool_calls[8][0] == "Merging final VCF mask BEDs"
     final_vcf_mask_jobs = pool_calls[8][1]
     assert final_vcf_mask_jobs["rad"][0].__name__ == "merge_final_vcf_mask_beds"
     assert final_vcf_mask_jobs["wgs"][0].__name__ == "merge_final_vcf_mask_beds"
@@ -1981,11 +1986,18 @@ def test_run_assembler_uses_filtered_analysis_bams_downstream(
     }
     assert compacted_vcf == {"loci_bed": tmp_path / "OUT" / "assembly.bed"}
 
-    assert applied_paralog_masks == {
-        "rad": tmp_path / "OUT" / "assembly_tmpdir" / "beds" / "rad.final.vcf.mask.bed",
-        "wgs": tmp_path / "OUT" / "assembly_tmpdir" / "beds" / "wgs.final.vcf.mask.bed",
+    assert final_vcf_call == {
+        "name": "assembly",
+        "outdir": tmp_path / "OUT",
+        "tmpdir": tmp_path / "OUT" / "assembly_tmpdir",
+        "threads": 3,
+        "sample_masks": {
+            "rad": tmp_path / "OUT" / "assembly_tmpdir" / "beds" / "rad.final.vcf.mask.bed",
+            "wgs": tmp_path / "OUT" / "assembly_tmpdir" / "beds" / "wgs.final.vcf.mask.bed",
+        },
+        "cores": 4,
+        "log_level": "WARNING",
     }
-    assert masked_vcf == {"path": tmp_path / "OUT" / "assembly.vcf.gz"}
     assert built_database["snames"] == ["rad", "wgs"]
     assert variant_postfilter_stats == {
         "wgs_het_genotypes_masked_by_allele_balance": 2,
@@ -3188,6 +3200,71 @@ def test_compact_resolved_vcf_to_final_loci_contigs_trims_contig_headers(tmp_pat
         "chr2\t2\t.\tC\tT\t50\tPASS\t.\tGT\t0/1",
         "chr3\t2\t.\tG\tA\t50\tPASS\t.\tGT\t1/1",
     ]
+
+
+def test_write_vcf_applies_sample_masks_in_chunked_final_output(
+    tmp_path: Path,
+) -> None:
+    tmpdir = tmp_path / "assembly_tmpdir"
+    vcf_dir = tmpdir / "vcfs"
+    bed_dir = tmpdir / "beds"
+    vcf_dir.mkdir(parents=True)
+    bed_dir.mkdir(parents=True)
+    (tmpdir / "REF_info.txt").write_text(
+        "chr1\t100\n"
+        "chr2\t100\n",
+        encoding="utf-8",
+    )
+
+    plain_vcf = vcf_dir / "variants.resolved.vcf"
+    plain_vcf.write_text(
+        "##fileformat=VCFv4.2\n"
+        "##contig=<ID=chr1,length=100>\n"
+        "##contig=<ID=chr2,length=100>\n"
+        '##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n'
+        '##FORMAT=<ID=DP,Number=1,Type=Integer,Description=\"Depth\">\n'
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\ts2\n"
+        "chr1\t10\t.\tA\tG\t50\tPASS\t.\tGT:DP\t0/1:8\t0/0:9\n"
+        "chr2\t20\t.\tC\tT\t50\tPASS\t.\tGT:DP\t1/1:7\t0/1:6\n",
+        encoding="utf-8",
+    )
+    resolved_vcf = vcf_dir / "variants.resolved.vcf.gz"
+    run_pipeline([[BIN_BCF, "view", "-Oz", "-o", str(resolved_vcf), str(plain_vcf)]])
+    run_pipeline([[BIN_BCF, "index", "-f", "-c", str(resolved_vcf)]])
+
+    outdir = tmp_path
+    loci_bed = outdir / "assembly.bed"
+    loci_bed.write_text(
+        "chr1\t0\t50\n"
+        "chr2\t0\t50\n",
+        encoding="utf-8",
+    )
+
+    mask_bed = bed_dir / "s1.final.vcf.mask.bed"
+    mask_bed.write_text("chr1\t0\t15\n", encoding="utf-8")
+
+    write_vcf(
+        "assembly",
+        outdir,
+        tmpdir,
+        threads=1,
+        sample_masks={"s1": mask_bed},
+        cores=2,
+        log_level="WARNING",
+    )
+
+    final_vcf = outdir / "assembly.vcf.gz"
+    with gzip.open(final_vcf, "rt", encoding="utf-8") as handle:
+        rows = [
+            line.rstrip("\n").split("\t")
+            for line in handle
+            if line and not line.startswith("#")
+        ]
+
+    assert rows[0][9] == "./.:8"
+    assert rows[0][10] == "0/0:9"
+    assert rows[1][9] == "1/1:7"
+    assert rows[1][10] == "0/1:6"
 
 
 def test_apply_sample_region_masks_to_resolved_vcf_masks_only_targeted_sample(

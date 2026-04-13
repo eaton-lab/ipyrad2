@@ -601,6 +601,7 @@ class WindowExtracter:
         stats_path = self._get_stats_path() if stats_file is None else Path(stats_file)
         self.outdir.mkdir(exist_ok=True)
         population_lookup = self._build_sample_population_lookup()
+        dropped_by_missing = set(summary["samples_dropped_by_max_missing"])
         sample_rows: list[list[str]] = []
         for name, missing in sorted(
             zip(summary["samples_selected_initial"], summary["row_missing"], strict=True),
@@ -610,6 +611,7 @@ class WindowExtracter:
                 name,
                 population_lookup.get(name, "unassigned"),
                 _format_percent(missing),
+                "yes" if name in dropped_by_missing else "no",
             ])
 
         extract_rows = [
@@ -629,9 +631,7 @@ class WindowExtracter:
             ),
             (
                 "samples_dropped_by_max_missing",
-                ", ".join(summary["samples_dropped_by_max_missing"])
-                if summary["samples_dropped_by_max_missing"]
-                else "(none)",
+                _format_count(len(summary["samples_dropped_by_max_missing"])),
             ),
             ("samples_final", _format_count(len(summary["fnames"]))),
         ]
@@ -669,7 +669,7 @@ class WindowExtracter:
         _append_table_section(
             lines,
             "Sample Summary",
-            ["sample", "population", "percent_missing"],
+            ["sample", "population", "percent_missing", "dropped_by_max_missing"],
             sample_rows,
         )
         with open(stats_path, "w", encoding="utf-8") as out:

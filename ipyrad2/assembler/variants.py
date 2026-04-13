@@ -15,10 +15,9 @@ import gzip
 import os
 import re
 import sys
-import tempfile
 from pathlib import Path
 from loguru import logger
-from ..utils.parallel import run_pipeline
+from ..utils.parallel import run_pipeline, run_with_pool, stream_pipeline_lines
 from ..utils.exceptions import IPyradError
 from .hdf5_utils import write_retained_fai
 from .loci import get_indel_overlap_mask_path
@@ -59,16 +58,16 @@ def _read_vcf_sample_names(vcf_gz: Path) -> list[str]:
     raise IPyradError(f"VCF header is missing the #CHROM line: {vcf_gz}")
 
 
-def _get_sorted_chunk_vcfs(vcf_dir: Path) -> list[Path]:
+def _get_sorted_chunk_vcfs(vcf_dir: Path, prefix: str = "chunk") -> list[Path]:
     """Return chunk VCFs in numeric order or raise a clear error if none exist."""
     chunk_vcfs: list[tuple[int, Path]] = []
-    for path in vcf_dir.glob("chunk-*.vcf.gz"):
-        match = re.fullmatch(r"chunk-(\d+)\.vcf\.gz", path.name)
+    for path in vcf_dir.glob(f"{prefix}-*.vcf.gz"):
+        match = re.fullmatch(rf"{re.escape(prefix)}-(\d+)\.vcf\.gz", path.name)
         if match:
             chunk_vcfs.append((int(match.group(1)), path))
     if not chunk_vcfs:
         raise IPyradError(
-            f"No chunk VCFs found in {vcf_dir}. Expected files like chunk-0.vcf.gz."
+            f"No chunk VCFs found in {vcf_dir}. Expected files like {prefix}-0.vcf.gz."
         )
     return [path for _, path in sorted(chunk_vcfs)]
 
@@ -555,6 +554,7 @@ def get_chunked_loci_beds(
     tmpdir: Path,
     nchunks: int,
     source_bed: Path | None = None,
+    prefix: str = "chunk",
 ) -> list[Path]:
     """Split the selected loci BED into approximately even chunk BEDs."""
     loci_bed = _require_nonempty_file(
@@ -570,7 +570,7 @@ def get_chunked_loci_beds(
     paths = []
     i = 0
     for k in range(nchunks):
-        chunk_bed = tmpdir / "beds" / f"chunk-{i}.bed"
+        chunk_bed = tmpdir / "beds" / f"{prefix}-{i}.bed"
         size = q + (1 if k < r else 0)
         chunk = lines[i : i + size]
         with open(chunk_bed, "w", encoding="utf-8") as out:
@@ -578,6 +578,325 @@ def get_chunked_loci_beds(
         paths.append(chunk_bed)
         i += size
     return paths
+
+
+def _count_nonempty_bed_rows(path: Path) -> int:
+    """Return the number of non-empty BED rows in one file."""
+    with path.open("r", encoding="utf-8") as handle:
+        return sum(1 for line in handle if line.strip())
+
+
+def _normalize_effective_sample_masks(
+    vcf_gz: Path,
+    sample_masks: dict[str, Path],
+) -> tuple[list[str], dict[str, int], dict[str, Path]]:
+    """Return validated non-empty sample masks keyed by VCF sample order."""
+    if not sample_masks:
+        return [], {}, {}
+
+    effective_masks = {
+        sname: Path(mask_bed)
+        for sname, mask_bed in sample_masks.items()
+        if Path(mask_bed).exists() and Path(mask_bed).stat().st_size > 0
+    }
+    if not effective_masks:
+        return [], {}, {}
+
+    vcf_samples = _read_vcf_sample_names(vcf_gz)
+    sample_to_index = {name: idx for idx, name in enumerate(vcf_samples)}
+    unknown_samples = sorted(set(effective_masks) - set(vcf_samples))
+    if unknown_samples:
+        raise IPyradError(
+            f"Cannot apply sample masks because these samples are not present in {vcf_gz}: "
+            f"{', '.join(unknown_samples)}"
+        )
+    return vcf_samples, sample_to_index, effective_masks
+
+
+def _masked_gt_value(gt_field: str) -> str:
+    """Return the missing-genotype token matching one sample GT delimiter."""
+    return ".|." if "|" in gt_field else "./."
+
+
+def _load_mask_entries_from_paths(
+    effective_masks: dict[str, Path],
+    sample_to_index: dict[str, int],
+) -> dict[str, list[dict[str, object]]]:
+    """Load all sample masks into per-chrom interval cursors."""
+    chrom_to_samples: dict[str, dict[int, list[tuple[int, int]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for sname, mask_bed in sorted(effective_masks.items()):
+        sample_idx = sample_to_index[sname]
+        with mask_bed.open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                if not raw_line.strip():
+                    continue
+                chrom, start, end, *_rest = raw_line.rstrip("\n").split("\t")
+                chrom_to_samples[chrom][sample_idx].append((int(start), int(end)))
+
+    return {
+        chrom: [
+            {"field_idx": 9 + sample_idx, "intervals": intervals, "cursor": 0}
+            for sample_idx, intervals in sorted(sample_map.items())
+        ]
+        for chrom, sample_map in chrom_to_samples.items()
+    }
+
+
+def _load_mask_entries_from_shard(
+    mask_shard: Path | None,
+) -> dict[str, list[dict[str, object]]]:
+    """Load one chunk-local sample-mask shard into per-chrom interval cursors."""
+    if mask_shard is None or not mask_shard.exists() or mask_shard.stat().st_size == 0:
+        return {}
+
+    chrom_to_samples: dict[str, dict[int, list[tuple[int, int]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    with mask_shard.open("r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            if not raw_line.strip():
+                continue
+            sample_idx, chrom, start, end = raw_line.rstrip("\n").split("\t", 3)
+            chrom_to_samples[chrom][int(sample_idx)].append((int(start), int(end)))
+
+    return {
+        chrom: [
+            {"field_idx": 9 + sample_idx, "intervals": intervals, "cursor": 0}
+            for sample_idx, intervals in sorted(sample_map.items())
+        ]
+        for chrom, sample_map in chrom_to_samples.items()
+    }
+
+
+def _write_masked_vcf_plain(
+    cmds: list[list[str]],
+    mask_entries: dict[str, list[dict[str, object]]],
+    out_plain: Path,
+) -> tuple[bool, int]:
+    """Stream VCF text through one masking pass and write a plain VCF file."""
+    header_lines: list[str] = []
+    out_handle = None
+    saw_records = False
+    masked_gt_total = 0
+
+    try:
+        for raw_line in stream_pipeline_lines(cmds):
+            if raw_line.startswith("#"):
+                if not saw_records:
+                    header_lines.append(raw_line)
+                continue
+
+            fields = raw_line.split("\t")
+            if len(fields) > 9:
+                chrom = fields[0]
+                chrom_entries = mask_entries.get(chrom, ())
+                if chrom_entries:
+                    try:
+                        pos0 = int(fields[1]) - 1
+                    except ValueError:
+                        pos0 = -1
+                    if pos0 >= 0:
+                        format_keys = fields[8].split(":")
+                        try:
+                            gt_idx = format_keys.index("GT")
+                        except ValueError:
+                            gt_idx = -1
+                        if gt_idx >= 0:
+                            for entry in chrom_entries:
+                                intervals = entry["intervals"]
+                                cursor = int(entry["cursor"])
+                                while cursor < len(intervals) and intervals[cursor][1] <= pos0:
+                                    cursor += 1
+                                entry["cursor"] = cursor
+                                if cursor >= len(intervals):
+                                    continue
+                                start, end = intervals[cursor]
+                                if not (start <= pos0 < end):
+                                    continue
+                                field_idx = int(entry["field_idx"])
+                                if field_idx >= len(fields):
+                                    continue
+                                sample_parts = fields[field_idx].split(":")
+                                if gt_idx >= len(sample_parts):
+                                    continue
+                                new_gt = _masked_gt_value(sample_parts[gt_idx])
+                                if sample_parts[gt_idx] != new_gt:
+                                    sample_parts[gt_idx] = new_gt
+                                    fields[field_idx] = ":".join(sample_parts)
+                                    masked_gt_total += 1
+
+            if out_handle is None:
+                out_handle = out_plain.open("w", encoding="utf-8")
+                for header_line in header_lines:
+                    out_handle.write(header_line + "\n")
+            saw_records = True
+            out_handle.write("\t".join(fields) + "\n")
+    finally:
+        if out_handle is not None:
+            out_handle.close()
+
+    return saw_records, masked_gt_total
+
+
+def _write_final_vcf_mask_manifest(
+    tmpdir: Path,
+    effective_masks: dict[str, Path],
+    sample_to_index: dict[str, int],
+) -> Path:
+    """Write one sorted BED4 combining every sample-specific final VCF mask."""
+    vcf_dir = tmpdir / "vcfs"
+    unsorted_path = vcf_dir / "final-vcf-masks.unsorted.bed"
+    out_path = vcf_dir / "final-vcf-masks.bed"
+    ref_info = tmpdir / "REF_info.txt"
+
+    with unsorted_path.open("w", encoding="utf-8") as out:
+        for sname, mask_bed in sorted(effective_masks.items()):
+            sample_idx = sample_to_index[sname]
+            with mask_bed.open("r", encoding="utf-8") as handle:
+                for raw_line in handle:
+                    if not raw_line.strip():
+                        continue
+                    chrom, start, end, *_rest = raw_line.rstrip("\n").split("\t")
+                    out.write(f"{chrom}\t{start}\t{end}\t{sample_idx}\n")
+
+    try:
+        cmd1 = ["sort", "-k1,1", "-k2,2n", "-T", str(tmpdir), str(unsorted_path)]
+        cmd2 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
+        run_pipeline([cmd1, cmd2], out_path)
+    finally:
+        unsorted_path.unlink(missing_ok=True)
+    return out_path
+
+
+def _write_final_vcf_chunk_manifest(tmpdir: Path, chunk_beds: list[Path]) -> Path:
+    """Write one BED4 describing every final-VCF chunk interval."""
+    path = tmpdir / "vcfs" / "final-vcf-chunks.bed"
+    with path.open("w", encoding="utf-8") as out:
+        for chunk_idx, chunk_bed in enumerate(chunk_beds):
+            with chunk_bed.open("r", encoding="utf-8") as handle:
+                for raw_line in handle:
+                    if not raw_line.strip():
+                        continue
+                    chrom, start, end, *_rest = raw_line.rstrip("\n").split("\t")
+                    out.write(f"{chrom}\t{start}\t{end}\t{chunk_idx}\n")
+    return path
+
+
+def _write_final_vcf_mask_shards(
+    tmpdir: Path,
+    effective_masks: dict[str, Path],
+    sample_to_index: dict[str, int],
+    chunk_beds: list[Path],
+) -> dict[int, Path]:
+    """Split merged sample-mask BEDs into chunk-local mask shard files."""
+    if not effective_masks or not chunk_beds:
+        return {}
+
+    ref_info = tmpdir / "REF_info.txt"
+    masks_path = _write_final_vcf_mask_manifest(tmpdir, effective_masks, sample_to_index)
+    chunks_path = _write_final_vcf_chunk_manifest(tmpdir, chunk_beds)
+    shard_paths: dict[int, Path] = {}
+    handles: dict[int, object] = {}
+
+    cmd = [
+        BIN_BED,
+        "intersect",
+        "-a",
+        str(masks_path),
+        "-b",
+        str(chunks_path),
+        "-wa",
+        "-wb",
+        "-sorted",
+        "-g",
+        str(ref_info),
+    ]
+
+    try:
+        for raw_line in stream_pipeline_lines([cmd]):
+            if not raw_line:
+                continue
+            parts = raw_line.split("\t")
+            if len(parts) < 8:
+                continue
+            chrom = parts[0]
+            start = int(parts[1])
+            end = int(parts[2])
+            sample_idx = parts[3]
+            chunk_start = int(parts[5])
+            chunk_end = int(parts[6])
+            chunk_idx = int(parts[7])
+            overlap_start = max(start, chunk_start)
+            overlap_end = min(end, chunk_end)
+            if overlap_start >= overlap_end:
+                continue
+            shard_path = shard_paths.setdefault(
+                chunk_idx,
+                tmpdir / "vcfs" / f"final-vcf-mask-shard-{chunk_idx}.tsv",
+            )
+            handle = handles.get(chunk_idx)
+            if handle is None:
+                handle = shard_path.open("w", encoding="utf-8")
+                handles[chunk_idx] = handle
+            handle.write(f"{sample_idx}\t{chrom}\t{overlap_start}\t{overlap_end}\n")
+    finally:
+        for handle in handles.values():
+            handle.close()
+        masks_path.unlink(missing_ok=True)
+        chunks_path.unlink(missing_ok=True)
+
+    return shard_paths
+
+
+def _mask_final_vcf_chunk(
+    vcf_gz: Path,
+    chunk_bed: Path,
+    out_vcf_path: Path,
+    mask_shard: Path | None,
+) -> Path | None:
+    """Write one plain masked final-VCF chunk or return None when it has no records."""
+    cmds = [
+        [
+            BIN_BCF,
+            "view",
+            "-T",
+            str(chunk_bed),
+            "-f",
+            "PASS",
+            "-V",
+            "indels",
+            str(vcf_gz),
+        ]
+    ]
+    mask_entries = _load_mask_entries_from_shard(mask_shard)
+
+    saw_records, _masked_gt_total = _write_masked_vcf_plain(
+        cmds,
+        mask_entries,
+        out_vcf_path,
+    )
+    if not saw_records:
+        out_vcf_path.unlink(missing_ok=True)
+        return None
+    return out_vcf_path
+
+
+def _concatenate_plain_vcf_chunks(chunk_vcfs: list[Path], out_plain: Path) -> Path:
+    """Concatenate plain chunk VCFs, writing headers once and rows in order."""
+    header_written = False
+    with out_plain.open("w", encoding="utf-8") as out:
+        for chunk_vcf in chunk_vcfs:
+            with chunk_vcf.open("r", encoding="utf-8") as handle:
+                for raw_line in handle:
+                    if raw_line.startswith("#"):
+                        if not header_written:
+                            out.write(raw_line)
+                        continue
+                    out.write(raw_line)
+            header_written = True
+    return out_plain
 
 
 def apply_sample_region_masks_to_resolved_vcf(
@@ -598,124 +917,50 @@ def apply_sample_region_masks_to_resolved_vcf(
         else tmpdir / "vcfs" / "variants.resolved.vcf.gz"
     )
     current_index = current_vcf.with_suffix(current_vcf.suffix + ".csi")
-    vcf_dir = tmpdir / "vcfs"
 
     if not sample_masks:
         return current_vcf
 
-    effective_masks = {
-        sname: Path(mask_bed)
-        for sname, mask_bed in sample_masks.items()
-        if Path(mask_bed).exists() and Path(mask_bed).stat().st_size > 0
-    }
+    _require_nonempty_file(current_vcf, "Target VCF for sample masking")
+    _vcf_samples, sample_to_index, effective_masks = _normalize_effective_sample_masks(
+        current_vcf,
+        sample_masks,
+    )
     if not effective_masks:
         return current_vcf
 
-    _require_nonempty_file(current_vcf, "Target VCF for sample masking")
-    vcf_samples = set(_read_vcf_sample_names(current_vcf))
-    unknown_samples = sorted(set(effective_masks) - vcf_samples)
-    if unknown_samples:
-        raise IPyradError(
-            f"Cannot apply sample masks because these samples are not present in {current_vcf}: "
-            f"{', '.join(unknown_samples)}"
+    mask_entries = _load_mask_entries_from_paths(effective_masks, sample_to_index)
+    tmp_plain = current_vcf.with_suffix(".sample_masks.tmp.vcf")
+    tmp_gz = current_vcf.with_suffix(".sample_masks.tmp.vcf.gz")
+    tmp_index = tmp_gz.with_suffix(tmp_gz.suffix + ".csi")
+
+    try:
+        saw_records, masked_gt_total = _write_masked_vcf_plain(
+            [[BIN_BCF, "view", str(current_vcf)]],
+            mask_entries,
+            tmp_plain,
         )
+        if not saw_records or masked_gt_total == 0:
+            return current_vcf
 
-    for sname, mask_bed in sorted(effective_masks.items()):
-        # Apply each sample-specific BED in sequence so the same mask semantics
-        # can be reused for either the canonical resolved VCF or a later, smaller
-        # final SNP VCF without duplicating the masking implementation.
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            prefix="ipyrad_setgt_",
-            suffix=".samples.txt",
-            delete=False,
-        ) as handle:
-            handle.write(f"{sname}\n")
-            sample_list = Path(handle.name)
-        masked_subset_vcf = vcf_dir / f"variants.resolved.{sname}.masked.region.vcf.gz"
-        masked_subset_index = masked_subset_vcf.with_suffix(
-            masked_subset_vcf.suffix + ".csi"
-        )
-        unmasked_subset_vcf = (
-            vcf_dir / f"variants.resolved.{sname}.unmasked.region.vcf.gz"
-        )
-        unmasked_subset_index = unmasked_subset_vcf.with_suffix(
-            unmasked_subset_vcf.suffix + ".csi"
-        )
-        tmp_vcf = vcf_dir / f"variants.resolved.{sname}.masked.vcf.gz"
-        tmp_index = tmp_vcf.with_suffix(tmp_vcf.suffix + ".csi")
-        sample_expr = f'GT[@{sample_list}]="mis" | GT[@{sample_list}]!="mis"'
-
-        try:
-            # Split into masked and unmasked subsets, rewrite only the targeted
-            # sample inside the masked subset, then reassemble one sorted VCF.
-            cmd1 = [
-                BIN_BCF,
-                "view",
-                "-T",
-                str(mask_bed),
-                str(current_vcf),
-                "-Ou",
-            ]
-            cmd2 = [
-                BIN_BCF,
-                "+setGT",
-                "-",
-                "-Oz",
-                "-o",
-                str(masked_subset_vcf),
-                "--",
-                "-t",
-                "q",
-                "-n",
-                ".",
-                "-i",
-                sample_expr,
-            ]
-            run_pipeline([cmd1, cmd2])
-            run_pipeline([[BIN_BCF, "index", "-f", "-c", str(masked_subset_vcf)]])
-
-            cmd = [
-                BIN_BCF,
-                "view",
-                "-T",
-                f"^{str(mask_bed)}",
-                "-Oz",
-                "-o",
-                str(unmasked_subset_vcf),
-                str(current_vcf),
-            ]
-            run_pipeline([cmd])
-            run_pipeline([[BIN_BCF, "index", "-f", "-c", str(unmasked_subset_vcf)]])
-
-            cmd1 = [
-                BIN_BCF,
-                "concat",
-                "-a",
-                str(masked_subset_vcf),
-                str(unmasked_subset_vcf),
-                "-Ou",
-            ]
-            cmd2 = [
-                BIN_BCF,
-                "sort",
-                "-Oz",
-                "-o",
-                str(tmp_vcf),
-            ]
-            run_pipeline([cmd1, cmd2])
-            run_pipeline([[BIN_BCF, "index", "-f", "-c", str(tmp_vcf)]])
-
-            os.replace(tmp_vcf, current_vcf)
-            if tmp_index.exists():
-                os.replace(tmp_index, current_index)
-        finally:
-            sample_list.unlink(missing_ok=True)
-            masked_subset_vcf.unlink(missing_ok=True)
-            masked_subset_index.unlink(missing_ok=True)
-            unmasked_subset_vcf.unlink(missing_ok=True)
-            unmasked_subset_index.unlink(missing_ok=True)
+        cmd = [
+            BIN_BCF,
+            "view",
+            "-Oz",
+            "-o",
+            str(tmp_gz),
+            str(tmp_plain),
+        ]
+        run_pipeline([cmd])
+        run_pipeline([[BIN_BCF, "index", "-f", "-c", str(tmp_gz)]])
+        os.replace(tmp_gz, current_vcf)
+        if tmp_index.exists():
+            os.replace(tmp_index, current_index)
+        return current_vcf
+    finally:
+        tmp_plain.unlink(missing_ok=True)
+        tmp_gz.unlink(missing_ok=True)
+        tmp_index.unlink(missing_ok=True)
     return current_vcf
 
 
@@ -1105,14 +1350,14 @@ def compact_resolved_vcf_to_final_loci_contigs(
     return resolved_vcf
 
 
-def write_vcf(name: str, outdir: Path, tmpdir: Path, threads: int) -> Path:
-    """Write the final SNP-only project VCF trimmed to the final loci BED."""
-    loci_bed = _require_nonempty_file(outdir / f"{name}.bed", "Final loci BED")
-    out_vcf_gz = outdir / f"{name}.vcf.gz"
-    in_vcf_gz = _require_nonempty_file(
-        tmpdir / "vcfs" / "variants.resolved.vcf.gz", "Resolved project VCF"
-    )
-
+def _write_unmasked_final_vcf(
+    *,
+    loci_bed: Path,
+    in_vcf_gz: Path,
+    out_vcf_gz: Path,
+    threads: int,
+) -> Path:
+    """Write the final SNP-only VCF without any extra sample-region masking."""
     cmd = [
         BIN_BCF,
         "view",
@@ -1131,4 +1376,117 @@ def write_vcf(name: str, outdir: Path, tmpdir: Path, threads: int) -> Path:
     ]
     run_pipeline([cmd])
     run_pipeline([[BIN_BCF, "index", "-f", "-c", str(out_vcf_gz)]])
+    return out_vcf_gz
+
+
+def write_vcf(
+    name: str,
+    outdir: Path,
+    tmpdir: Path,
+    threads: int,
+    *,
+    sample_masks: dict[str, Path] | None = None,
+    cores: int | None = None,
+    log_level: str = "INFO",
+) -> Path:
+    """Write the final SNP-only project VCF trimmed to the final loci BED."""
+    loci_bed = _require_nonempty_file(outdir / f"{name}.bed", "Final loci BED")
+    out_vcf_gz = outdir / f"{name}.vcf.gz"
+    in_vcf_gz = _require_nonempty_file(
+        tmpdir / "vcfs" / "variants.resolved.vcf.gz", "Resolved project VCF"
+    )
+
+    _vcf_samples, sample_to_index, effective_masks = _normalize_effective_sample_masks(
+        in_vcf_gz,
+        sample_masks or {},
+    )
+    if not effective_masks:
+        return _write_unmasked_final_vcf(
+            loci_bed=loci_bed,
+            in_vcf_gz=in_vcf_gz,
+            out_vcf_gz=out_vcf_gz,
+            threads=threads,
+        )
+
+    nloci = _count_nonempty_bed_rows(loci_bed)
+    chunk_workers = max(1, min(int(cores or 1), nloci))
+    nchunks = max(1, min(nloci, chunk_workers * 4))
+    chunk_beds = get_chunked_loci_beds(
+        tmpdir,
+        nchunks=nchunks,
+        source_bed=loci_bed,
+        prefix="final-vcf-chunk",
+    )
+    shard_paths = _write_final_vcf_mask_shards(
+        tmpdir,
+        effective_masks,
+        sample_to_index,
+        chunk_beds,
+    )
+    vcf_dir = tmpdir / "vcfs"
+    jobs = {
+        chunk_idx: (
+            _mask_final_vcf_chunk,
+            dict(
+                vcf_gz=in_vcf_gz,
+                chunk_bed=chunk_bed,
+                out_vcf_path=vcf_dir / f"final-vcf-chunk-{chunk_idx}.vcf",
+                mask_shard=shard_paths.get(chunk_idx),
+            ),
+        )
+        for chunk_idx, chunk_bed in enumerate(chunk_beds)
+    }
+
+    logger.info("masking final VCF chunks")
+    if len(jobs) == 1 or chunk_workers == 1:
+        chunk_results = {
+            chunk_idx: func(**kwargs)
+            for chunk_idx, (func, kwargs) in jobs.items()
+        }
+    else:
+        chunk_results = run_with_pool(
+            jobs,
+            log_level,
+            max_workers=chunk_workers,
+            msg="Masking final VCF chunks",
+        )
+
+    chunk_vcfs = [
+        chunk_results[chunk_idx]
+        for chunk_idx in sorted(chunk_results)
+        if chunk_results[chunk_idx] is not None
+    ]
+    if not chunk_vcfs:
+        return _write_unmasked_final_vcf(
+            loci_bed=loci_bed,
+            in_vcf_gz=in_vcf_gz,
+            out_vcf_gz=out_vcf_gz,
+            threads=threads,
+        )
+
+    logger.info("concatenating masked final VCF chunks")
+    tmp_plain = vcf_dir / "final-vcf.masked.concat.vcf"
+    try:
+        _concatenate_plain_vcf_chunks(chunk_vcfs, tmp_plain)
+        cmd = [
+            BIN_BCF,
+            "view",
+            "-Oz",
+            "-o",
+            str(out_vcf_gz),
+            "--threads",
+            str(max(1, threads)),
+            str(tmp_plain),
+        ]
+        run_pipeline([cmd])
+        run_pipeline([[BIN_BCF, "index", "-f", "-c", str(out_vcf_gz)]])
+    finally:
+        tmp_plain.unlink(missing_ok=True)
+
+    for chunk_vcf in chunk_vcfs:
+        Path(chunk_vcf).unlink(missing_ok=True)
+    for chunk_bed in chunk_beds:
+        Path(chunk_bed).unlink(missing_ok=True)
+    for shard_path in shard_paths.values():
+        Path(shard_path).unlink(missing_ok=True)
     return out_vcf_gz
