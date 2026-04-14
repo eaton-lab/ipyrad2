@@ -36,10 +36,25 @@ def _open_mapper_fastq(path: Path):
         raise IPyradError(f"Failed to read FASTQ input: {path}") from err
 
 
+def _concat_gzip_members(inputs: list[Path], outfile: Path) -> None:
+    """Concatenate gzipped FASTQs by copying gzip members byte-for-byte."""
+    with outfile.open("wb") as out:
+        for path in inputs:
+            try:
+                with path.open("rb") as infile:
+                    shutil.copyfileobj(infile, out, length=1024 * 1024)
+            except OSError as err:
+                raise IPyradError(f"Failed to read FASTQ input: {path}") from err
+
+
 def _concat_fastqs(inputs: list[Path], outfile: Path) -> None:
     """Concatenate plain or gzipped FASTQs into one gzipped output file."""
     outfile.parent.mkdir(parents=True, exist_ok=True)
-    with gzip.open(outfile, "wb") as out:
+    if inputs and all(path.suffix == ".gz" for path in inputs):
+        _concat_gzip_members(inputs, outfile)
+        return
+
+    with gzip.open(outfile, "wb", compresslevel=1) as out:
         for path in inputs:
             with _open_mapper_fastq(path) as infile:
                 shutil.copyfileobj(infile, out, length=1024 * 1024)
