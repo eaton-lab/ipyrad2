@@ -15,8 +15,8 @@ import re
 import select
 import signal
 import subprocess as sp
-from collections import Counter
-from collections.abc import Iterator
+from collections import Counter, defaultdict
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +27,7 @@ from .cluster import build_sample_summary, concat_summaries
 from .graph import GraphTableSummary, make_global_tables
 from .common import (
     DENOVO_MAPPING_FILENAME,
+    DENOVO_SAMPLE_GRAPH_SUMMARY_FILENAME,
     DENOVO_STATS_FILENAME,
     get_arm_boundary,
     infer_record_type,
@@ -110,6 +111,7 @@ def _iter_denovo_outputs(outdir: Path) -> list[Path]:
         outdir / "denovo_reference.fa",
         outdir / DENOVO_MAPPING_FILENAME,
         outdir / DENOVO_STATS_FILENAME,
+        outdir / DENOVO_SAMPLE_GRAPH_SUMMARY_FILENAME,
         outdir / "denovo.stats.txt",
         outdir / "denovo.audit",
     ]
@@ -386,6 +388,7 @@ def _prepare_output_paths(
         "reference": outdir / "denovo_reference.fa",
         "mapping": outdir / DENOVO_MAPPING_FILENAME,
         "loci_stats": outdir / DENOVO_STATS_FILENAME,
+        "sample_graph_summary": outdir / DENOVO_SAMPLE_GRAPH_SUMMARY_FILENAME,
         "run_stats": outdir / "denovo.stats.txt",
         "audit_dir": outdir / "denovo.audit",
         "workdir": outdir / WORKDIR_NAME,
@@ -645,6 +648,214 @@ def _collect_denovo_qc(
         occupancy_counts=tuple(sorted((int(k), int(v)) for k, v in occupancy_counts.items())),
         selected_sample_rows=selected_sample_rows,
     )
+
+
+_DENOVO_SAMPLE_GRAPH_SUMMARY_FIELDS = [
+    "sample",
+    "components_seen",
+    "split_components_seen",
+    "prop_split_components_seen",
+    "multi_subcomponent_components",
+    "prop_multi_subcomponent_components",
+    "duplicated_components_seen",
+    "prop_duplicated_components_seen",
+    "reconciled_components_seen",
+    "prop_reconciled_components_seen",
+]
+
+
+def _validate_tsv_columns(
+    fieldnames: Iterable[str] | None,
+    *,
+    required: set[str],
+    label: str,
+) -> None:
+    """Validate that one TSV contains the required columns."""
+    present = set(fieldnames or ())
+    missing = sorted(required.difference(present))
+    if missing:
+        raise IPyradError(
+            f"{label} is missing required columns: {', '.join(missing)}"
+        )
+
+
+def _build_denovo_sample_graph_summary_rows(
+    *,
+    mapping_tsv: Path,
+    loci_stats_tsv: Path,
+    sample_names: Iterable[str] | None = None,
+) -> list[dict[str, str]]:
+    """Summarize per-sample graph-splitting burden from final denovo tables."""
+    component_subcomponents: dict[int, set[int]] = defaultdict(set)
+    component_duplicated: dict[int, bool] = {}
+    component_reconciled: dict[int, bool] = {}
+
+    with open(loci_stats_tsv, "rt", encoding="utf-8", newline="") as infile:
+        reader = csv.DictReader(infile, delimiter="\t")
+        _validate_tsv_columns(
+            reader.fieldnames,
+            required={
+                "component_id",
+                "subcomponent_id",
+                "duplicated_component",
+                "used_reconciliation",
+            },
+            label=loci_stats_tsv.name,
+        )
+        for row in reader:
+            component_id = int(row["component_id"])
+            component_subcomponents[component_id].add(int(row["subcomponent_id"]))
+            component_duplicated[component_id] = _parse_bool_text(
+                row.get("duplicated_component")
+            )
+            component_reconciled[component_id] = _parse_bool_text(
+                row.get("used_reconciliation")
+            )
+
+    sample_component_subcomponents: dict[str, dict[int, set[int]]] = defaultdict(
+        lambda: defaultdict(set)
+    )
+    with open(mapping_tsv, "rt", encoding="utf-8", newline="") as infile:
+        reader = csv.DictReader(infile, delimiter="\t")
+        _validate_tsv_columns(
+            reader.fieldnames,
+            required={"sample", "component_id", "subcomponent_id"},
+            label=mapping_tsv.name,
+        )
+        for row in reader:
+            sample_component_subcomponents[str(row["sample"])][int(row["component_id"])].add(
+                int(row["subcomponent_id"])
+            )
+
+    all_samples = set(sample_component_subcomponents)
+    if sample_names is not None:
+        all_samples.update(str(name) for name in sample_names)
+
+    rows: list[dict[str, str | int | float]] = []
+    for sample in all_samples:
+        component_map = sample_component_subcomponents.get(sample, {})
+        components_seen = len(component_map)
+        split_components_seen = sum(
+            1
+            for component_id in component_map
+            if len(component_subcomponents.get(component_id, {0})) > 1
+        )
+        multi_subcomponent_components = sum(
+            1
+            for subcomponent_ids in component_map.values()
+            if len(subcomponent_ids) > 1
+        )
+        duplicated_components_seen = sum(
+            1
+            for component_id in component_map
+            if component_duplicated.get(component_id, False)
+        )
+        reconciled_components_seen = sum(
+            1
+            for component_id in component_map
+            if component_reconciled.get(component_id, False)
+        )
+        rows.append(
+            {
+                "sample": sample,
+                "components_seen": components_seen,
+                "split_components_seen": split_components_seen,
+                "prop_split_components_seen": _safe_fraction(
+                    split_components_seen, components_seen
+                ),
+                "multi_subcomponent_components": multi_subcomponent_components,
+                "prop_multi_subcomponent_components": _safe_fraction(
+                    multi_subcomponent_components, components_seen
+                ),
+                "duplicated_components_seen": duplicated_components_seen,
+                "prop_duplicated_components_seen": _safe_fraction(
+                    duplicated_components_seen, components_seen
+                ),
+                "reconciled_components_seen": reconciled_components_seen,
+                "prop_reconciled_components_seen": _safe_fraction(
+                    reconciled_components_seen, components_seen
+                ),
+            }
+        )
+
+    rows.sort(
+        key=lambda row: (
+            -float(row["prop_multi_subcomponent_components"]),
+            -float(row["prop_split_components_seen"]),
+            str(row["sample"]),
+        )
+    )
+    return [
+        {
+            "sample": str(row["sample"]),
+            "components_seen": str(int(row["components_seen"])),
+            "split_components_seen": str(int(row["split_components_seen"])),
+            "prop_split_components_seen": _format_report_fraction(
+                float(row["prop_split_components_seen"])
+            ),
+            "multi_subcomponent_components": str(
+                int(row["multi_subcomponent_components"])
+            ),
+            "prop_multi_subcomponent_components": _format_report_fraction(
+                float(row["prop_multi_subcomponent_components"])
+            ),
+            "duplicated_components_seen": str(
+                int(row["duplicated_components_seen"])
+            ),
+            "prop_duplicated_components_seen": _format_report_fraction(
+                float(row["prop_duplicated_components_seen"])
+            ),
+            "reconciled_components_seen": str(
+                int(row["reconciled_components_seen"])
+            ),
+            "prop_reconciled_components_seen": _format_report_fraction(
+                float(row["prop_reconciled_components_seen"])
+            ),
+        }
+        for row in rows
+    ]
+
+
+def _write_denovo_sample_graph_summary(
+    outpath: Path,
+    *,
+    mapping_tsv: Path,
+    loci_stats_tsv: Path,
+    sample_names: Iterable[str] | None = None,
+) -> Path:
+    """Write one per-sample denovo graph burden summary TSV."""
+    rows = _build_denovo_sample_graph_summary_rows(
+        mapping_tsv=mapping_tsv,
+        loci_stats_tsv=loci_stats_tsv,
+        sample_names=sample_names,
+    )
+    with open(outpath, "wt", encoding="utf-8", newline="") as out:
+        writer = csv.DictWriter(
+            out,
+            delimiter="\t",
+            fieldnames=_DENOVO_SAMPLE_GRAPH_SUMMARY_FIELDS,
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+    logger.info(f"wrote denovo sample graph summary to {outpath}")
+    return outpath
+
+
+def write_denovo_sample_graph_summary(
+    outdir: Path,
+    *,
+    sample_names: Iterable[str] | None = None,
+) -> Path:
+    """Write the denovo sample graph summary for one completed output dir."""
+    outdir = Path(outdir)
+    return _write_denovo_sample_graph_summary(
+        outdir / DENOVO_SAMPLE_GRAPH_SUMMARY_FILENAME,
+        mapping_tsv=outdir / DENOVO_MAPPING_FILENAME,
+        loci_stats_tsv=outdir / DENOVO_STATS_FILENAME,
+        sample_names=sample_names,
+    )
+
+
 def _safe_fraction(numer: int, denom: int) -> float:
     """Return `numer / denom` or 0.0 when the denominator is empty."""
     if denom <= 0:
@@ -899,6 +1110,7 @@ def _write_denovo_stats(
         ("reference", str(outputs["reference"])),
         ("mapping", str(outputs["mapping"])),
         ("loci_stats", str(outputs["loci_stats"])),
+        ("sample_graph_summary", str(outputs["sample_graph_summary"])),
         ("run_stats", str(outputs["run_stats"])),
         ("audit_dir", str(outputs["audit_dir"])),
         (
@@ -1252,6 +1464,12 @@ def run_denovo(
         total_input_sample_count=len(full_fastq_dict),
         graph_summary=graph_summary,
         outputs=outputs,
+    )
+    _write_denovo_sample_graph_summary(
+        outputs["sample_graph_summary"],
+        mapping_tsv=outputs["mapping"],
+        loci_stats_tsv=outputs["loci_stats"],
+        sample_names=sorted(fastq_dict),
     )
 
     # collect and write stats on the denovo assembly

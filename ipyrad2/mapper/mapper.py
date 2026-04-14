@@ -420,6 +420,7 @@ def run_mapper(
     outdir: Path,
     reference: Path,
     imap: Path | None,
+    unmate: bool,
     cores: int,
     threads: int,
     force: bool,
@@ -443,7 +444,10 @@ def run_mapper(
         delim_idx=delim_idx,
         imap=imap,
         tmpdir=tmpdir,
+        unmate=unmate,
     )
+    if unmate:
+        logger.info("treating paired FASTQ inputs as single-end by concatenating mates per sample")
 
     _check_mapper_dependencies()
     _validate_runtime_settings(

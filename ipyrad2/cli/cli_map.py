@@ -45,6 +45,10 @@ def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = N
         "-o", "--out", metavar="Path", type=Path, default="./MAPPED",
         help="Output directory for coordinate-sorted BAMs and map stats. Created if needed. [default=%(default)s]",
     )
+    core.add_argument(
+        "--unmate", action="store_true",
+        help="Treat paired FASTQs as single-end by concatenating R1 and R2 per sample before mapping.",
+    )
 
     duplicates.add_argument(
         "-m", "--mark-dups-by-coords", action="store_true",
@@ -57,10 +61,7 @@ def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = N
 
     naming.add_argument(
         "-i", "--imap", metavar="Path", type=Path,
-        help=(
-            "Sample-to-group table with `sample<TAB>group` or `glob<TAB>group` "
-            "lines for subsetting, renaming, or merging samples."
-        ),
+        help="Sample-to-group table for subsetting, renaming, or merging samples.",
     )
     naming.add_argument(
         "-dx", "--delim-str", metavar="str", type=str, default=None,
