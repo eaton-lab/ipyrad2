@@ -7,6 +7,7 @@ import pytest
 
 from ipyrad2.mapper.map_samples_prep import apply_imap_to_samples
 from ipyrad2.mapper.map_samples_prep import prepare_map_samples
+from ipyrad2.mapper.map_samples_prep import unmate_paired_samples
 from ipyrad2.utils.exceptions import IPyradError
 
 
@@ -43,6 +44,7 @@ def test_prepare_map_samples_merges_plain_and_gz_replicates(tmp_path: Path) -> N
         delim_idx=1,
         imap=imap,
         tmpdir=tmp_path / "tmpdir",
+        unmate=False,
     )
 
     assert is_paired is True
@@ -133,3 +135,70 @@ def test_apply_imap_to_samples_one_column_glob_keeps_identity_names(tmp_path: Pa
     assert list(fastq_dict) == ["sampleA", "sampleB"]
     assert fastq_dict["sampleA"] == (sample_a, None)
     assert fastq_dict["sampleB"] == (sample_b, None)
+
+
+def test_unmate_paired_samples_concatenates_r1_then_r2(tmp_path: Path) -> None:
+    sample_r1 = tmp_path / "sample_R1.fastq.gz"
+    sample_r2 = tmp_path / "sample_R2.fastq.gz"
+    _write_fastq(sample_r1, b"@r1\nAAAA\n+\n!!!!\n")
+    _write_fastq(sample_r2, b"@r2\nTTTT\n+\n!!!!\n")
+
+    result = unmate_paired_samples(
+        {"sample": (sample_r1, sample_r2)},
+        tmp_path / "tmpdir",
+    )
+
+    merged_r1, merged_r2 = result["sample"]
+    assert merged_r2 is None
+    with gzip.open(merged_r1, "rb") as infile:
+        assert infile.read() == b"@r1\nAAAA\n+\n!!!!\n@r2\nTTTT\n+\n!!!!\n"
+
+
+def test_prepare_map_samples_unmates_after_imap_merge(tmp_path: Path) -> None:
+    fastqs = [
+        tmp_path / "sampleA_R1.fastq.gz",
+        tmp_path / "sampleA_R2.fastq.gz",
+        tmp_path / "sampleB_R1.fastq.gz",
+        tmp_path / "sampleB_R2.fastq.gz",
+    ]
+    _write_fastq(fastqs[0], b"@a1\nAAAA\n+\n!!!!\n")
+    _write_fastq(fastqs[1], b"@a1\nTTTT\n+\n!!!!\n")
+    _write_fastq(fastqs[2], b"@b1\nCCCC\n+\n!!!!\n")
+    _write_fastq(fastqs[3], b"@b1\nGGGG\n+\n!!!!\n")
+    imap = tmp_path / "imap.tsv"
+    imap.write_text("sampleA merged\nsampleB merged\n", encoding="utf-8")
+
+    fastq_dict, is_paired = prepare_map_samples(
+        fastqs=fastqs,
+        delim_str=None,
+        delim_idx=1,
+        imap=imap,
+        tmpdir=tmp_path / "tmpdir",
+        unmate=True,
+    )
+
+    assert is_paired is False
+    merged_fastq, merged_r2 = fastq_dict["merged"]
+    assert merged_r2 is None
+    with gzip.open(merged_fastq, "rb") as infile:
+        assert infile.read() == (
+            b"@a1\nAAAA\n+\n!!!!\n"
+            b"@b1\nCCCC\n+\n!!!!\n"
+            b"@a1\nTTTT\n+\n!!!!\n"
+            b"@b1\nGGGG\n+\n!!!!\n"
+        )
+
+
+def test_prepare_map_samples_rejects_unmate_on_single_end_inputs(tmp_path: Path) -> None:
+    fastq = tmp_path / "sample.fastq.gz"
+    _write_fastq(fastq)
+
+    with pytest.raises(IPyradError, match="--unmate can only be used with paired-end FASTQ inputs"):
+        prepare_map_samples(
+            fastqs=[fastq],
+            delim_str=None,
+            delim_idx=1,
+            imap=None,
+            tmpdir=tmp_path / "tmpdir",
+            unmate=True,
+        )

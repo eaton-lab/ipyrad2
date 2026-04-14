@@ -388,6 +388,8 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
                     "length_mean": 10.0,
                     "length_std": 0.0,
                     "merged_freq": 0.0,
+                    "duplicated_component": False,
+                    "used_reconciliation": False,
                     "samples": "sample_a",
                 }
             ]
@@ -457,6 +459,7 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
     assert (outdir / "denovo_reference.fa").exists()
     assert (outdir / "denovo.loci.mapping.tsv").exists()
     assert (outdir / "denovo.loci.stats.tsv").exists()
+    assert (outdir / "denovo.sample_graph_summary.tsv").exists()
     assert (outdir / "denovo.stats.txt").exists()
     assert not (outdir / denovo_module.WORKDIR_NAME).exists()
 
@@ -486,6 +489,11 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
     assert _report_has_value_line(stats_text, "single_sequence_loci", "1")
     assert _report_has_value_line(stats_text, "mafft_required_loci", "0")
     assert _report_has_value_line(stats_text, "stripped_output_loci", "1")
+    assert _report_has_value_line(
+        stats_text,
+        "sample_graph_summary",
+        str(outdir / "denovo.sample_graph_summary.tsv"),
+    )
     assert "sample_names:" not in stats_text
     assert "occupancy_distribution:" not in stats_text
     assert _report_has_value_line(stats_text, "selected_sample_count", "1")
@@ -570,8 +578,11 @@ def test_run_denovo_keep_intermediates_preserves_workdir(
                 [
                     {
                         "locus": 1,
+                        "component_id": 1,
+                        "subcomponent_id": 1,
                         "locus_name": "locus_1_1",
                         "contract_group": "contract_1_1",
+                        "sample": "sample_a",
                         "core": "sample_a;S1",
                     }
                 ]
@@ -584,6 +595,8 @@ def test_run_denovo_keep_intermediates_preserves_workdir(
                 [
                     {
                         "locus": 1,
+                        "component_id": 1,
+                        "subcomponent_id": 1,
                         "n_samples": 1,
                         "n_cores": 1,
                         "duplicated_component": False,
@@ -647,6 +660,7 @@ def test_prepare_output_paths_uses_current_renamed_denovo_outputs(
     assert workdir.exists()
     assert outputs["mapping"] == outdir / "denovo.loci.mapping.tsv"
     assert outputs["loci_stats"] == outdir / "denovo.loci.stats.tsv"
+    assert outputs["sample_graph_summary"] == outdir / "denovo.sample_graph_summary.tsv"
     assert "qc" not in outputs
 
 
@@ -657,14 +671,19 @@ def test_prepare_output_paths_force_removes_current_renamed_outputs(
     outdir.mkdir()
     (outdir / "denovo.loci.mapping.tsv").write_text("old mapping\n", encoding="utf-8")
     (outdir / "denovo.loci.stats.tsv").write_text("old stats\n", encoding="utf-8")
+    (outdir / "denovo.sample_graph_summary.tsv").write_text(
+        "old sample graph\n", encoding="utf-8"
+    )
 
     workdir, outputs = denovo_module._prepare_output_paths(outdir, force=True)
 
     assert workdir.exists()
     assert outputs["mapping"] == outdir / "denovo.loci.mapping.tsv"
     assert outputs["loci_stats"] == outdir / "denovo.loci.stats.tsv"
+    assert outputs["sample_graph_summary"] == outdir / "denovo.sample_graph_summary.tsv"
     assert not outputs["mapping"].exists()
     assert not outputs["loci_stats"].exists()
+    assert not outputs["sample_graph_summary"].exists()
 
 
 def test_run_vsearch_with_progress_tracks_searching_status_only(
@@ -1847,8 +1866,11 @@ def test_run_denovo_no_alignment_passes_alignment_mode_none(
             [
                 {
                     "locus": 1,
+                    "component_id": 1,
+                    "subcomponent_id": 1,
                     "locus_name": "locus_1_1",
                     "contract_group": "contract_1_1",
+                    "sample": "sample_a",
                     "core": "sample_a;S1",
                 }
             ]
@@ -1857,6 +1879,8 @@ def test_run_denovo_no_alignment_passes_alignment_mode_none(
             [
                 {
                     "locus": 1,
+                    "component_id": 1,
+                    "subcomponent_id": 1,
                     "n_samples": 1,
                     "n_cores": 1,
                     "duplicated_component": False,
@@ -1910,6 +1934,7 @@ def test_run_denovo_no_alignment_passes_alignment_mode_none(
     stats_text = (outdir / "denovo.stats.txt").read_text(encoding="utf-8")
     assert _report_has_value_line(stats_text, "alignment_mode", "none")
     assert _report_has_value_line(stats_text, "mafft_worker_processes", "0")
+    assert (outdir / "denovo.sample_graph_summary.tsv").exists()
 
 
 def test_write_denovo_stats_formats_assemble_style_sections(
@@ -1922,6 +1947,7 @@ def test_write_denovo_stats_formats_assemble_style_sections(
         "reference": outdir / "denovo_reference.fa",
         "mapping": outdir / "denovo.loci.mapping.tsv",
         "loci_stats": outdir / "denovo.loci.stats.tsv",
+        "sample_graph_summary": outdir / "denovo.sample_graph_summary.tsv",
         "run_stats": outpath,
         "audit_dir": outdir / "denovo.audit",
     }
@@ -2056,6 +2082,9 @@ def test_write_denovo_stats_formats_assemble_style_sections(
     assert re.search(r"^1\s+2\s+0\.666667\s*$", text, re.MULTILINE)
     assert re.search(r"^2\s+1\s+0\.333333\s*$", text, re.MULTILINE)
     assert _report_has_value_line(text, "selected_sample_count", "2")
+    assert _report_has_value_line(
+        text, "sample_graph_summary", str(outdir / "denovo.sample_graph_summary.tsv")
+    )
     assert _report_has_value_line(text, "intermediates", "cleaned on success")
 
 
@@ -2071,6 +2100,7 @@ def test_collect_denovo_qc_summarizes_final_outputs(
         "reference": outdir / "denovo_reference.fa",
         "mapping": outdir / "denovo.loci.mapping.tsv",
         "loci_stats": outdir / "denovo.loci.stats.tsv",
+        "sample_graph_summary": outdir / "denovo.sample_graph_summary.tsv",
         "run_stats": outdir / "denovo.stats.txt",
         "audit_dir": audit_dir,
         "workdir": workdir,
@@ -2212,6 +2242,7 @@ def test_collect_denovo_qc_handles_empty_outputs(
         "reference": outdir / "denovo_reference.fa",
         "mapping": outdir / "denovo.loci.mapping.tsv",
         "loci_stats": outdir / "denovo.loci.stats.tsv",
+        "sample_graph_summary": outdir / "denovo.sample_graph_summary.tsv",
         "run_stats": outdir / "denovo.stats.txt",
         "audit_dir": audit_dir,
         "workdir": workdir,
@@ -2249,6 +2280,102 @@ def test_collect_denovo_qc_handles_empty_outputs(
             single_records=0,
         ),
     )
+
+
+def test_write_denovo_sample_graph_summary_reports_per_sample_split_burden(
+    tmp_path: Path,
+) -> None:
+    outdir = tmp_path / "OUT"
+    outdir.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "component_id": 1,
+                "subcomponent_id": 1,
+                "duplicated_component": False,
+                "used_reconciliation": False,
+            },
+            {
+                "component_id": 2,
+                "subcomponent_id": 1,
+                "duplicated_component": True,
+                "used_reconciliation": False,
+            },
+            {
+                "component_id": 2,
+                "subcomponent_id": 2,
+                "duplicated_component": True,
+                "used_reconciliation": False,
+            },
+            {
+                "component_id": 3,
+                "subcomponent_id": 1,
+                "duplicated_component": False,
+                "used_reconciliation": True,
+            },
+            {
+                "component_id": 3,
+                "subcomponent_id": 2,
+                "duplicated_component": False,
+                "used_reconciliation": True,
+            },
+        ]
+    ).to_csv(outdir / "denovo.loci.stats.tsv", sep="\t", index=False)
+    pd.DataFrame(
+        [
+            {"sample": "s1", "component_id": 1, "subcomponent_id": 1},
+            {"sample": "s1", "component_id": 2, "subcomponent_id": 1},
+            {"sample": "s1", "component_id": 2, "subcomponent_id": 2},
+            {"sample": "s2", "component_id": 2, "subcomponent_id": 1},
+            {"sample": "s2", "component_id": 3, "subcomponent_id": 1},
+            {"sample": "s3", "component_id": 3, "subcomponent_id": 1},
+        ]
+    ).to_csv(outdir / "denovo.loci.mapping.tsv", sep="\t", index=False)
+
+    outpath = denovo_module.write_denovo_sample_graph_summary(
+        outdir, sample_names=("s1", "s2", "s3", "s4")
+    )
+
+    rows = pd.read_csv(outpath, sep="\t")
+    assert rows.columns.tolist() == [
+        "sample",
+        "components_seen",
+        "split_components_seen",
+        "prop_split_components_seen",
+        "multi_subcomponent_components",
+        "prop_multi_subcomponent_components",
+        "duplicated_components_seen",
+        "prop_duplicated_components_seen",
+        "reconciled_components_seen",
+        "prop_reconciled_components_seen",
+    ]
+    assert rows["sample"].tolist() == ["s1", "s2", "s3", "s4"]
+
+    s1 = rows.loc[rows["sample"] == "s1"].iloc[0]
+    assert int(s1["components_seen"]) == 2
+    assert int(s1["split_components_seen"]) == 1
+    assert float(s1["prop_split_components_seen"]) == pytest.approx(0.5)
+    assert int(s1["multi_subcomponent_components"]) == 1
+    assert float(s1["prop_multi_subcomponent_components"]) == pytest.approx(0.5)
+    assert int(s1["duplicated_components_seen"]) == 1
+    assert float(s1["prop_duplicated_components_seen"]) == pytest.approx(0.5)
+    assert int(s1["reconciled_components_seen"]) == 0
+    assert float(s1["prop_reconciled_components_seen"]) == pytest.approx(0.0)
+
+    s2 = rows.loc[rows["sample"] == "s2"].iloc[0]
+    assert int(s2["components_seen"]) == 2
+    assert int(s2["split_components_seen"]) == 2
+    assert float(s2["prop_split_components_seen"]) == pytest.approx(1.0)
+    assert int(s2["multi_subcomponent_components"]) == 0
+    assert float(s2["prop_multi_subcomponent_components"]) == pytest.approx(0.0)
+    assert int(s2["duplicated_components_seen"]) == 1
+    assert float(s2["prop_duplicated_components_seen"]) == pytest.approx(0.5)
+    assert int(s2["reconciled_components_seen"]) == 1
+    assert float(s2["prop_reconciled_components_seen"]) == pytest.approx(0.5)
+
+    s4 = rows.loc[rows["sample"] == "s4"].iloc[0]
+    assert int(s4["components_seen"]) == 0
+    assert float(s4["prop_split_components_seen"]) == pytest.approx(0.0)
 
 
 def test_make_global_tables_contracts_joined_duplicates_and_writes_hierarchical_locus_names(

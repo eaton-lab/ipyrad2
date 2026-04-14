@@ -70,7 +70,7 @@ flowchart TD
     K --> L{"Final locus writing mode"} 
     L -->|default| M["MAFFT final locus consensus"]:::cmd
     L -->|--no-alignment| N["Representative locus sequence"]:::cmd
-    M --> O["denovo_reference.fa + denovo.loci.mapping.tsv + denovo.loci.stats.tsv + denovo.stats.txt + denovo.audit/"]:::file
+    M --> O["denovo_reference.fa + denovo.loci.mapping.tsv + denovo.loci.stats.tsv + denovo.sample_graph_summary.tsv + denovo.stats.txt + denovo.audit/"]:::file
     N --> O
 
     classDef file fill:#e8f2ff,stroke:#2f6fb1,color:#0f2f4f;
@@ -273,6 +273,7 @@ The final stage now reports progress:
 - `denovo_reference.fa`: the final pseudoreference FASTA used by downstream mapping
 - `denovo.loci.mapping.tsv`: mapping from final loci to the contributing sample-level consensus records
 - `denovo.loci.stats.tsv`: per-locus summary table for the final denovo loci
+- `denovo.sample_graph_summary.tsv`: per-sample burden of split, duplicated, and reconciled graph components
 - `denovo.stats.txt`: human-readable run summary with inputs, parameters, binaries, runtime settings, QC summaries, and output paths
 - `denovo.audit/`: compact audit files for duplicated, reconciled, or split components
 

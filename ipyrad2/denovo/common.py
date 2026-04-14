@@ -9,6 +9,7 @@ CLUSTER_JOINED_SPACER_LEN = 24
 OUTPUT_JOINED_SPACER_LEN = 50
 DENOVO_MAPPING_FILENAME = "denovo.loci.mapping.tsv"
 DENOVO_STATS_FILENAME = "denovo.loci.stats.tsv"
+DENOVO_SAMPLE_GRAPH_SUMMARY_FILENAME = "denovo.sample_graph_summary.tsv"
 
 
 def infer_record_type(seed: str) -> str:

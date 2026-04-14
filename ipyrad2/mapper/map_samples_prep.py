@@ -161,12 +161,30 @@ def apply_imap_to_samples(
     return result
 
 
+def unmate_paired_samples(
+    fastq_dict: Dict[str, Tuple[Path, Path | None]],
+    tmpdir: Path,
+) -> Dict[str, Tuple[Path, Path | None]]:
+    """Return one effective SE FASTQ per paired sample by concatenating R1 then R2."""
+    result: Dict[str, Tuple[Path, Path | None]] = {}
+    for sname, (r1, r2) in fastq_dict.items():
+        if r2 is None:
+            raise IPyradError(
+                f"--unmate can only be used with paired-end FASTQ inputs; sample '{sname}' is single-end."
+            )
+        out = tmpdir / f"{sname}.tmp.unmated.fastq.gz"
+        _concat_fastqs([r1, r2], out)
+        result[sname] = (out, None)
+    return result
+
+
 def prepare_map_samples(
     fastqs,
     delim_str: str | None,
     delim_idx: int,
     imap: Path | None,
     tmpdir: Path,
+    unmate: bool = False,
 ) -> Tuple[Dict[str, Tuple[Path, Path | None]], bool]:
     """Parse, optionally materialize, and validate mapper samples."""
     fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx)
@@ -174,4 +192,9 @@ def prepare_map_samples(
         fastq_dict = apply_imap_to_samples(imap, tmpdir, fastq_dict)
     validate_fastq_inputs(fastq_dict)
     is_paired = detect_is_paired(fastq_dict)
+    if unmate:
+        if not is_paired:
+            raise IPyradError("--unmate can only be used with paired-end FASTQ inputs.")
+        fastq_dict = unmate_paired_samples(fastq_dict, tmpdir)
+        is_paired = False
     return fastq_dict, is_paired

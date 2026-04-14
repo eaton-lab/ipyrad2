@@ -296,6 +296,7 @@ def run_subcommand(args, _exit=True):
             reference=args.reference,
             outdir=args.out,
             imap=args.imap,
+            unmate=args.unmate,
             mark_dups_by_coords=args.mark_dups_by_coords,
             mark_dups_by_umis=args.mark_dups_by_umis,
             cores=args.cores,
