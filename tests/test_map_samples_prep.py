@@ -154,6 +154,24 @@ def test_unmate_paired_samples_concatenates_r1_then_r2(tmp_path: Path) -> None:
         assert infile.read() == b"@r1\nAAAA\n+\n!!!!\n@r2\nTTTT\n+\n!!!!\n"
 
 
+def test_unmate_paired_samples_reuses_gzip_members_without_recompressing(tmp_path: Path) -> None:
+    sample_r1 = tmp_path / "sample_R1.fastq.gz"
+    sample_r2 = tmp_path / "sample_R2.fastq.gz"
+    _write_fastq(sample_r1, b"@r1\nAAAA\n+\n!!!!\n")
+    _write_fastq(sample_r2, b"@r2\nTTTT\n+\n!!!!\n")
+    raw_r1 = sample_r1.read_bytes()
+    raw_r2 = sample_r2.read_bytes()
+
+    result = unmate_paired_samples(
+        {"sample": (sample_r1, sample_r2)},
+        tmp_path / "tmpdir",
+    )
+
+    merged_r1, merged_r2 = result["sample"]
+    assert merged_r2 is None
+    assert merged_r1.read_bytes() == raw_r1 + raw_r2
+
+
 def test_prepare_map_samples_unmates_after_imap_merge(tmp_path: Path) -> None:
     fastqs = [
         tmp_path / "sampleA_R1.fastq.gz",
