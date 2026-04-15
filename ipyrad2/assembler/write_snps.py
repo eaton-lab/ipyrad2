@@ -195,9 +195,9 @@ def write_snps_hdf5(
         flush(fill)
         io5.attrs["nsnps"] = int(total)
     if total == 0:
-        logger.info("no SNPs passed final filtering; wrote empty SNP datasets to {}", database)
+        logger.debug("wrote empty SNP dataset to {}", database)
     else:
-        logger.debug(f"wrote snps dataset to {database} (nsnps={total:,})")
+        logger.debug("wrote snps dataset to {} (nsnps={:,})", database, total)
     return int(total)
 
 

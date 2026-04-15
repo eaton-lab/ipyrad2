@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from loguru import logger
 
 from ipyrad2.denovo import denovo as denovo_module
 from ipyrad2.denovo import align as align_module
@@ -305,7 +306,7 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
     sample_fastq.write_text("", encoding="utf-8")
     outdir = tmp_path / "OUT"
     calls: dict[str, object] = {}
-    vsearch_binary, mafft_binary = _patch_required_binaries(monkeypatch, tmp_path)
+    _vsearch_binary, mafft_binary = _patch_required_binaries(monkeypatch, tmp_path)
 
     monkeypatch.setattr(
         denovo_module,
@@ -434,27 +435,32 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
         fake_write_ordered_consensus_stream_to_file,
     )
 
-    denovo_module.run_denovo(
-        fastqs=[sample_fastq],
-        outdir=outdir,
-        within_similarity=0.95,
-        across_similarity=0.85,
-        min_derep_size=2,
-        min_length=35,
-        min_merge_overlap=20,
-        max_merge_diffs=4,
-        delim_str=None,
-        delim_idx=1,
-        allow_reverse_complement=False,
-        cores=6,
-        threads=3,
-        no_alignment=False,
-        force=False,
-        imap=None,
-        use_all_samples=False,
-        keep_intermediates=False,
-        log_level="INFO",
-    )
+    messages: list[str] = []
+    handler_id = logger.add(messages.append, format="{message}", level="INFO")
+    try:
+        denovo_module.run_denovo(
+            fastqs=[sample_fastq],
+            outdir=outdir,
+            within_similarity=0.95,
+            across_similarity=0.85,
+            min_derep_size=2,
+            min_length=35,
+            min_merge_overlap=20,
+            max_merge_diffs=4,
+            delim_str=None,
+            delim_idx=1,
+            allow_reverse_complement=False,
+            cores=6,
+            threads=3,
+            no_alignment=False,
+            force=False,
+            imap=None,
+            use_all_samples=False,
+            keep_intermediates=False,
+            log_level="INFO",
+        )
+    finally:
+        logger.remove(handler_id)
 
     assert (outdir / "denovo_reference.fa").exists()
     assert (outdir / "denovo.loci.mapping.tsv").exists()
@@ -474,37 +480,44 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
     assert "# Locus Occupancy" in stats_text
     assert "# Runtime" in stats_text
     assert "# Outputs" in stats_text
-    assert _report_has_value_line(stats_text, "selected_sample_count", "1")
-    assert _report_has_value_line(stats_text, "sample_selection_mode", "all")
-    assert _report_has_value_line(stats_text, "vsearch_binary", str(vsearch_binary))
-    assert _report_has_value_line(stats_text, "mafft_binary", str(mafft_binary))
-    assert _report_has_value_line(stats_text, "keep_intermediates", "False")
-    assert _report_has_value_line(stats_text, "alignment_mode", "mafft")
-    assert _report_has_value_line(stats_text, "vsearch_threads_per_job", "3")
-    assert _report_has_value_line(stats_text, "across_vsearch_threads", "6")
-    assert _report_has_value_line(
-        stats_text, "duplicated_component_reconciliation", "same-sample graph"
-    )
-    assert _report_has_value_line(stats_text, "mafft_threads_per_job", "0")
-    assert _report_has_value_line(stats_text, "single_sequence_loci", "1")
-    assert _report_has_value_line(stats_text, "mafft_required_loci", "0")
-    assert _report_has_value_line(stats_text, "stripped_output_loci", "1")
+    assert _report_has_value_line(stats_text, "Selected samples", "1")
+    assert _report_has_value_line(stats_text, "Sample selection mode", "all")
+    assert _report_has_value_line(stats_text, "Keep intermediates", "False")
+    assert _report_has_value_line(stats_text, "Alignment mode", "mafft")
+    assert _report_has_value_line(stats_text, "VSEARCH threads per job", "3")
+    assert _report_has_value_line(stats_text, "MAFFT threads per job", "0")
+    assert _report_has_value_line(stats_text, "Single-sequence loci", "1")
+    assert _report_has_value_line(stats_text, "Loci requiring MAFFT", "0")
+    assert _report_has_value_line(stats_text, "Spacer-stripped output loci", "1")
     assert _report_has_value_line(
         stats_text,
-        "sample_graph_summary",
+        "Sample graph summary",
         str(outdir / "denovo.sample_graph_summary.tsv"),
     )
+    assert "vsearch_binary" not in stats_text
+    assert "mafft_binary" not in stats_text
+    assert "workdir" not in stats_text
+    assert "across_vsearch_threads" not in stats_text
+    assert "duplicated_component_reconciliation" not in stats_text
     assert "sample_names:" not in stats_text
     assert "occupancy_distribution:" not in stats_text
-    assert _report_has_value_line(stats_text, "selected_sample_count", "1")
+    assert _report_has_value_line(stats_text, "Selected samples", "1")
     assert re.search(r"^sample_a\s+1\s+5\s+0\s+0\s+1\s*$", stats_text, re.MULTILINE)
     assert re.search(r"^1\s+1\s+1\.000000\s*$", stats_text, re.MULTILINE)
+    assert any("loading FASTQ inputs" in message for message in messages)
+    assert any("selecting denovo samples" in message for message in messages)
+    assert any("combining per-sample summaries" in message for message in messages)
+    assert any("building denovo locus tables" in message for message in messages)
+    assert any("building denovo reference (MAFFT)" in message for message in messages)
+    assert any("collecting final denovo QC" in message for message in messages)
+    assert any("writing denovo summary report" in message for message in messages)
+    assert any("denovo complete; outputs written to" in message for message in messages)
 
     assert calls["pool"] == {
         "keys": ["sample_a"],
         "log_level": "INFO",
         "max_workers": 2,
-        "msg": "Dereplicating and clustering",
+        "msg": "Clustering within samples",
     }
     assert calls["consensus"]["mapping_tsv"] == outdir / "denovo.loci.mapping.tsv"
     assert (
@@ -1932,8 +1945,8 @@ def test_run_denovo_no_alignment_passes_alignment_mode_none(
     assert calls["consensus"]["alignment_mode"] == "none"
     assert calls["consensus"]["cores"] == 6
     stats_text = (outdir / "denovo.stats.txt").read_text(encoding="utf-8")
-    assert _report_has_value_line(stats_text, "alignment_mode", "none")
-    assert _report_has_value_line(stats_text, "mafft_worker_processes", "0")
+    assert _report_has_value_line(stats_text, "Alignment mode", "none")
+    assert _report_has_value_line(stats_text, "MAFFT worker processes", "0")
     assert (outdir / "denovo.sample_graph_summary.tsv").exists()
 
 
@@ -2061,31 +2074,34 @@ def test_write_denovo_stats_formats_assemble_style_sections(
     assert "# Locus Occupancy" in text
     assert "# Component Node Summary" in text
     assert re.search(
-        r"^sample\s+consensus_records\s+n_reads_sum\s+joined_records\s+merged_records\s+single_records$",
+        r"^Sample\s+Consensus records\s+Read count\s+Joined records\s+Merged records\s+Single records$",
         text,
         re.MULTILINE,
     )
     assert re.search(r"^sample_b\s+12\s+1,200\s+4\s+2\s+0\s*$", text, re.MULTILINE)
     assert re.search(r"^sample_a\s+3\s+45\s+0\s+1\s+2\s*$", text, re.MULTILINE)
     assert re.search(
-        r"^quantile\s+input_nodes\s+contracted_nodes$",
+        r"^Quantile\s+Input nodes\s+Contracted nodes$",
         text,
         re.MULTILINE,
     )
     assert re.search(r"^p90\s+7\.500\s+4\.500\s*$", text, re.MULTILINE)
     assert re.search(
-        r"^samples_with_data\s+loci\s+fraction_of_final_loci$",
+        r"^Samples with data\s+Loci\s+Fraction of final loci$",
         text,
         re.MULTILINE,
     )
     assert re.search(r"^0\s+0\s+0\.000000\s*$", text, re.MULTILINE)
     assert re.search(r"^1\s+2\s+0\.666667\s*$", text, re.MULTILINE)
     assert re.search(r"^2\s+1\s+0\.333333\s*$", text, re.MULTILINE)
-    assert _report_has_value_line(text, "selected_sample_count", "2")
+    assert _report_has_value_line(text, "Selected samples", "2")
     assert _report_has_value_line(
-        text, "sample_graph_summary", str(outdir / "denovo.sample_graph_summary.tsv")
+        text, "Sample graph summary", str(outdir / "denovo.sample_graph_summary.tsv")
     )
-    assert _report_has_value_line(text, "intermediates", "cleaned on success")
+    assert _report_has_value_line(text, "Intermediate files", "cleaned on success")
+    assert "vsearch_binary" not in text
+    assert "mafft_binary" not in text
+    assert "workdir" not in text
 
 
 def test_collect_denovo_qc_summarizes_final_outputs(

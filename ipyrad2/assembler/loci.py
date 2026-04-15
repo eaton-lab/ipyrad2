@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import gzip
 import csv
 import re
@@ -27,6 +28,16 @@ HETERO_CODES = np.array(list(b"RSKYWM"), dtype=np.uint8)
 def get_lowdepth_mask_path(sname: str, tmpdir: Path) -> Path:
     """Return the intermediate low-depth-only mask path for one sample."""
     return tmpdir / "beds" / f"{sname}.lowdepth.mask.bed"
+
+
+def get_goodcov_bed_path(sname: str, tmpdir: Path) -> Path:
+    """Return the per-sample BED of positions meeting the depth threshold."""
+    return tmpdir / "beds" / f"{sname}.goodcov.bed"
+
+
+def get_final_good_bed_path(sname: str, tmpdir: Path) -> Path:
+    """Return the per-sample retained BED after shared paralog filtering."""
+    return tmpdir / "beds" / f"{sname}.final.good.bed"
 
 
 def get_paralog_mask_path(sname: str, tmpdir: Path) -> Path:
@@ -82,9 +93,12 @@ def get_reference_in_loci_beds(tmpdir: Path, reference: Path) -> Path:
 
 
 def get_consensus(
+    *,
     sname: str,
     reference_fasta: Path,
-    tmpdir: Path,
+    resolved_vcf: Path,
+    sample_mask_bed: Path,
+    out_fasta: Path,
     keep_insertions: bool,
 ) -> Path:
     """Write consensus sequences for one sample.
@@ -92,28 +106,19 @@ def get_consensus(
     Create FASTA for `sample_name` over the already sliced shared loci
     reference, applying variants from `vcf_gz` and masking filtered regions to N.
     """
-    # The shared locus-sliced reference FASTA is written once per assemble run
-    # and then reused here for every sample to avoid re-running `samtools faidx`
-    # inside each consensus worker.
-    vcf_gz = tmpdir / "vcfs" / "variants.resolved.vcf.gz"
-    consensus_dir = tmpdir / "consensus_seqs"
-    consensus_dir.mkdir(parents=True, exist_ok=True)
-
-    # sample files
-    mask_bed = get_sample_mask_path(sname, tmpdir)
-    out_fasta = consensus_dir / f"{sname}.consensus.fa"
+    out_fasta.parent.mkdir(parents=True, exist_ok=True)
 
     cmd1 = [
         BIN_BCF, "consensus",
         "-f", str(reference_fasta),
         "-s", f"{sname}",         # sample to apply
         "-M", "N",                # write N for missing genotypes
-        "--mask", str(mask_bed),  # mask zero/low-coverage intervals to N
+        "--mask", str(sample_mask_bed),  # mask zero/low-coverage intervals to N
         "--mask-with", "N",
         "--mark-del", "-",
         "--mark-ins", "lc" if keep_insertions else "+",
         "--regions-overlap", "1", # apply variants overlapping slice edges
-        str(vcf_gz),
+        str(resolved_vcf),
     ]
     cmd2 = ["tr", "-d", "'+"]
     run_pipeline([cmd1, cmd2], out_fasta)
@@ -142,26 +147,28 @@ def _subtract_sorted_beds(a_bed: Path, b_bed: Path, ref_info: Path, out_bed: Pat
     return out_bed
 
 
-def make_lowdepth_mask(sname: str, min_sample_depth: int, tmpdir: Path):
+def make_lowdepth_mask(
+    *,
+    loci_bed: Path,
+    sample_bedgraph: Path,
+    ref_info: Path,
+    good_bed: Path,
+    out_bed: Path,
+    sort_tmpdir: Path,
+    min_sample_depth: int,
+) -> Path:
     """Build a per-bp mask of positions inside `loci_bed` where bedGraph depth < min_depth.
 
     Output mask contains only the A (loci) columns and is split into minimal sub-intervals
     where coverage is below threshold (including 0-coverage gaps).
     """
-    bed_dir = tmpdir / "beds"
-    loci_bed = bed_dir / "loci.bed"
-    ref_info = tmpdir / "REF_info.txt"
-    sample_bedgraph = bed_dir / f"{sname}.fragments.bedgraph"
-    good_bed = bed_dir / f"{sname}.goodcov.bed"
-    out_bed = get_lowdepth_mask_path(sname, tmpdir)
-
     # 1) Threshold bedGraph: keep depth >= min_depth, drop depth column for set ops
     cmd1 = [
         "awk",
         f'BEGIN{{OFS="\\t"}} $4>={min_sample_depth} {{print $1,$2,$3}}',
         str(sample_bedgraph),
     ]
-    cmd2 = ["sort", "-k1,1", "-k2,2n", "-T", str(tmpdir)]
+    cmd2 = ["sort", "-k1,1", "-k2,2n", "-T", str(sort_tmpdir)]
     cmd3 = [BIN_BED, "merge", "-i", "-"]
     cmd4 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
     run_pipeline([cmd1, cmd2, cmd3, cmd4], good_bed)
@@ -169,14 +176,14 @@ def make_lowdepth_mask(sname: str, min_sample_depth: int, tmpdir: Path):
     return _subtract_sorted_beds(loci_bed, good_bed, ref_info, out_bed)
 
 
-def make_paralog_mask(sname: str, tmpdir: Path) -> Path:
+def make_paralog_mask(
+    *,
+    loci_bed: Path,
+    sample_good_bed: Path,
+    ref_info: Path,
+    out_bed: Path,
+) -> Path:
     """Write the shared loci segments excluded only for this sample by paralog filtering."""
-    bed_dir = tmpdir / "beds"
-    loci_bed = bed_dir / "loci.bed"
-    ref_info = tmpdir / "REF_info.txt"
-    sample_good_bed = bed_dir / f"{sname}.final.good.bed"
-    out_bed = get_paralog_mask_path(sname, tmpdir)
-
     # Samples that had no passing per-sample BED after paralog scoring get an
     # empty mask here so the downstream merge step still has a stable filepath.
     if not sample_good_bed.exists():
@@ -186,14 +193,16 @@ def make_paralog_mask(sname: str, tmpdir: Path) -> Path:
     return _subtract_sorted_beds(loci_bed, sample_good_bed, ref_info, out_bed)
 
 
-def merge_sample_mask_beds(sname: str, tmpdir: Path) -> Path:
+def merge_sample_mask_beds(
+    *,
+    lowdepth_bed: Path,
+    paralog_bed: Path,
+    indel_overlap_bed: Path,
+    ref_info: Path,
+    out_bed: Path,
+    sort_tmpdir: Path,
+) -> Path:
     """Merge all per-sample mask sources into the final consensus mask BED."""
-    ref_info = tmpdir / "REF_info.txt"
-    lowdepth_bed = get_lowdepth_mask_path(sname, tmpdir)
-    paralog_bed = get_paralog_mask_path(sname, tmpdir)
-    indel_overlap_bed = get_indel_overlap_mask_path(sname, tmpdir)
-    out_bed = get_sample_mask_path(sname, tmpdir)
-
     existing = [
         path
         for path in (lowdepth_bed, paralog_bed, indel_overlap_bed)
@@ -209,20 +218,30 @@ def merge_sample_mask_beds(sname: str, tmpdir: Path) -> Path:
     # Merge every active interval source into one sorted mask so consensus
     # calling sees a single BED regardless of why a site was filtered.
     cmd1 = ["cat"] + [str(path) for path in existing]
-    cmd2 = ["sort", "-k1,1", "-k2,2n", "-T", str(tmpdir)]
+    cmd2 = ["sort", "-k1,1", "-k2,2n", "-T", str(sort_tmpdir)]
     cmd3 = [BIN_BED, "merge", "-i", "-"]
     cmd4 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
     run_pipeline([cmd1, cmd2, cmd3, cmd4], out_bed)
     return out_bed
 
 
-def merge_final_vcf_mask_beds(sname: str, tmpdir: Path) -> Path:
-    """Merge consensus-time and final-output sample masks for final VCF masking."""
-    ref_info = tmpdir / "REF_info.txt"
-    out_bed = get_final_vcf_mask_path(sname, tmpdir)
+def merge_final_vcf_mask_beds(
+    *,
+    lowdepth_bed: Path,
+    indel_overlap_bed: Path,
+    consensus_hetero_bed: Path,
+    ref_info: Path,
+    out_bed: Path,
+    sort_tmpdir: Path,
+) -> Path:
+    """Merge the final-output-only sample masks applied to the final VCF.
+
+    This intentionally excludes the sample-specific paralog mask because
+    post-paralog calling BAMs already remove that evidence before joint calling.
+    """
     existing = [
         path
-        for path in (get_sample_mask_path(sname, tmpdir), get_consensus_hetero_mask_path(sname, tmpdir))
+        for path in (lowdepth_bed, indel_overlap_bed, consensus_hetero_bed)
         if path.exists() and path.stat().st_size
     ]
     if not existing:
@@ -233,7 +252,7 @@ def merge_final_vcf_mask_beds(sname: str, tmpdir: Path) -> Path:
         return out_bed
 
     cmd1 = ["cat"] + [str(path) for path in existing]
-    cmd2 = ["sort", "-k1,1", "-k2,2n", "-T", str(tmpdir)]
+    cmd2 = ["sort", "-k1,1", "-k2,2n", "-T", str(sort_tmpdir)]
     cmd3 = [BIN_BED, "merge", "-i", "-"]
     cmd4 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
     run_pipeline([cmd1, cmd2, cmd3, cmd4], out_bed)
@@ -286,27 +305,17 @@ def iter_build_loci(fastas: list[Path]):
 
 
 def build_locus_fasta_database(
-    name: str,
-    snames: list[str],
-    reference: Path,
-    tmpdir: Path,
+    *,
+    consensus_fastas: list[Path],
+    database_fasta: Path,
+    restriction_mask_bed: Path,
     masks: list[str] | None,
 ) -> tuple[Path, Path]:
     """Build the shared locus FASTA database and optional restriction-site mask BED."""
-    # get sorted consensus fastas with reference on top
-    consensus_dir = tmpdir / "consensus_seqs"
-    fastas = [consensus_dir / f"{i}.consensus.fa" for i in sorted(snames)]
-
-    # insert reference as first sample unless explicitly excluded
-    reference_fa = consensus_dir / "assembly_reference_sequence.consensus.fa"
-    fastas = [reference_fa] + fastas
+    fastas = list(consensus_fastas)
 
     # get names
     snames = [i.name.rsplit(".consensus.fa")[0] for i in fastas]
-
-    # file paths
-    database = tmpdir / f"{name}.database.fa"
-    bed_mask = tmpdir / f"{name}.re_mask.bed"
 
     # restriction site sequences to be masked
     re_masks = []
@@ -315,7 +324,9 @@ def build_locus_fasta_database(
             re_masks.append(re.compile(mask))
             re_masks.append(re.compile(comp(mask)[::-1]))
 
-    with open(database, "w") as out_fa, open(bed_mask, "w") as out_bed:
+    database_fasta.parent.mkdir(parents=True, exist_ok=True)
+    restriction_mask_bed.parent.mkdir(parents=True, exist_ok=True)
+    with open(database_fasta, "w") as out_fa, open(restriction_mask_bed, "w") as out_bed:
 
         # iterate over loci pulled from fasta files
         lit = iter_build_loci(fastas)
@@ -350,7 +361,7 @@ def build_locus_fasta_database(
 
             # write locus
             out_fa.write("\n".join(loc) + "\n\n")
-    return database, bed_mask
+    return database_fasta, restriction_mask_bed
 
 
 def iter_parse_loci(database_fasta: Path):
@@ -666,6 +677,68 @@ def _append_table_section(lines: list[str], title: str, headers: list[str], rows
     lines.append("")
 
 
+def _human_stats_label(key: str) -> str:
+    """Return the human-readable label for one stats key."""
+    labels = {
+        "samples": "Samples",
+        "shared_loci_after_delimiting": "Shared loci after delimiting",
+        "shared_loci_after_paralog_filtering": "Shared loci after paralog filtering",
+        "final_loci_written": "Final loci written",
+        "final_loci_retained_fraction_of_post_paralog": "Final loci retained fraction after paralog filtering",
+        "final_loci_retained_fraction_of_delimited": "Final loci retained fraction after delimiting",
+        "assembled_sites": "Assembled sites",
+        "final_snp_sites_written": "Final SNP sites written",
+        "variable_sites": "Variable sites",
+        "phylogenetically_informative_sites": "Phylogenetically informative sites",
+        "alignment_matrix_occupancy_fraction": "Alignment matrix occupancy fraction",
+        "overlapping_indel_clusters_masked": "Overlapping indel clusters masked",
+        "overlapping_indel_records_removed": "Overlapping indel records removed",
+        "overlapping_indel_bp_masked": "Overlapping indel bases masked",
+        "loci_filtered_min_length": "Loci filtered by minimum length",
+        "loci_filtered_min_samples": "Loci filtered by minimum sample coverage",
+        "loci_filtered_max_variant_rate": "Loci filtered by maximum variant frequency",
+        "loci_filtered_max_shared_heterozygosity": "Loci filtered by maximum shared heterozygosity",
+        "loci_filtered_max_depth_outlier": "Loci filtered by maximum depth outlier",
+        "loci_with_samples_masked_by_max_hetero_frequency": "Loci with samples masked by sample heterozygosity threshold",
+        "total_masked_sample_occurrences_by_max_hetero_frequency": "Sample masks triggered by sample heterozygosity threshold",
+        "mean_locus_length": "Mean locus length",
+        "median_locus_length": "Median locus length",
+        "min_locus_length": "Minimum locus length",
+        "max_locus_length": "Maximum locus length",
+        "mean_samples_per_locus": "Mean samples per locus",
+        "median_samples_per_locus": "Median samples per locus",
+        "sites_with_sample_coverage_ge_2": "Sites with sample coverage >= 2",
+        "sites_with_sample_coverage_ge_3": "Sites with sample coverage >= 3",
+        "sites_with_sample_coverage_ge_4": "Sites with sample coverage >= 4",
+        "sites_with_sample_coverage_ge_trim_min": "Sites with sample coverage >= trim minimum",
+        "sample": "Sample",
+        "loci_in_alignment": "Loci in alignment",
+        "loci_in_alignment_fraction": "Loci fraction in alignment",
+        "shared_loci_with_nonzero_depth": "Shared loci with nonzero depth",
+        "shared_loci_with_nonzero_depth_fraction": "Shared-depth loci fraction",
+        "mean_depth_shared_loci": "Mean depth in shared loci",
+        "median_depth_shared_loci": "Median depth in shared loci",
+        "mean_depth_nonzero_shared_loci": "Mean depth in nonzero shared loci",
+        "median_depth_nonzero_shared_loci": "Median depth in nonzero shared loci",
+        "masked_by_max_hetero_frequency": "Masked by sample heterozygosity threshold",
+        "samples_with_data": "Samples with data",
+        "loci": "Loci",
+        "fraction_of_final_loci": "Fraction of final loci",
+        "rad_samples": "RAD samples",
+        "wgs_samples": "WGS samples",
+        "loci_fail_paralog_rad": "Loci failed by RAD paralog QC",
+        "loci_fail_paralog_wgs": "Loci failed by WGS paralog QC",
+        "loci_fail_paralog_both": "Loci failed by RAD and WGS paralog QC",
+        "loci_pass_paralog_rad_fail_paralog_wgs": "Loci kept by RAD but failed by WGS QC",
+        "sites_supported_rad_only": "Sites supported by RAD only",
+        "sites_supported_wgs_only": "Sites supported by WGS only",
+        "sites_supported_both": "Sites supported by RAD and WGS",
+        "sites_supported_neither": "Sites supported by neither RAD nor WGS",
+        "wgs_het_genotypes_masked_by_allele_balance": "WGS heterozygous genotypes masked by allele balance",
+    }
+    return labels.get(key, key.replace("_", " ").capitalize())
+
+
 def write_assemble_stats_report(
     *,
     name: str,
@@ -679,8 +752,9 @@ def write_assemble_stats_report(
     overlap_stats: dict[str, int],
     mixed_run_summary: dict[str, int] | None = None,
 ) -> Path:
-    """Write the final human-readable assemble summary report."""
+    """Write the final human-readable assemble summary plus JSON sidecar."""
     outpath = outdir / f"{name}.stats.txt"
+    json_path = outdir / f"{name}.stats.json"
 
     final_loci_written = int(loci_summary["nloci_after_filtering"])
     assembled_sites = int(loci_summary["nsites_after_filtering"])
@@ -691,89 +765,76 @@ def write_assemble_stats_report(
     locus_length_counts = Counter(loci_summary["locus_length_counts"])
     alignment_nonmissing_sample_bases = int(loci_summary["alignment_nonmissing_sample_bases"])
 
-    summary_rows = [
-        ("samples", _format_count(len(snames))),
-        ("shared_loci_after_delimiting", _format_count(shared_loci_after_delimiting)),
-        ("shared_loci_after_paralog_filtering", _format_count(shared_loci_after_paralog_filtering)),
-        ("final_loci_written", _format_count(final_loci_written)),
-        (
-            "final_loci_retained_fraction_of_post_paralog",
-            _format_fraction(_safe_fraction(final_loci_written, shared_loci_after_paralog_filtering)),
+    summary_data = {
+        "samples": len(snames),
+        "shared_loci_after_delimiting": shared_loci_after_delimiting,
+        "shared_loci_after_paralog_filtering": shared_loci_after_paralog_filtering,
+        "final_loci_written": final_loci_written,
+        "final_loci_retained_fraction_of_post_paralog": _safe_fraction(
+            final_loci_written, shared_loci_after_paralog_filtering
         ),
-        (
-            "final_loci_retained_fraction_of_delimited",
-            _format_fraction(_safe_fraction(final_loci_written, shared_loci_after_delimiting)),
+        "final_loci_retained_fraction_of_delimited": _safe_fraction(
+            final_loci_written, shared_loci_after_delimiting
         ),
-        ("assembled_sites", _format_count(assembled_sites)),
-        ("final_snp_sites_written", _format_count(nsnps_written)),
-        ("variable_sites", _format_count(int(site_totals["variant_sites"]))),
-        (
-            "phylogenetically_informative_sites",
-            _format_count(int(site_totals["variant_phylo_informative_sites"])),
+        "assembled_sites": assembled_sites,
+        "final_snp_sites_written": nsnps_written,
+        "variable_sites": int(site_totals["variant_sites"]),
+        "phylogenetically_informative_sites": int(
+            site_totals["variant_phylo_informative_sites"]
         ),
-        (
-            "alignment_matrix_occupancy_fraction",
-            _format_fraction(_safe_fraction(alignment_nonmissing_sample_bases, assembled_sites * len(snames))),
+        "alignment_matrix_occupancy_fraction": _safe_fraction(
+            alignment_nonmissing_sample_bases,
+            assembled_sites * len(snames),
         ),
-        (
-            "overlapping_indel_clusters_masked",
-            _format_count(overlap_stats["overlapping_indel_clusters_masked"]),
+        "overlapping_indel_clusters_masked": int(
+            overlap_stats["overlapping_indel_clusters_masked"]
         ),
-        (
-            "overlapping_indel_records_removed",
-            _format_count(overlap_stats["overlapping_indel_records_removed"]),
+        "overlapping_indel_records_removed": int(
+            overlap_stats["overlapping_indel_records_removed"]
         ),
-        (
-            "overlapping_indel_bp_masked",
-            _format_count(overlap_stats["overlapping_indel_bp_masked"]),
+        "overlapping_indel_bp_masked": int(
+            overlap_stats["overlapping_indel_bp_masked"]
         ),
-    ]
-
-    filtering_rows = [
-        ("loci_filtered_min_length", _format_count(int(filter_counts["min_length"]))),
-        ("loci_filtered_min_samples", _format_count(int(filter_counts["min_samples"]))),
-        ("loci_filtered_max_variant_rate", _format_count(int(filter_counts["max_variant_frequency"]))),
-        (
-            "loci_filtered_max_shared_heterozygosity",
-            _format_count(int(filter_counts["max_shared_hetero_frequency"])),
+    }
+    filtering_data = {
+        "loci_filtered_min_length": int(filter_counts["min_length"]),
+        "loci_filtered_min_samples": int(filter_counts["min_samples"]),
+        "loci_filtered_max_variant_rate": int(filter_counts["max_variant_frequency"]),
+        "loci_filtered_max_shared_heterozygosity": int(
+            filter_counts["max_shared_hetero_frequency"]
         ),
-        ("loci_filtered_max_depth_outlier", _format_count(int(filter_counts["max_depth_outlier"]))),
-    ]
-    sample_masking_rows = [
-        (
-            "loci_with_samples_masked_by_max_hetero_frequency",
-            _format_count(int(loci_summary.get("loci_with_samples_masked_by_max_hetero_frequency", 0))),
+        "loci_filtered_max_depth_outlier": int(filter_counts["max_depth_outlier"]),
+    }
+    sample_masking_data = {
+        "loci_with_samples_masked_by_max_hetero_frequency": int(
+            loci_summary.get("loci_with_samples_masked_by_max_hetero_frequency", 0)
         ),
-        (
-            "total_masked_sample_occurrences_by_max_hetero_frequency",
-            _format_count(int(loci_summary.get("total_masked_sample_occurrences_by_max_hetero_frequency", 0))),
+        "total_masked_sample_occurrences_by_max_hetero_frequency": int(
+            loci_summary.get("total_masked_sample_occurrences_by_max_hetero_frequency", 0)
         ),
-    ]
-
-    alignment_rows = [
-        ("mean_locus_length", _format_float(_counter_mean(locus_length_counts))),
-        ("median_locus_length", _format_float(_counter_median(locus_length_counts))),
-        ("min_locus_length", _format_count(min(locus_length_counts) if locus_length_counts else 0)),
-        ("max_locus_length", _format_count(max(locus_length_counts) if locus_length_counts else 0)),
-        ("mean_samples_per_locus", _format_float(_counter_mean(samples_per_locus_counts))),
-        ("median_samples_per_locus", _format_float(_counter_median(samples_per_locus_counts))),
-        (
-            "sites_with_sample_coverage_ge_2",
-            _format_count(int(site_totals["nsites_sample_cov_greater_than_1"])),
+    }
+    alignment_data = {
+        "mean_locus_length": float(_counter_mean(locus_length_counts)),
+        "median_locus_length": float(_counter_median(locus_length_counts)),
+        "min_locus_length": int(min(locus_length_counts) if locus_length_counts else 0),
+        "max_locus_length": int(max(locus_length_counts) if locus_length_counts else 0),
+        "mean_samples_per_locus": float(_counter_mean(samples_per_locus_counts)),
+        "median_samples_per_locus": float(_counter_median(samples_per_locus_counts)),
+        "sites_with_sample_coverage_ge_2": int(
+            site_totals["nsites_sample_cov_greater_than_1"]
         ),
-        (
-            "sites_with_sample_coverage_ge_3",
-            _format_count(int(site_totals["nsites_sample_cov_greater_than_2"])),
+        "sites_with_sample_coverage_ge_3": int(
+            site_totals["nsites_sample_cov_greater_than_2"]
         ),
-        (
-            "sites_with_sample_coverage_ge_4",
-            _format_count(int(site_totals["nsites_sample_cov_greater_than_3"])),
+        "sites_with_sample_coverage_ge_4": int(
+            site_totals["nsites_sample_cov_greater_than_3"]
         ),
-        (
-            "sites_with_sample_coverage_ge_trim_min",
-            _format_count(int(site_totals["nsites_sample_cov_greater_than_or_equal_to_min_locus_trim_sample_coverage"])),
+        "sites_with_sample_coverage_ge_trim_min": int(
+            site_totals[
+                "nsites_sample_cov_greater_than_or_equal_to_min_locus_trim_sample_coverage"
+            ]
         ),
-    ]
+    }
 
     sample_headers = [
         "sample",
@@ -787,63 +848,215 @@ def write_assemble_stats_report(
         "median_depth_nonzero_shared_loci",
         "masked_by_max_hetero_frequency",
     ]
+    sample_summary_data: list[dict[str, object]] = []
     sample_rows: list[list[str]] = []
     for sname in sorted(snames):
         depth_stats = sample_depth_stats[sname]
         loci_in_alignment = int(sample_locus_counts.get(sname, 0))
         nonzero_loci = int(depth_stats["shared_loci_with_nonzero_depth"])
+        sample_record = {
+            "sample": sname,
+            "loci_in_alignment": loci_in_alignment,
+            "loci_in_alignment_fraction": _safe_fraction(
+                loci_in_alignment, final_loci_written
+            ),
+            "shared_loci_with_nonzero_depth": nonzero_loci,
+            "shared_loci_with_nonzero_depth_fraction": _safe_fraction(
+                nonzero_loci, final_loci_written
+            ),
+            "mean_depth_shared_loci": float(depth_stats["mean_depth_shared_loci"]),
+            "median_depth_shared_loci": float(depth_stats["median_depth_shared_loci"]),
+            "mean_depth_nonzero_shared_loci": float(
+                depth_stats["mean_depth_nonzero_shared_loci"]
+            ),
+            "median_depth_nonzero_shared_loci": float(
+                depth_stats["median_depth_nonzero_shared_loci"]
+            ),
+            "masked_by_max_hetero_frequency": int(
+                loci_summary.get("masked_by_max_hetero_frequency_counts", {}).get(
+                    sname, 0
+                )
+            ),
+        }
+        sample_summary_data.append(sample_record)
         sample_rows.append([
-            sname,
-            _format_count(loci_in_alignment),
-            _format_fraction(_safe_fraction(loci_in_alignment, final_loci_written)),
-            _format_count(nonzero_loci),
-            _format_fraction(_safe_fraction(nonzero_loci, final_loci_written)),
-            _format_float(float(depth_stats["mean_depth_shared_loci"])),
-            _format_float(float(depth_stats["median_depth_shared_loci"])),
-            _format_float(float(depth_stats["mean_depth_nonzero_shared_loci"])),
-            _format_float(float(depth_stats["median_depth_nonzero_shared_loci"])),
-            _format_count(int(loci_summary.get("masked_by_max_hetero_frequency_counts", {}).get(sname, 0))),
+            sample_record["sample"],
+            _format_count(sample_record["loci_in_alignment"]),
+            _format_fraction(sample_record["loci_in_alignment_fraction"]),
+            _format_count(sample_record["shared_loci_with_nonzero_depth"]),
+            _format_fraction(sample_record["shared_loci_with_nonzero_depth_fraction"]),
+            _format_float(sample_record["mean_depth_shared_loci"]),
+            _format_float(sample_record["median_depth_shared_loci"]),
+            _format_float(sample_record["mean_depth_nonzero_shared_loci"]),
+            _format_float(sample_record["median_depth_nonzero_shared_loci"]),
+            _format_count(sample_record["masked_by_max_hetero_frequency"]),
         ])
 
     occupancy_headers = ["samples_with_data", "loci", "fraction_of_final_loci"]
-    occupancy_rows = [
-        [
-            _format_count(sample_count),
-            _format_count(int(samples_per_locus_counts.get(sample_count, 0))),
-            _format_fraction(_safe_fraction(int(samples_per_locus_counts.get(sample_count, 0)), final_loci_written)),
-        ]
+    locus_occupancy_data = [
+        {
+            "samples_with_data": int(sample_count),
+            "loci": int(samples_per_locus_counts.get(sample_count, 0)),
+            "fraction_of_final_loci": _safe_fraction(
+                int(samples_per_locus_counts.get(sample_count, 0)),
+                final_loci_written,
+            ),
+        }
         for sample_count in range(len(snames) + 1)
     ]
+    occupancy_rows = [
+        [
+            _format_count(row["samples_with_data"]),
+            _format_count(row["loci"]),
+            _format_fraction(row["fraction_of_final_loci"]),
+        ]
+        for row in locus_occupancy_data
+    ]
+
+    mixed_data = None
+    if mixed_run_summary:
+        mixed_data = {
+            key: int(value)
+            for key, value in mixed_run_summary.items()
+        }
+
+    stats_json: dict[str, object] = {
+        "summary": summary_data,
+        "locus_filtering": filtering_data,
+        "sample_masking": sample_masking_data,
+        "alignment_summary": alignment_data,
+        "sample_summary": sample_summary_data,
+        "locus_occupancy": locus_occupancy_data,
+    }
+    if mixed_data is not None:
+        stats_json["mixed_rad_wgs_diagnostics"] = mixed_data
 
     lines: list[str] = []
-    _append_key_value_section(lines, "Assemble Summary", summary_rows)
-    if mixed_run_summary:
+    _append_key_value_section(
+        lines,
+        "Assemble Summary",
+        [
+            (_human_stats_label("samples"), _format_count(summary_data["samples"])),
+            (
+                _human_stats_label("shared_loci_after_delimiting"),
+                _format_count(summary_data["shared_loci_after_delimiting"]),
+            ),
+            (
+                _human_stats_label("shared_loci_after_paralog_filtering"),
+                _format_count(summary_data["shared_loci_after_paralog_filtering"]),
+            ),
+            (
+                _human_stats_label("final_loci_written"),
+                _format_count(summary_data["final_loci_written"]),
+            ),
+            (
+                _human_stats_label("final_loci_retained_fraction_of_post_paralog"),
+                _format_fraction(
+                    summary_data["final_loci_retained_fraction_of_post_paralog"]
+                ),
+            ),
+            (
+                _human_stats_label("final_loci_retained_fraction_of_delimited"),
+                _format_fraction(
+                    summary_data["final_loci_retained_fraction_of_delimited"]
+                ),
+            ),
+            (
+                _human_stats_label("assembled_sites"),
+                _format_count(summary_data["assembled_sites"]),
+            ),
+            (
+                _human_stats_label("final_snp_sites_written"),
+                _format_count(summary_data["final_snp_sites_written"]),
+            ),
+            (
+                _human_stats_label("variable_sites"),
+                _format_count(summary_data["variable_sites"]),
+            ),
+            (
+                _human_stats_label("phylogenetically_informative_sites"),
+                _format_count(summary_data["phylogenetically_informative_sites"]),
+            ),
+            (
+                _human_stats_label("alignment_matrix_occupancy_fraction"),
+                _format_fraction(summary_data["alignment_matrix_occupancy_fraction"]),
+            ),
+            (
+                _human_stats_label("overlapping_indel_clusters_masked"),
+                _format_count(summary_data["overlapping_indel_clusters_masked"]),
+            ),
+            (
+                _human_stats_label("overlapping_indel_records_removed"),
+                _format_count(summary_data["overlapping_indel_records_removed"]),
+            ),
+            (
+                _human_stats_label("overlapping_indel_bp_masked"),
+                _format_count(summary_data["overlapping_indel_bp_masked"]),
+            ),
+        ],
+    )
+    if mixed_data is not None:
         mixed_rows = [
-            ("rad_samples", _format_count(int(mixed_run_summary["rad_samples"]))),
-            ("wgs_samples", _format_count(int(mixed_run_summary["wgs_samples"]))),
-            ("loci_fail_paralog_rad", _format_count(int(mixed_run_summary["loci_fail_paralog_rad"]))),
-            ("loci_fail_paralog_wgs", _format_count(int(mixed_run_summary["loci_fail_paralog_wgs"]))),
-            ("loci_fail_paralog_both", _format_count(int(mixed_run_summary["loci_fail_paralog_both"]))),
-            (
+            (_human_stats_label(key), _format_count(value))
+            for key, value in mixed_data.items()
+            if key
+            in {
+                "rad_samples",
+                "wgs_samples",
+                "loci_fail_paralog_rad",
+                "loci_fail_paralog_wgs",
+                "loci_fail_paralog_both",
                 "loci_pass_paralog_rad_fail_paralog_wgs",
-                _format_count(int(mixed_run_summary["loci_pass_paralog_rad_fail_paralog_wgs"])),
-            ),
-            ("sites_supported_rad_only", _format_count(int(mixed_run_summary["sites_supported_rad_only"]))),
-            ("sites_supported_wgs_only", _format_count(int(mixed_run_summary["sites_supported_wgs_only"]))),
-            ("sites_supported_both", _format_count(int(mixed_run_summary["sites_supported_both"]))),
-            (
+                "sites_supported_rad_only",
+                "sites_supported_wgs_only",
+                "sites_supported_both",
+                "sites_supported_neither",
                 "wgs_het_genotypes_masked_by_allele_balance",
-                _format_count(int(mixed_run_summary["wgs_het_genotypes_masked_by_allele_balance"])),
-            ),
+            }
         ]
-        _append_key_value_section(lines, "Mixed RAD/WGS Summary", mixed_rows)
-    _append_key_value_section(lines, "Locus Filtering", filtering_rows)
-    _append_key_value_section(lines, "Sample Masking", sample_masking_rows)
-    _append_key_value_section(lines, "Alignment Summary", alignment_rows)
-    _append_table_section(lines, "Sample Summary", sample_headers, sample_rows)
-    _append_table_section(lines, "Locus Occupancy", occupancy_headers, occupancy_rows)
+        _append_key_value_section(lines, "Mixed RAD/WGS Diagnostics", mixed_rows)
+    _append_key_value_section(
+        lines,
+        "Locus Filtering",
+        [(_human_stats_label(key), _format_count(value)) for key, value in filtering_data.items()],
+    )
+    _append_key_value_section(
+        lines,
+        "Sample Masking",
+        [(_human_stats_label(key), _format_count(value)) for key, value in sample_masking_data.items()],
+    )
+    _append_key_value_section(
+        lines,
+        "Alignment Summary",
+        [
+            (_human_stats_label("mean_locus_length"), _format_float(alignment_data["mean_locus_length"])),
+            (_human_stats_label("median_locus_length"), _format_float(alignment_data["median_locus_length"])),
+            (_human_stats_label("min_locus_length"), _format_count(alignment_data["min_locus_length"])),
+            (_human_stats_label("max_locus_length"), _format_count(alignment_data["max_locus_length"])),
+            (_human_stats_label("mean_samples_per_locus"), _format_float(alignment_data["mean_samples_per_locus"])),
+            (_human_stats_label("median_samples_per_locus"), _format_float(alignment_data["median_samples_per_locus"])),
+            (_human_stats_label("sites_with_sample_coverage_ge_2"), _format_count(alignment_data["sites_with_sample_coverage_ge_2"])),
+            (_human_stats_label("sites_with_sample_coverage_ge_3"), _format_count(alignment_data["sites_with_sample_coverage_ge_3"])),
+            (_human_stats_label("sites_with_sample_coverage_ge_4"), _format_count(alignment_data["sites_with_sample_coverage_ge_4"])),
+            (_human_stats_label("sites_with_sample_coverage_ge_trim_min"), _format_count(alignment_data["sites_with_sample_coverage_ge_trim_min"])),
+        ],
+    )
+    _append_table_section(
+        lines,
+        "Sample Summary",
+        [_human_stats_label(header) for header in sample_headers],
+        sample_rows,
+    )
+    _append_table_section(
+        lines,
+        "Locus Occupancy",
+        [_human_stats_label(header) for header in occupancy_headers],
+        occupancy_rows,
+    )
     outpath.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-    logger.info("assemble stats written to {}", outpath)
+    json_path.write_text(json.dumps(stats_json, indent=2) + "\n", encoding="utf-8")
+    logger.info("wrote assemble summary report")
+    logger.debug("assemble stats written to {} and {}", outpath, json_path)
     return outpath
 
 
@@ -1008,8 +1221,10 @@ def write_final_outputs(
     snames: list[str],
     name: str,
     outdir: Path,
-    tmpdir: Path,
     reference: Path,
+    database_fasta: Path,
+    retained_loci_manifest: Path,
+    consensus_hetero_mask_beds: dict[str, Path],
     min_locus_sample_coverage: int,
     min_locus_trim_sample_coverage: int,
     min_locus_length: int,
@@ -1028,11 +1243,10 @@ def write_final_outputs(
         open_seqs_hdf5_writer,
     )
 
-    database = tmpdir / f"{name}.database.fa"
     loci_file = outdir / f"{name}.loci.gz"
-    manifest_path = get_retained_loci_manifest_path(name, tmpdir)
     final_loci_bed = outdir / f"{name}.bed"
-    (tmpdir / "beds").mkdir(parents=True, exist_ok=True)
+    for path in consensus_hetero_mask_beds.values():
+        path.parent.mkdir(parents=True, exist_ok=True)
 
     real_snames = list(snames)
     refname = "assembly_reference_sequence"
@@ -1078,11 +1292,11 @@ def write_final_outputs(
     flidx = 0
     retained_scaffold_names_seen: set[str] = set()
 
-    nbatches = sum(1 for _ in iter_locus_batches(database, batch_size=batch_size))
+    nbatches = sum(1 for _ in iter_locus_batches(database_fasta, batch_size=batch_size))
     output_workers = min(max(1, cores - 1), max(1, nbatches))
 
     def _iter_jobs():
-        for batch_idx, batch_items in iter_locus_batches(database, batch_size=batch_size):
+        for batch_idx, batch_items in iter_locus_batches(database_fasta, batch_size=batch_size):
             yield batch_idx, (
                 _resolve_output_batch,
                 dict(
@@ -1107,11 +1321,11 @@ def write_final_outputs(
     with gzip.open(loci_file, "wt", encoding="utf-8", compresslevel=1) as out, final_loci_bed.open(
         "w",
         encoding="utf-8",
-    ) as out_bed, manifest_path.open("w", encoding="utf-8", newline="") as manifest_handle:
+    ) as out_bed, retained_loci_manifest.open("w", encoding="utf-8", newline="") as manifest_handle:
         manifest_writer = csv.writer(manifest_handle, delimiter="\t")
         manifest_writer.writerow(["raw_header", "final_header", "masked_samples"])
         mask_handles = {
-            sname: get_consensus_hetero_mask_path(sname, tmpdir).open("w", encoding="utf-8")
+            sname: consensus_hetero_mask_beds[sname].open("w", encoding="utf-8")
             for sname in real_snames
         }
 
@@ -1165,7 +1379,7 @@ def write_final_outputs(
             if nbatches == 0:
                 pass
             elif output_workers == 1 or nbatches == 1:
-                for batch_idx, batch_items in iter_locus_batches(database, batch_size=batch_size):
+                for batch_idx, batch_items in iter_locus_batches(database_fasta, batch_size=batch_size):
                     result = _resolve_output_batch(
                         batch_idx=batch_idx,
                         batch_items=batch_items,

@@ -421,14 +421,16 @@ def get_across_sample_loci_bed(
 
 
 def get_sample_depth_stats_in_final_loci(
-    sname: str, loci_bed: Path, tmpdir: Path
+    sname: str,
+    loci_bed: Path,
+    cov_bed: Path,
 ) -> dict[str, float]:
     """Return per-sample depth summaries across the final shared loci BED.
 
-    This reuses the existing per-sample bedgraph and computes mean locus depth
-    over the full locus length, so uncovered portions contribute zero depth.
+    This reuses an explicit retained-loci depth bedgraph and computes mean
+    locus depth over the full locus length, so uncovered portions contribute
+    zero depth.
     """
-    cov_bed = tmpdir / "beds" / f"{sname}.fragments.bedgraph"
     cmd = [
         BIN_BED,
         "intersect",
@@ -498,3 +500,44 @@ def get_sample_depth_stats_in_final_loci(
         if nonzero.size
         else 0.0,
     }
+
+
+def get_retained_depth_bedgraph_path(sname: str, tmpdir: Path) -> Path:
+    """Return the retained-loci depth bedgraph path used only for final stats."""
+    return tmpdir / "beds" / f"{sname}.final_depth.fragments.bedgraph"
+
+
+def clip_depth_bedgraph_to_retained_loci(
+    *,
+    cov_bed: Path,
+    good_bed: Path,
+    ref_info: Path,
+    out_bed: Path,
+) -> Path:
+    """Clip a pre-paralog depth bedgraph to one sample's retained loci BED."""
+    if not cov_bed.exists():
+        raise IPyradError(f"Coverage bedgraph not found: {cov_bed}")
+    if not good_bed.exists() or not cov_bed.stat().st_size or not good_bed.stat().st_size:
+        out_bed.write_text("", encoding="utf-8")
+        return out_bed
+
+    cmd1 = [
+        BIN_BED,
+        "intersect",
+        "-sorted",
+        "-g",
+        str(ref_info),
+        "-wa",
+        "-wb",
+        "-a",
+        str(cov_bed),
+        "-b",
+        str(good_bed),
+    ]
+    cmd2 = [
+        "awk",
+        r'BEGIN{OFS="\t"}{s=($2>$6?$2:$6); e=($3<$7?$3:$7); if(s<e) print $1,s,e,$4}',
+    ]
+    cmd3 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
+    run_pipeline([cmd1, cmd2, cmd3], out_bed)
+    return out_bed
