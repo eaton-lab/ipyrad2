@@ -71,6 +71,10 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="Discard mapped reads with more than this many soft-clipped bases. [default=%(default)s]",
     )
     mapped.add_argument(
+        "-ml", "--min-aligned-len", metavar="int", type=int, default=None,
+        help="Discard mapped reads with qlen-sclen below this threshold. [default=%(default)s]",
+    )
+    mapped.add_argument(
         "-me", "--max-nm", metavar="int", type=int, default=None,
         help="Discard mapped reads with NM above this threshold. [default=%(default)s]",
     )

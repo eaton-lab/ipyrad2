@@ -91,6 +91,7 @@ def _log_mapped_read_filter_settings(
     max_tlen: int | None,
     max_softclip: int | None,
     max_nm: int | None,
+    min_aligned_len: int | None,
 ) -> None:
     """Log the assemble-time mapped-read filter settings."""
     parts = [f"MAPQ>={min_map_q}", "same scaffold pairs only"]
@@ -100,6 +101,8 @@ def _log_mapped_read_filter_settings(
         parts.append(f"softclip<={max_softclip}")
     if max_nm is not None:
         parts.append(f"NM<={max_nm}")
+    if min_aligned_len is not None:
+        parts.append(f"aligned_len>={min_aligned_len}")
     logger.info("filtering mapped reads before assembly: {}", ", ".join(parts))
 
 
@@ -674,6 +677,7 @@ def _prepare_analysis_bams(
     max_tlen: int | None,
     max_softclip: int | None,
     max_nm: int | None,
+    min_aligned_len: int | None,
     threads: int,
     workers: int,
     log_level: str,
@@ -684,6 +688,7 @@ def _prepare_analysis_bams(
         max_tlen=max_tlen,
         max_softclip=max_softclip,
         max_nm=max_nm,
+        min_aligned_len=min_aligned_len,
     )
     jobs = {}
     for sname, bam_file in bam_dict.items():
@@ -701,6 +706,7 @@ def _prepare_analysis_bams(
                 "max_tlen": max_tlen,
                 "max_softclip": max_softclip,
                 "max_nm": max_nm,
+                "min_aligned_len": min_aligned_len,
                 "threads": threads,
             },
         )
@@ -1200,6 +1206,7 @@ def run_assembler(
     threads: int,
     force: bool,
     log_level: str,
+    min_aligned_len: int | None = None,
 ):
     # Normalize the top-level input/output paths first so later stages can
     # treat everything as concrete local files.
@@ -1218,6 +1225,8 @@ def run_assembler(
         raise IPyradError("max_softclip must be >= 0 when provided.")
     if max_nm is not None and max_nm < 0:
         raise IPyradError("max_nm must be >= 0 when provided.")
+    if min_aligned_len is not None and min_aligned_len < 0:
+        raise IPyradError("min_aligned_len must be >= 0 when provided.")
     if not 0 <= max_sample_hetero_frequency <= 1:
         raise IPyradError("max_sample_hetero_frequency must be between 0 and 1.")
     if min_3allele_sites < 0:
@@ -1362,6 +1371,7 @@ def run_assembler(
         max_tlen=max_tlen,
         max_softclip=max_softclip,
         max_nm=max_nm,
+        min_aligned_len=min_aligned_len,
         threads=threads,
         workers=workers,
         log_level=log_level,

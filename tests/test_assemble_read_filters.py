@@ -105,6 +105,7 @@ def test_build_mapped_read_filter_expr_combines_requested_filters() -> None:
         max_tlen=2000,
         max_softclip=25,
         max_nm=12,
+        min_aligned_len=50,
     )
 
     assert expr is not None
@@ -112,6 +113,7 @@ def test_build_mapped_read_filter_expr_combines_requested_filters() -> None:
     assert "tlen>=-2000 && tlen<=2000" in expr
     assert "sclen <= 25" in expr
     assert "[NM] <= 12" in expr
+    assert "(qlen - sclen) >= 50" in expr
 
 
 def test_build_mapped_read_filter_expr_ignores_pair_filters_for_single_end() -> None:
@@ -120,9 +122,22 @@ def test_build_mapped_read_filter_expr_ignores_pair_filters_for_single_end() -> 
         max_tlen=2000,
         max_softclip=None,
         max_nm=None,
+        min_aligned_len=None,
     )
 
     assert expr is None
+
+
+def test_build_mapped_read_filter_expr_supports_single_end_min_aligned_len() -> None:
+    expr = build_mapped_read_filter_expr(
+        is_paired=False,
+        max_tlen=None,
+        max_softclip=None,
+        max_nm=None,
+        min_aligned_len=75,
+    )
+
+    assert expr == "((qlen - sclen) >= 75)"
 
 
 def test_get_names_from_bams_batches_lookup(monkeypatch, tmp_path: Path) -> None:
@@ -2346,6 +2361,54 @@ def test_run_assembler_requires_at_least_one_bam_with_loci_bed(tmp_path: Path) -
             max_tlen=None,
             max_softclip=None,
             max_nm=None,
+            min_site_q=13,
+            min_geno_q=13,
+            min_base_q=13,
+            min_sample_depth=1,
+            min_locus_sample_coverage=1,
+            min_locus_trim_sample_coverage=1,
+            min_locus_length=25,
+            min_locus_merge_distance=300,
+            max_locus_hetero_frequency=0.3,
+            max_locus_variant_frequency=1.0,
+            max_sample_hetero_frequency=0.10,
+            softclip_len_threshold=20,
+            softclip_frac_max=0.5,
+            depth_z_max=7.0,
+            third_frac_cut=0.10,
+            min_3allele_sites=2,
+            maf_threshold=0.20,
+            max_sites_above_maf=8,
+            paralog_fail_frac_max=0.10,
+            populations=None,
+            rename_bams=None,
+            masks=None,
+            cores=2,
+            threads=1,
+            force=False,
+            log_level="WARNING",
+        )
+
+
+def test_run_assembler_rejects_negative_min_aligned_len(tmp_path: Path) -> None:
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    rad_bam = tmp_path / "rad.bam"
+    rad_bam.write_text("", encoding="utf-8")
+
+    with pytest.raises(IPyradError, match="min_aligned_len must be >= 0 when provided."):
+        run_assembler(
+            rad_bams=[rad_bam],
+            wgs_bams=None,
+            reference=reference,
+            outdir=tmp_path / "OUT",
+            name="assembly",
+            loci_bed=None,
+            min_map_q=10,
+            max_tlen=None,
+            max_softclip=None,
+            max_nm=None,
+            min_aligned_len=-1,
             min_site_q=13,
             min_geno_q=13,
             min_base_q=13,

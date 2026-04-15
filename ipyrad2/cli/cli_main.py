@@ -329,6 +329,7 @@ def run_subcommand(args, _exit=True):
             max_tlen=args.max_tlen,
             max_softclip=args.max_softclip,
             max_nm=args.max_nm,
+            min_aligned_len=args.min_aligned_len,
             min_site_q=args.min_site_q,
             min_geno_q=args.min_geno_q,
             min_base_q=args.min_base_q,
