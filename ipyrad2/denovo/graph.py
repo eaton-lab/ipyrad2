@@ -1309,15 +1309,16 @@ def make_global_tables(
         )
 
     logger.info(
-        f"wrote {total_loci} loci from {len(component_entries)} split clusters with "
-        f"{rescued_oversize_results} rescued oversize components, "
-        f"{raw_oversize_results} raw oversize placeholder clusters, and "
-        f"{contracted_oversize_results} post-contraction oversized placeholder clusters "
-        "using constrained graph splitting"
+        "built {} loci from {} graph components (rescued oversize: {}, raw placeholders: {}, post-contraction placeholders: {})",
+        total_loci,
+        len(component_entries),
+        rescued_oversize_results,
+        raw_oversize_results,
+        contracted_oversize_results,
     )
-    logger.info(f"wrote locus mapping to {out_mapping_tsv}")
-    logger.info(f"wrote locus stats to {out_stats_tsv}")
-    logger.info(f"wrote denovo component audits to {audit_dir}")
+    logger.debug("wrote locus mapping to {}", out_mapping_tsv)
+    logger.debug("wrote locus stats to {}", out_stats_tsv)
+    logger.debug("wrote denovo component audits to {}", audit_dir)
     return GraphTableSummary(
         loci_written=total_loci,
         consensus_records=total_mapping_rows,

@@ -159,5 +159,5 @@ def concat_summaries(outdir: Path) -> pd.DataFrame:
     all_df = pd.concat(dfs, ignore_index=True)
     if out_tsv:
         all_df.to_csv(out_tsv, sep="	", index=False)
-        logger.info(f"Wrote concatenated summaries → {out_tsv}")
+        logger.debug("wrote concatenated summaries to {}", out_tsv)
     return all_df

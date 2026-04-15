@@ -2,6 +2,7 @@
 
 """Orchestrate the active end-to-end `ipyrad2 assemble` workflow."""
 
+from dataclasses import dataclass
 from typing import List
 import shutil
 from pathlib import Path
@@ -13,13 +14,22 @@ from .beds import (
     get_reference_sort_order,
     get_coverage_bed_graphs,
     get_across_sample_loci_bed,
+    clip_depth_bedgraph_to_retained_loci,
+    get_retained_depth_bedgraph_path,
     get_sample_depth_stats_in_final_loci,
     sort_bed_by_reference_order,
     write_callable_regions_bed,
 )
 from .loci import (
     write_sam_faidx,
+    get_consensus_hetero_mask_path,
+    get_final_vcf_mask_path,
     get_reference_in_loci_beds,
+    get_goodcov_bed_path,
+    get_indel_overlap_mask_path,
+    get_lowdepth_mask_path,
+    get_paralog_mask_path,
+    get_sample_mask_path,
     make_lowdepth_mask,
     make_paralog_mask,
     merge_final_vcf_mask_beds,
@@ -34,7 +44,14 @@ from .paralogs import (
     get_sample_paralog_tables,
     write_per_sample_final_good,
 )
-from .read_filters import BIN_SAM, classify_bam_layout, prepare_filtered_analysis_bam
+from .read_filters import (
+    BIN_SAM,
+    classify_bam_layout,
+    get_analysis_bam_path,
+    get_calling_bam_path,
+    prepare_filtered_analysis_bam,
+    prepare_variant_call_bam,
+)
 from .variants import (
     get_chunked_loci_beds,
     get_group_called_variants_in_vcf_chunks,
@@ -54,6 +71,86 @@ from ..utils.parallel import run_pipeline, run_with_pool, run_with_pool_iter
 from ..utils.exceptions import IPyradError
 from ..utils.pops import expand_imap_patterns, parse_imap, parse_pops_file
 from ..utils.profiling import profile_stage
+
+
+@dataclass(frozen=True)
+class SampleArtifacts:
+    """Stable per-sample temp paths reused across assemble stages.
+
+    Post-paralog retained loci are intentionally not stored here; those belong
+    to `ParalogStageOutputs`, which defines the paralog-stage boundary.
+    """
+
+    pre_paralog_bam: Path
+    post_paralog_call_bam: Path
+    pre_paralog_depth_bedgraph: Path
+    pre_paralog_goodcov_bed: Path
+    lowdepth_mask_bed: Path
+    paralog_mask_bed: Path
+    indel_overlap_mask_bed: Path
+    sample_mask_bed: Path
+    consensus_fasta: Path
+    consensus_hetero_mask_bed: Path
+    final_vcf_mask_bed: Path
+    retained_depth_bedgraph: Path
+
+
+@dataclass(frozen=True)
+class ConsensusOutputArtifacts:
+    """Shared explicit artifacts consumed by the consensus/output stage."""
+
+    loci_faidx: Path
+    reference_consensus_fasta: Path
+    resolved_vcf: Path
+    database_fasta: Path
+    restriction_mask_bed: Path
+    retained_loci_manifest: Path
+
+
+@dataclass(frozen=True)
+class ParalogStageOutputs:
+    """Declared retained outputs produced by the paralog stage."""
+
+    shared_loci_bed: Path
+    debug_shared_loci_bed: Path
+    sample_retained_beds: dict[str, Path]
+
+
+def _build_sample_artifacts(
+    snames: list[str],
+    tmpdir: Path,
+) -> dict[str, SampleArtifacts]:
+    """Return the per-sample artifact paths used across assemble stages."""
+    bed_dir = tmpdir / "beds"
+    return {
+        sname: SampleArtifacts(
+            pre_paralog_bam=get_analysis_bam_path(tmpdir, sname),
+            post_paralog_call_bam=get_calling_bam_path(tmpdir, sname),
+            pre_paralog_depth_bedgraph=bed_dir / f"{sname}.fragments.bedgraph",
+            pre_paralog_goodcov_bed=get_goodcov_bed_path(sname, tmpdir),
+            lowdepth_mask_bed=get_lowdepth_mask_path(sname, tmpdir),
+            paralog_mask_bed=get_paralog_mask_path(sname, tmpdir),
+            indel_overlap_mask_bed=get_indel_overlap_mask_path(sname, tmpdir),
+            sample_mask_bed=get_sample_mask_path(sname, tmpdir),
+            consensus_fasta=tmpdir / "consensus_seqs" / f"{sname}.consensus.fa",
+            consensus_hetero_mask_bed=get_consensus_hetero_mask_path(sname, tmpdir),
+            final_vcf_mask_bed=get_final_vcf_mask_path(sname, tmpdir),
+            retained_depth_bedgraph=get_retained_depth_bedgraph_path(sname, tmpdir),
+        )
+        for sname in snames
+    }
+
+
+def _build_consensus_output_artifacts(name: str, tmpdir: Path) -> ConsensusOutputArtifacts:
+    """Return the shared explicit artifacts used by consensus/final-output steps."""
+    return ConsensusOutputArtifacts(
+        loci_faidx=tmpdir / "loci.faidx.txt",
+        reference_consensus_fasta=tmpdir / "consensus_seqs" / "assembly_reference_sequence.consensus.fa",
+        resolved_vcf=tmpdir / "vcfs" / "variants.resolved.vcf.gz",
+        database_fasta=tmpdir / f"{name}.database.fa",
+        restriction_mask_bed=tmpdir / f"{name}.re_mask.bed",
+        retained_loci_manifest=tmpdir / f"{name}.retained_loci.tsv",
+    )
 
 
 def existing_results_force_or_raise(outdir, tmpdir, name, force):
@@ -76,6 +173,7 @@ def existing_results_force_or_raise(outdir, tmpdir, name, force):
                 outdir / f"{name}.vcf.gz.csi",
                 outdir / f"{name}.hdf5",
                 outdir / f"{name}.stats.txt",
+                outdir / f"{name}.stats.json",
                 outdir / f"{name}.stats_counts.tsv",
                 outdir / f"{name}.stats_sample_cov.txt",
                 outdir / f"{name}.stats_locus_coverage.txt",
@@ -262,7 +360,7 @@ def _write_mixed_paralog_summary(
         ),
     }
     _write_mixed_paralog_counts(phase_dir, counts)
-    logger.info("mixed RAD/WGS paralog QC summary written to {}", summary_path)
+    logger.debug("mixed RAD/WGS paralog QC summary written to {}", summary_path)
     return counts
 
 
@@ -596,7 +694,7 @@ def _collect_bam_metadata(
     log_level: str,
     max_workers: int,
 ) -> dict[str, dict[str, object]]:
-    """Collect startup BAM metadata in parallel without progress logging."""
+    """Collect startup BAM metadata in parallel with progress reporting."""
     jobs_iter = (
         (sname, (_probe_bam_metadata, {"bam_file": bam_file}))
         for sname, bam_file in bam_dict.items()
@@ -608,6 +706,8 @@ def _collect_bam_metadata(
             log_level,
             max_workers=max_workers,
             max_inflight=max_workers,
+            msg="Scanning BAM headers",
+            njobs=len(bam_dict),
         )
     }
 
@@ -713,6 +813,38 @@ def _prepare_analysis_bams(
     return run_with_pool(jobs, log_level, workers, msg="Filtering mapped reads")
 
 
+def _prepare_variant_call_bams(
+    *,
+    sample_bams: dict[str, Path],
+    sample_retained_beds: dict[str, Path],
+    tmpdir: Path,
+    threads: int,
+    workers: int,
+    log_level: str,
+) -> dict[str, Path]:
+    """Write post-paralog per-sample BAMs from retained sample loci only."""
+    logger.info("preparing cleaned BAMs for joint calling")
+    jobs = {}
+    for sname, bam_file in sample_bams.items():
+        keep_bed = sample_retained_beds[sname]
+        jobs[sname] = (
+            prepare_variant_call_bam,
+            {
+                "sname": sname,
+                "bam_file": bam_file,
+                "keep_bed": keep_bed,
+                "tmpdir": tmpdir,
+                "threads": threads,
+            },
+        )
+    return run_with_pool(
+        jobs,
+        log_level,
+        workers,
+        msg="Preparing cleaned calling BAMs",
+    )
+
+
 def _run_paralog_stage(
     *,
     sample_bams: dict[str, Path],
@@ -734,20 +866,20 @@ def _run_paralog_stage(
     log_level: str,
     rad_sample_names: list[str] | None = None,
     wgs_sample_names: list[str] | None = None,
-) -> Path:
-    """Run the active per-sample and across-sample paralog filtering stage."""
+) -> ParalogStageOutputs:
+    """Run the active paralog stage and return its declared retained outputs."""
     rad_sample_names = sorted(rad_sample_names or [])
     wgs_sample_names = sorted(wgs_sample_names or [])
     mixed_mode = bool(rad_sample_names and wgs_sample_names)
     wgs_sample_name_set = set(wgs_sample_names)
 
-    logger.info("filtering paralogs within samples")
+    logger.info("scoring paralog evidence")
     callable_regions_bed = write_callable_regions_bed(
         regions_bed,
         reference,
         phase_dir / "loci.callable.paralog.bed",
     )
-    logger.info(
+    logger.debug(
         "excluding non-ACGT reference positions from within-sample paralog variant calling"
     )
     if mixed_mode and (softclip_len_threshold is not None or softclip_frac_max is not None):
@@ -785,9 +917,9 @@ def _run_paralog_stage(
             }
         ikwargs = sample_kwargs | dict(bam=bam_file, prefix=sname)
         jobs[sname] = (get_sample_paralog_tables, ikwargs)
-    run_with_pool(jobs, log_level, workers, msg="Filtering paralogs within samples")
+    run_with_pool(jobs, log_level, workers, msg="Scoring paralog evidence")
 
-    logger.info("aggregating paralog filtering across samples")
+    logger.info("aggregating paralog filters across samples")
 
     if mixed_mode:
         logger.info(
@@ -819,7 +951,7 @@ def _run_paralog_stage(
         shared_good_bed = Path(f"{rad_prefix}.shared_good.final.bed")
         n_keep = int(rad_metrics["keep_global"].sum())
         n_total_loci = int(rad_metrics.shape[0])
-        logger.info(
+        logger.debug(
             "mixed paralog summary: RAD-fail={} WGS-fail={} both-fail={} RAD-pass/WGS-fail={}",
             mixed_counts["loci_fail_paralog_rad"],
             mixed_counts["loci_fail_paralog_wgs"],
@@ -852,7 +984,7 @@ def _run_paralog_stage(
 
     # Also materialize sample-specific final BEDs that already respect the
     # global shared filter, so later sample-level masking can reuse them.
-    write_per_sample_final_good(
+    sample_retained_beds = write_per_sample_final_good(
         sample_prefixes=sorted(sample_bams),
         in_dir=phase_dir,
         shared_good_bed=shared_good_bed,
@@ -860,9 +992,14 @@ def _run_paralog_stage(
     )
 
     logger.info("paralog filtering retained {}/{} shared loci", n_keep, n_total_loci)
-    if (not final_loci_bed.exists()) or final_loci_bed.stat().st_size == 0:
+    shared_loci_bed = bed_dir / "loci.bed"
+    if (not shared_loci_bed.exists()) or shared_loci_bed.stat().st_size == 0:
         raise IPyradError("No loci passed paralog filtering.")
-    return final_loci_bed
+    return ParalogStageOutputs(
+        shared_loci_bed=shared_loci_bed,
+        debug_shared_loci_bed=final_loci_bed,
+        sample_retained_beds=sample_retained_beds,
+    )
 
 
 def _run_variant_stage(
@@ -928,7 +1065,7 @@ def _run_variant_stage(
     # Collapse chunk-level calls back to one project VCF, then apply the shared
     # genotype/site filters before resolving SNP/indel conflicts.
     get_concat_chunk_vcfs(tmpdir, threads)
-    logger.info("filtering variants")
+    logger.info("filtering variant calls")
     get_filtered_vcf(tmpdir, min_sample_depth, min_geno_q, min_site_q, threads)
     if wgs_samples:
         logger.info("masking WGS heterozygous genotypes by allele balance")
@@ -944,36 +1081,55 @@ def _run_variant_stage(
             ab_stats["wgs_het_genotypes_masked_by_allele_balance"],
             ab_stats["wgs_het_genotypes_examined_for_allele_balance"],
         )
-    logger.info("resolving indels and snps")
+    logger.info("resolving indels and SNPs")
     return get_vcf_with_indels_resolved(tmpdir, reference, threads)
 
 
 def _build_sample_masks(
     *,
-    tmpdir: Path,
-    all_dict: dict[str, Path],
+    sample_artifacts: dict[str, SampleArtifacts],
+    sample_retained_beds: dict[str, Path],
+    loci_bed: Path,
+    ref_info: Path,
+    sort_tmpdir: Path,
     min_sample_depth: int,
     workers: int,
     log_level: str,
 ) -> dict[str, Path]:
     """Build low-depth and sample-specific masks, then merge them per sample."""
-    # Low-depth masks apply to every analysis BAM because both RAD and WGS
-    # samples contribute consensus sequence and final genotype outputs.
+    # Low-depth masks are derived from the pre-paralog per-sample depth
+    # bedgraphs because those are the inputs used during locus delimiting.
     jobs = {}
-    for sname in all_dict:
+    for sname, artifacts in sample_artifacts.items():
         jobs[sname] = (
             make_lowdepth_mask,
-            dict(sname=sname, min_sample_depth=min_sample_depth, tmpdir=tmpdir),
+            dict(
+                loci_bed=loci_bed,
+                sample_bedgraph=artifacts.pre_paralog_depth_bedgraph,
+                ref_info=ref_info,
+                good_bed=artifacts.pre_paralog_goodcov_bed,
+                out_bed=artifacts.lowdepth_mask_bed,
+                sort_tmpdir=sort_tmpdir,
+                min_sample_depth=min_sample_depth,
+            ),
         )
     run_with_pool(jobs, log_level, workers, msg="Building low-depth masks")
 
     # Sample-specific paralog masks now apply to every sample that was scored in
     # the shared RAD-defined loci, including WGS samples.
     paralog_masks: dict[str, Path] = {}
-    if all_dict:
+    if sample_artifacts:
         jobs = {}
-        for sname in all_dict:
-            jobs[sname] = (make_paralog_mask, dict(sname=sname, tmpdir=tmpdir))
+        for sname, artifacts in sample_artifacts.items():
+            jobs[sname] = (
+                make_paralog_mask,
+                dict(
+                    loci_bed=loci_bed,
+                    sample_good_bed=sample_retained_beds[sname],
+                    ref_info=ref_info,
+                    out_bed=artifacts.paralog_mask_bed,
+                ),
+            )
         paralog_masks = run_with_pool(
             jobs,
             log_level,
@@ -981,12 +1137,21 @@ def _build_sample_masks(
             msg="Building sample-specific paralog masks",
         )
 
-    # Merge low-depth, paralog, and any overlapping-indel-cluster exclusions
-    # into the final mask BED that the consensus step uses to write Ns for
-    # sample-specific filtered positions.
+    # Merge pre-paralog low-depth masks, retained-locus paralog masks, and any
+    # overlapping-indel-cluster exclusions into the final consensus mask BED.
     jobs = {}
-    for sname in all_dict:
-        jobs[sname] = (merge_sample_mask_beds, dict(sname=sname, tmpdir=tmpdir))
+    for sname, artifacts in sample_artifacts.items():
+        jobs[sname] = (
+            merge_sample_mask_beds,
+            dict(
+                lowdepth_bed=artifacts.lowdepth_mask_bed,
+                paralog_bed=artifacts.paralog_mask_bed,
+                indel_overlap_bed=artifacts.indel_overlap_mask_bed,
+                ref_info=ref_info,
+                out_bed=artifacts.sample_mask_bed,
+                sort_tmpdir=sort_tmpdir,
+            ),
+        )
     run_with_pool(jobs, log_level, workers, msg="Merging sample masks")
     return paralog_masks
 
@@ -997,9 +1162,10 @@ def _write_consensus_and_outputs(
     outdir: Path,
     tmpdir: Path,
     snames: List[str],
+    sample_artifacts: dict[str, SampleArtifacts],
+    sample_retained_beds: dict[str, Path],
     reference: Path,
     masks: List[str] | None,
-    sample_masks: dict[str, Path] | None,
     shared_loci_after_delimiting: int,
     shared_loci_after_paralog_filtering: int,
     min_locus_sample_coverage: int,
@@ -1018,15 +1184,17 @@ def _write_consensus_and_outputs(
     wgs_samples: list[str] | None = None,
 ) -> None:
     """Write consensus sequences, final locus outputs, and the SNP database."""
+    output_artifacts = _build_consensus_output_artifacts(name, tmpdir)
+
     # Slice the reference to the final shared loci so every downstream output is
     # anchored to the same canonical set of assembled windows.
-    logger.info("extracting reference sequence in locus beds")
+    logger.info("preparing locus reference sequence")
     write_sam_faidx(tmpdir)
     reference_fasta = get_reference_in_loci_beds(tmpdir, reference)
 
     # Consensus calling applies the merged per-sample mask beds on top of the
     # resolved project VCF to create sample FASTAs for the final database.
-    logger.info("extracting consensus sequences")
+    logger.info("building consensus sequences")
     jobs = {}
     for sname in snames:
         jobs[sname] = (
@@ -1034,7 +1202,9 @@ def _write_consensus_and_outputs(
             dict(
                 sname=sname,
                 reference_fasta=reference_fasta,
-                tmpdir=tmpdir,
+                resolved_vcf=output_artifacts.resolved_vcf,
+                sample_mask_bed=sample_artifacts[sname].sample_mask_bed,
+                out_fasta=sample_artifacts[sname].consensus_fasta,
                 keep_insertions=False,
             ),
         )
@@ -1045,21 +1215,35 @@ def _write_consensus_and_outputs(
     )
     with profile_stage("consensus extraction"):
         run_with_pool(
-            jobs, log_level, consensus_workers, msg="Extracting consensus sequences"
+            jobs, log_level, consensus_workers, msg="Building consensus sequences"
         )
 
     # Build one FASTA database spanning all consensus sequences. The final .loci
     # and HDF5 writers both consume this database to stay coordinate-consistent.
-    logger.info("assembling loci")
-    build_locus_fasta_database(name, snames, reference, tmpdir, masks)
+    consensus_fastas = [
+        output_artifacts.reference_consensus_fasta,
+        *(sample_artifacts[sname].consensus_fasta for sname in sorted(snames)),
+    ]
+    logger.info("building locus database")
+    build_locus_fasta_database(
+        consensus_fastas=consensus_fastas,
+        database_fasta=output_artifacts.database_fasta,
+        restriction_mask_bed=output_artifacts.restriction_mask_bed,
+        masks=masks,
+    )
+    logger.info("built locus database from {} FASTA inputs", len(consensus_fastas))
 
-    logger.info("writing outfiles (.loci, .hdf5, .bed, .stats.txt)")
+    logger.info("writing final loci and summary files")
     loci_summary = write_final_outputs(
         snames=snames,
         name=name,
         outdir=outdir,
-        tmpdir=tmpdir,
         reference=reference,
+        database_fasta=output_artifacts.database_fasta,
+        retained_loci_manifest=output_artifacts.retained_loci_manifest,
+        consensus_hetero_mask_beds={
+            sname: sample_artifacts[sname].consensus_hetero_mask_bed for sname in snames
+        },
         min_locus_sample_coverage=min_locus_sample_coverage,
         min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
         min_locus_length=min_locus_length,
@@ -1072,23 +1256,39 @@ def _write_consensus_and_outputs(
     if loci_summary["nloci_after_filtering"] == 0:
         raise IPyradError("No loci passed final trimming/filtering.")
     final_loci_bed = outdir / f"{name}.bed"
+    logger.info(
+        "wrote final loci: {} loci, {} sites",
+        int(loci_summary["nloci_after_filtering"]),
+        int(loci_summary["nsites_after_filtering"]),
+    )
 
     # The final VCF is filtered to the trimmed/retained outdir BED, then the
     # SNP dataset is appended to the same output HDF5 for downstream analyses.
-    logger.info("writing variants file (.vcf.gz)")
+    # Final VCF masking intentionally excludes sample-specific paralog BEDs,
+    # because those reads were already removed before joint calling.
+    logger.info("writing final VCF")
     with profile_stage("final VCF writing"):
         compact_resolved_vcf_to_final_loci_contigs(tmpdir, reference, final_loci_bed)
         final_vcf_masks = {}
-        if snames:
-            jobs = {
-                sname: (merge_final_vcf_mask_beds, dict(sname=sname, tmpdir=tmpdir))
-                for sname in snames
-            }
+        if sample_artifacts:
+            jobs = {}
+            for sname, artifacts in sample_artifacts.items():
+                jobs[sname] = (
+                    merge_final_vcf_mask_beds,
+                    dict(
+                        lowdepth_bed=artifacts.lowdepth_mask_bed,
+                        indel_overlap_bed=artifacts.indel_overlap_mask_bed,
+                        consensus_hetero_bed=artifacts.consensus_hetero_mask_bed,
+                        ref_info=tmpdir / "REF_info.txt",
+                        out_bed=artifacts.final_vcf_mask_bed,
+                        sort_tmpdir=tmpdir,
+                    ),
+                )
             final_vcf_masks = run_with_pool(
                 jobs,
                 log_level,
                 final_vcf_mask_workers,
-                msg="Merging final VCF mask BEDs",
+                msg="Building final VCF masks",
             )
         final_vcf = write_vcf(
             name,
@@ -1099,6 +1299,7 @@ def _write_consensus_and_outputs(
             cores=cores,
             log_level=log_level,
         )
+    logger.info("wrote final VCF")
 
     mixed_run_summary: dict[str, int] | None = None
     rad_samples = sorted(rad_samples or [])
@@ -1114,14 +1315,14 @@ def _write_consensus_and_outputs(
             final_vcf, rad_samples, wgs_samples
         )
         mixed_run_summary.update(support_stats)
-        logger.info(
+        logger.debug(
             "mixed RAD/WGS summary: sites RAD-only={} WGS-only={} both={} WGS het masks={}",
             mixed_run_summary["sites_supported_rad_only"],
             mixed_run_summary["sites_supported_wgs_only"],
             mixed_run_summary["sites_supported_both"],
             mixed_run_summary["wgs_het_genotypes_masked_by_allele_balance"],
         )
-        logger.info(
+        logger.debug(
             "mixed RAD/WGS paralog summary: RAD-fail={} WGS-fail={} both-fail={} RAD-pass/WGS-fail={}",
             mixed_run_summary["loci_fail_paralog_rad"],
             mixed_run_summary["loci_fail_paralog_wgs"],
@@ -1134,24 +1335,55 @@ def _write_consensus_and_outputs(
                 mixed_run_summary["sites_supported_neither"],
             )
 
-    logger.info("writing snps database (.hdf5)")
+    logger.info("writing SNP database")
     with profile_stage("SNP HDF5 writing"):
         nsnps_written = write_snps_hdf5(name, outdir, snames, reference)
+    if nsnps_written:
+        logger.info("wrote SNP database with {} SNP sites", nsnps_written)
+    else:
+        logger.info("wrote empty SNP database")
 
-    logger.info("computing final sample depth summary")
+    logger.info("preparing final sample depth summaries")
+    ref_info = tmpdir / "REF_info.txt"
+    jobs = {}
+    for sname in snames:
+        artifacts = sample_artifacts[sname]
+        jobs[sname] = (
+            clip_depth_bedgraph_to_retained_loci,
+            dict(
+                cov_bed=artifacts.pre_paralog_depth_bedgraph,
+                good_bed=sample_retained_beds[sname],
+                ref_info=ref_info,
+                out_bed=artifacts.retained_depth_bedgraph,
+            ),
+        )
+    run_with_pool(
+        jobs,
+        log_level,
+        workers,
+        msg="Preparing final depth summaries",
+    )
+
+    logger.info("summarizing final sample depth")
     jobs = {}
     loci_bed = final_loci_bed
     for sname in snames:
+        artifacts = sample_artifacts[sname]
         jobs[sname] = (
             get_sample_depth_stats_in_final_loci,
-            dict(sname=sname, loci_bed=loci_bed, tmpdir=tmpdir),
+            dict(
+                sname=sname,
+                loci_bed=loci_bed,
+                cov_bed=artifacts.retained_depth_bedgraph,
+            ),
         )
     sample_depth_stats = run_with_pool(
         jobs,
         log_level,
         workers,
-        msg="Summarizing final sample depths",
+        msg="Summarizing final sample depth",
     )
+    logger.info("final sample depth summary ready for {} samples", len(sample_depth_stats))
 
     # Write the final human-readable assemble report after all final outputs
     # exist, so its counts reflect the exact BED, VCF, and HDF5 products.
@@ -1274,7 +1506,7 @@ def run_assembler(
         )
 
     # Load the RAD BAMs that define loci when no explicit loci BED is supplied.
-    logger.info("loading sample meta-data")
+    logger.info("loading BAM inputs")
     bam_dict, rad_renamed = _collect_named_bams(expanded_rad_bams, rename_map)
     if bam_dict:
         logger.info(f"loaded {len(bam_dict)} RAD samples")
@@ -1291,12 +1523,12 @@ def run_assembler(
         logger.info(
             "renamed {} BAM sample name(s) from --rename-bams", len(renamed_pairs)
         )
-        logger.info(
+        logger.debug(
             "showing first {}/{} BAM rename mappings", shown, len(renamed_pairs)
         )
         max_len = max(len(sample_name) for sample_name, _ in renamed_pairs[:shown])
         for sample_name, bam_name in renamed_pairs[:shown]:
-            logger.info("{} <- {}", sample_name.ljust(max_len), bam_name)
+            logger.debug("{} <- {}", sample_name.ljust(max_len), bam_name)
 
     duplicate_names = sorted(set(bam_dict) & set(wgs_dict))
     if duplicate_names:
@@ -1313,6 +1545,7 @@ def run_assembler(
     consensus_workers = max(1, min(cores, len(snames)))
     final_vcf_mask_workers = max(1, min(cores, len(snames)))
     all_dict = {i: all_dict[i] for i in snames}
+    sample_artifacts = _build_sample_artifacts(snames, tmpdir)
     group_samples_file = None
     if populations is not None:
         (
@@ -1342,7 +1575,7 @@ def run_assembler(
     n_paired = sum(sample_layouts.values())
     n_single = len(sample_layouts) - n_paired
     logger.info(
-        "assemble BAM layout summary: {} paired-end, {} single-end",
+        "BAM layout: {} paired-end, {} single-end",
         n_paired,
         n_single,
     )
@@ -1353,7 +1586,7 @@ def run_assembler(
 
     logger.debug("fetching reference scaffold order")
     get_reference_sort_order(reference, tmpdir)
-    logger.info("validating input BAMs against the current reference")
+    logger.info("validating BAM headers against the reference")
     _validate_bam_header_records_match_reference(
         {
             sname: bam_metadata[sname]["header_records"]
@@ -1379,21 +1612,23 @@ def run_assembler(
     all_dict = {sname: all_dict[sname] for sname in snames}
     bam_dict = {sname: all_dict[sname] for sname in sorted(bam_dict)}
     wgs_dict = {sname: all_dict[sname] for sname in sorted(wgs_dict)}
+    logger.info("filtered analysis BAMs ready for {} samples", len(all_dict))
 
     # Record runtime settings and initialize reference metadata before locus
     # delimiting starts.
     logger.info(
-        f"using up to {cores} cores (up to {workers} multi-threaded jobs using {threads} threads)"
+        "using up to {} cores ({} concurrent jobs, {} threads per job)",
+        cores,
+        workers,
+        threads,
     )
     normalized_loci_bed = None
     if loci_bed is not None:
         normalized_loci_bed, input_locus_count = _normalize_user_loci_bed(
             loci_bed, tmpdir
         )
-        logger.info(
-            "using provided loci BED instead of RAD-based shared-locus delimiting"
-        )
-        logger.info("loaded {} loci from {}", input_locus_count, normalized_loci_bed)
+        logger.info("using provided loci BED with {} loci", input_locus_count)
+        logger.debug("using provided loci BED: {}", normalized_loci_bed)
         logger.debug(
             "ignoring RAD-delimiting options because --loci-bed was provided: min_locus_sample_coverage={}, min_locus_length={}, min_locus_merge_distance={}",
             min_locus_sample_coverage,
@@ -1405,7 +1640,7 @@ def run_assembler(
     # Build per-sample coverage intervals for all analysis BAMs so both RAD and
     # WGS samples can later generate low-depth masks, but define the shared loci
     # BED only from the RAD subset.
-    logger.info("delimiting sample coverage beds")
+    logger.info("building per-sample coverage BEDs")
     kwargs = dict(
         reference=reference,
         tmpdir=tmpdir,
@@ -1422,10 +1657,10 @@ def run_assembler(
             is_paired=sample_layouts[sname],
         )
         jobs[sname] = (get_coverage_bed_graphs, ikwargs)
-    run_with_pool(jobs, log_level, workers, msg="Delimiting sample coverage beds")
+    run_with_pool(jobs, log_level, workers, msg="Building per-sample coverage BEDs")
 
     if normalized_loci_bed is None:
-        logger.info("delimiting shared coverage beds (loci)")
+        logger.info("building loci from shared sample coverage BEDs")
         args = (
             list(bam_dict),
             min_locus_sample_coverage,
@@ -1448,7 +1683,7 @@ def run_assembler(
     # Score every sample against the shared RAD-defined loci BED, reduce those
     # calls across samples, and promote the filtered shared BED to the
     # canonical loci.bed consumed by the rest of the assemble workflow.
-    final_loci_bed = _run_paralog_stage(
+    paralog_outputs = _run_paralog_stage(
         sample_bams=all_dict,
         regions_bed=loci_bed,
         reference=reference,
@@ -1469,17 +1704,34 @@ def run_assembler(
         rad_sample_names=sorted(bam_dict),
         wgs_sample_names=sorted(wgs_dict),
     )
-    logger.info("paralog-filtered shared BED written to {}", final_loci_bed)
-    shared_loci_after_paralog_filtering = _count_nonempty_lines(final_loci_bed)
+    logger.debug(
+        "paralog-filtered shared BED promoted to {} (debug copy: {})",
+        paralog_outputs.shared_loci_bed,
+        paralog_outputs.debug_shared_loci_bed,
+    )
+    shared_loci_after_paralog_filtering = _count_nonempty_lines(
+        paralog_outputs.shared_loci_bed
+    )
+
+    calling_dict = _prepare_variant_call_bams(
+        sample_bams=all_dict,
+        sample_retained_beds=paralog_outputs.sample_retained_beds,
+        tmpdir=tmpdir,
+        threads=threads,
+        workers=workers,
+        log_level=log_level,
+    )
+    calling_dict = {sname: calling_dict[sname] for sname in snames}
+    logger.info("cleaned calling BAMs ready for {} samples", len(calling_dict))
 
     # [3] Variant calling:
-    # Jointly call variants across every filtered analysis BAM inside the
+    # Jointly call variants across post-paralog per-sample BAMs inside the
     # canonical shared loci, then apply project-wide genotype/site filtering.
     with profile_stage("variant calling"):
         _run_variant_stage(
             tmpdir=tmpdir,
             reference=reference,
-            bam_dict=all_dict,
+            bam_dict=calling_dict,
             group_samples_file=group_samples_file,
             min_map_q=min_map_q,
             min_base_q=min_base_q,
@@ -1493,13 +1745,16 @@ def run_assembler(
         )
 
     # [4] Sample masks:
-    # Build low-depth masks for all samples, add sample-specific RAD paralog
-    # masks where available, and build the merged consensus BED masks that
-    # sample-specific FASTA generation consumes directly.
+    # Build low-depth masks against the retained shared loci, derive each
+    # sample's paralog-only exclusion mask from its retained final.good.bed,
+    # and merge those interval sources for consensus generation.
     with profile_stage("sample mask building"):
-        paralog_masks = _build_sample_masks(
-            tmpdir=tmpdir,
-            all_dict=all_dict,
+        _build_sample_masks(
+            sample_artifacts=sample_artifacts,
+            sample_retained_beds=paralog_outputs.sample_retained_beds,
+            loci_bed=paralog_outputs.shared_loci_bed,
+            ref_info=tmpdir / "REF_info.txt",
+            sort_tmpdir=tmpdir,
             min_sample_depth=min_sample_depth,
             workers=workers,
             log_level=log_level,
@@ -1513,9 +1768,10 @@ def run_assembler(
         outdir=outdir,
         tmpdir=tmpdir,
         snames=snames,
+        sample_artifacts=sample_artifacts,
+        sample_retained_beds=paralog_outputs.sample_retained_beds,
         reference=reference,
         masks=masks,
-        sample_masks=paralog_masks,
         shared_loci_after_delimiting=shared_loci_after_delimiting,
         shared_loci_after_paralog_filtering=shared_loci_after_paralog_filtering,
         min_locus_sample_coverage=min_locus_sample_coverage,
@@ -1533,5 +1789,5 @@ def run_assembler(
         rad_samples=sorted(bam_dict),
         wgs_samples=sorted(wgs_dict),
     )
-    logger.info("assemble outputs written to {}", outdir)
+    logger.info("assemble complete; outputs written to {}", outdir)
     return

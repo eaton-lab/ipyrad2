@@ -140,8 +140,13 @@ def build_mapped_read_filter_expr(
 
 
 def get_analysis_bam_path(tmpdir: Path, sname: str) -> Path:
-    """Return the temp filtered BAM path for one sample."""
+    """Return the temp pre-paralog filtered BAM path for one sample."""
     return tmpdir / "analysis_bams" / f"{sname}.analysis.filtered.bam"
+
+
+def get_calling_bam_path(tmpdir: Path, sname: str) -> Path:
+    """Return the temp post-paralog calling BAM path used only for joint calling."""
+    return tmpdir / "calling_bams" / f"{sname}.variant.filtered.bam"
 
 
 def prepare_filtered_analysis_bam(
@@ -157,7 +162,7 @@ def prepare_filtered_analysis_bam(
     min_aligned_len: int | None,
     threads: int,
 ) -> Path:
-    """Write and index one assemble-time filtered BAM, then return its path."""
+    """Write and index one pre-paralog assemble BAM, then return its path."""
     out_bam = get_analysis_bam_path(tmpdir, sname)
     out_bam.parent.mkdir(parents=True, exist_ok=True)
 
@@ -192,6 +197,63 @@ def prepare_filtered_analysis_bam(
         BIN_SAM, "index",
         "-c",
         "-@", str(max(1, threads)),
+        str(out_bam),
+    ]
+    run_pipeline([cmd])
+    return out_bam
+
+
+def prepare_variant_call_bam(
+    *,
+    sname: str,
+    bam_file: Path,
+    keep_bed: Path,
+    tmpdir: Path,
+    threads: int,
+) -> Path:
+    """Write and index one post-paralog calling BAM used only for joint calling."""
+    if not keep_bed.exists():
+        raise IPyradError(f"Retained per-sample loci BED not found for {sname}: {keep_bed}")
+
+    out_bam = get_calling_bam_path(tmpdir, sname)
+    out_bam.parent.mkdir(parents=True, exist_ok=True)
+
+    if keep_bed.stat().st_size == 0:
+        # Preserve the sample in the joint call with a valid header-only BAM
+        # when no loci survive per-sample paralog filtering.
+        cmd = [
+            BIN_SAM,
+            "view",
+            "-b",
+            "-H",
+            "-@",
+            str(max(1, threads)),
+            "-o",
+            str(out_bam),
+            str(bam_file),
+        ]
+    else:
+        cmd = [
+            BIN_SAM,
+            "view",
+            "-b",
+            "-h",
+            "-@",
+            str(max(1, threads)),
+            "-L",
+            str(keep_bed),
+            "-o",
+            str(out_bam),
+            str(bam_file),
+        ]
+    run_pipeline([cmd])
+
+    cmd = [
+        BIN_SAM,
+        "index",
+        "-c",
+        "-@",
+        str(max(1, threads)),
         str(out_bam),
     ]
     run_pipeline([cmd])

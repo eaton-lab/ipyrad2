@@ -213,6 +213,14 @@ def _log_sample_selection(
         logger.debug("excluded samples: {}", ", ".join(dropped))
 
 
+def _count_concat_summary_rows(summary_tsv: Path) -> int:
+    """Return the number of data rows in one concat.summary.tsv file."""
+    if not summary_tsv.exists():
+        return 0
+    with open(summary_tsv, "rt", encoding="utf-8", newline="") as infile:
+        return max(0, sum(1 for _ in infile) - 1)
+
+
 def _cleanup_post_derep_work_files(
     sname: str,
     outdir: Path,
@@ -837,7 +845,7 @@ def _write_denovo_sample_graph_summary(
         )
         writer.writeheader()
         writer.writerows(rows)
-    logger.info(f"wrote denovo sample graph summary to {outpath}")
+    logger.debug("wrote denovo sample graph summary to {}", outpath)
     return outpath
 
 
@@ -915,6 +923,83 @@ def _append_report_table_section(
     for row in rows:
         lines.append("  ".join(value.ljust(widths[idx]) for idx, value in enumerate(row)))
     lines.append("")
+
+
+def _human_denovo_report_label(key: str) -> str:
+    """Return the human-readable label for one denovo stats key or header."""
+    labels = {
+        "fastq_count": "FASTQ files",
+        "selected_sample_count": "Selected samples",
+        "total_input_sample_count": "Total input samples",
+        "sample_selection_mode": "Sample selection mode",
+        "paired_mode": "Read layout",
+        "within_similarity": "Within-sample similarity",
+        "across_similarity": "Across-sample similarity",
+        "min_derep_size": "Minimum dereplication size",
+        "min_length": "Minimum read length",
+        "min_merge_overlap": "Minimum merge overlap",
+        "max_merge_diffs": "Maximum merge differences",
+        "allow_reverse_complement": "Allow reverse complement",
+        "consensus_records": "Consensus records",
+        "loci_written": "Loci written",
+        "single_sequence_loci": "Single-sequence loci",
+        "identical_sequence_loci": "Identical-sequence loci",
+        "mafft_required_loci": "Loci requiring MAFFT",
+        "joined_spacer_loci": "Joined-spacer loci",
+        "mixed_reconciled_spacer_loci": "Mixed reconciled spacer loci",
+        "stripped_output_loci": "Spacer-stripped output loci",
+        "duplicated_components_seen": "Duplicated components seen",
+        "same_sample_reconciliation_attempted": "Same-sample reconciliation attempted",
+        "components_reconciled": "Components reconciled",
+        "joined_only_reconciled_loci": "Joined-only reconciled loci",
+        "mixed_reconciled_loci": "Mixed reconciled loci",
+        "mixed_reconciled_groups": "Mixed reconciled groups",
+        "singleton_loci": "Singleton loci",
+        "singleton_locus_fraction": "Singleton locus fraction",
+        "loci_with_2plus_samples": "Loci with 2+ samples",
+        "loci_with_half_or_more_selected_samples": "Loci with half or more selected samples",
+        "loci_with_all_selected_samples": "Loci with all selected samples",
+        "mean_samples_per_locus": "Mean samples per locus",
+        "median_samples_per_locus": "Median samples per locus",
+        "max_samples_per_locus": "Maximum samples per locus",
+        "mean_cores_per_locus": "Mean cores per locus",
+        "median_cores_per_locus": "Median cores per locus",
+        "max_cores_per_locus": "Maximum cores per locus",
+        "multi_core_single_sample_loci": "Multi-core single-sample loci",
+        "duplicated_component_loci": "Duplicated-component loci",
+        "reconciled_loci": "Reconciled loci",
+        "audited_components": "Audited components",
+        "processed_components": "Processed components",
+        "oversize_unsplit_components": "Oversize unsplit components",
+        "largest_component_nodes": "Largest component nodes",
+        "quantile": "Quantile",
+        "input_nodes": "Input nodes",
+        "contracted_nodes": "Contracted nodes",
+        "sample": "Sample",
+        "n_reads_sum": "Read count",
+        "joined_records": "Joined records",
+        "merged_records": "Merged records",
+        "single_records": "Single records",
+        "samples_with_data": "Samples with data",
+        "loci": "Loci",
+        "fraction_of_final_loci": "Fraction of final loci",
+        "cores": "Cores",
+        "vsearch_threads_per_job": "VSEARCH threads per job",
+        "vsearch_worker_processes": "VSEARCH worker processes",
+        "mafft_threads_per_job": "MAFFT threads per job",
+        "mafft_worker_processes": "MAFFT worker processes",
+        "alignment_mode": "Alignment mode",
+        "mafft_timeout_seconds": "MAFFT timeout (seconds)",
+        "keep_intermediates": "Keep intermediates",
+        "reference": "Reference FASTA",
+        "mapping": "Locus mapping table",
+        "loci_stats": "Locus stats table",
+        "sample_graph_summary": "Sample graph summary",
+        "run_stats": "Run summary report",
+        "audit_dir": "Audit directory",
+        "intermediates": "Intermediate files",
+    }
+    return labels.get(key, key.replace("_", " ").capitalize())
 
 
 def _write_denovo_stats(
@@ -1087,7 +1172,6 @@ def _write_denovo_stats(
         ("cores", _format_report_count(cores)),
         ("vsearch_threads_per_job", _format_report_count(threads)),
         ("vsearch_worker_processes", _format_report_count(workers)),
-        ("across_vsearch_threads", _format_report_count(cores)),
         ("mafft_threads_per_job", _format_report_count(alignment_summary.mafft_threads_per_job)),
         (
             "mafft_worker_processes",
@@ -1098,13 +1182,7 @@ def _write_denovo_stats(
             "mafft_timeout_seconds",
             _format_report_count(alignment_summary.mafft_timeout_seconds),
         ),
-        ("duplicated_component_reconciliation", "same-sample graph"),
-        ("cluster_spacer_mode", "stripped"),
-        ("output_spacer_length", _format_report_count(alignment_summary.output_spacer_length)),
         ("keep_intermediates", str(bool(keep_intermediates))),
-        ("vsearch_binary", BIN_VSEARCH),
-        ("mafft_binary", BIN_MAFFT),
-        ("workdir", str(workdir)),
     ]
     output_rows = [
         ("reference", str(outputs["reference"])),
@@ -1120,19 +1198,63 @@ def _write_denovo_stats(
     ]
 
     lines: list[str] = []
-    _append_report_key_value_section(lines, "Inputs", inputs_rows)
-    _append_report_key_value_section(lines, "Clustering Parameters", clustering_rows)
-    _append_report_key_value_section(lines, "Denovo Summary", summary_rows)
-    _append_report_key_value_section(lines, "Locus QC", locus_qc_rows)
-    _append_report_key_value_section(lines, "Component QC", component_qc_rows)
-    _append_report_table_section(lines, "Component Node Summary", component_node_headers, component_node_rows)
-    _append_report_table_section(lines, "Selected Sample Summary", selected_sample_headers, selected_sample_rows)
-    _append_report_table_section(lines, "Locus Occupancy", occupancy_headers, occupancy_rows)
-    _append_report_key_value_section(lines, "Runtime", runtime_rows)
-    _append_report_key_value_section(lines, "Outputs", output_rows)
+    _append_report_key_value_section(
+        lines,
+        "Inputs",
+        [(_human_denovo_report_label(key), value) for key, value in inputs_rows],
+    )
+    _append_report_key_value_section(
+        lines,
+        "Clustering Parameters",
+        [(_human_denovo_report_label(key), value) for key, value in clustering_rows],
+    )
+    _append_report_key_value_section(
+        lines,
+        "Denovo Summary",
+        [(_human_denovo_report_label(key), value) for key, value in summary_rows],
+    )
+    _append_report_key_value_section(
+        lines,
+        "Locus QC",
+        [(_human_denovo_report_label(key), value) for key, value in locus_qc_rows],
+    )
+    _append_report_key_value_section(
+        lines,
+        "Component QC",
+        [(_human_denovo_report_label(key), value) for key, value in component_qc_rows],
+    )
+    _append_report_table_section(
+        lines,
+        "Component Node Summary",
+        [_human_denovo_report_label(header) for header in component_node_headers],
+        component_node_rows,
+    )
+    _append_report_table_section(
+        lines,
+        "Selected Sample Summary",
+        [_human_denovo_report_label(header) for header in selected_sample_headers],
+        selected_sample_rows,
+    )
+    _append_report_table_section(
+        lines,
+        "Locus Occupancy",
+        [_human_denovo_report_label(header) for header in occupancy_headers],
+        occupancy_rows,
+    )
+    _append_report_key_value_section(
+        lines,
+        "Runtime",
+        [(_human_denovo_report_label(key), value) for key, value in runtime_rows],
+    )
+    _append_report_key_value_section(
+        lines,
+        "Outputs",
+        [(_human_denovo_report_label(key), value) for key, value in output_rows],
+    )
 
     outpath.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-    logger.info(f"wrote denovo run stats to {outpath}")
+    logger.info("wrote denovo summary report")
+    logger.debug("wrote denovo run stats to {}", outpath)
 
 
 def _write_stripped_clustering_fasta(
@@ -1384,8 +1506,11 @@ def run_denovo(
     workdir, outputs = _prepare_output_paths(outdir, force=force)
 
     # parse input fastqs/pairs, subselect, and report
+    logger.info("loading FASTQ inputs")
     full_fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx)
+    logger.info("loaded {} denovo input samples", len(full_fastq_dict))
     _validate_fastq_layout(full_fastq_dict)
+    logger.info("selecting denovo samples")
     fastq_dict, selection_mode = _select_denovo_samples(
         full_fastq_dict,
         imap_path=imap,
@@ -1403,7 +1528,8 @@ def run_denovo(
     # logger.info("using mafft binary: {}", mafft_path)
 
     # perform within-samples operations to get within-sample consensus loci
-    msg = "Joining/merging pairs, dereplicating, and clustering" if is_paired else "Dereplicating and clustering"
+    logger.info("clustering within samples")
+    msg = "Clustering within samples"
     jobs: dict[str, tuple[object, dict[str, object]]] = {}
     for sname, fastq_tuple in fastq_dict.items():
         kwargs = dict(
@@ -1423,12 +1549,19 @@ def run_denovo(
         )
         jobs[sname] = (vsearch_pairs, kwargs)
     run_with_pool(jobs, log_level, workers, msg=msg)
+    logger.info("within-sample clustering complete for {} selected samples", len(fastq_dict))
 
     # write '.concat.summary.tsv' (this is a tmp file for debugging)
+    logger.info("combining per-sample summaries")
     concat_summaries(workdir)
+    logger.info(
+        "combined {} consensus records across {} selected samples",
+        _count_concat_summary_rows(workdir / "concat.summary.tsv"),
+        len(fastq_dict),
+    )
 
     # perform across-sample clustering and write a summary
-    logger.info("Clustering consensus sequences across samples")
+    logger.info("clustering consensus sequences across samples")
     vsearch_cluster_across(
         outdir=workdir,
         summary_tsv=workdir / "concat.summary.tsv",
@@ -1437,7 +1570,7 @@ def run_denovo(
     )
 
     # perform graph splitting on the across samples clusters
-    logger.info("Splitting global clusters and writing locus tables")
+    logger.info("building denovo locus tables")
     graph_summary = make_global_tables(
         workdir,
         cores=cores,
@@ -1446,19 +1579,21 @@ def run_denovo(
     )
 
     # optionally perform alignment on the across-sample clusters
+    alignment_mode = "none" if no_alignment else "mafft"
     if no_alignment:
-        logger.info("Selecting longest locus representatives and writing denovo reference")
+        logger.info("building denovo reference (no alignment)")
     else:
-        logger.info("Aligning locus consensuses and writing denovo reference")
+        logger.info("building denovo reference (MAFFT)")
     alignment_summary = write_ordered_consensus_stream_to_file(
         mapping_tsv=outputs["mapping"],
         summary_tsv=workdir / "concat.summary.tsv",
         out_fa=outputs["reference"],
         mafft_binary=BIN_MAFFT,
         cores=cores,
-        alignment_mode="none" if no_alignment else "mafft",
+        alignment_mode=alignment_mode,
     )
 
+    logger.info("collecting final denovo QC")
     qc_summary = _collect_denovo_qc(
         selected_fastq_dict=fastq_dict,
         total_input_sample_count=len(full_fastq_dict),
@@ -1473,6 +1608,7 @@ def run_denovo(
     )
 
     # collect and write stats on the denovo assembly
+    logger.info("writing denovo summary report")
     _write_denovo_stats(
         outputs["run_stats"],
         all_fastq_dict=full_fastq_dict,
@@ -1500,6 +1636,7 @@ def run_denovo(
     if not keep_intermediates:
         _cleanup_denovo_workdir_stage_files(workdir)
         shutil.rmtree(workdir)
+    logger.info("denovo complete; outputs written to {}", outdir)
 
 
 if __name__ == "__main__":

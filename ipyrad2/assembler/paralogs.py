@@ -804,10 +804,14 @@ def write_per_sample_final_good(
     shared_good_bed: Path,
     out_dir: Path,
     out_suffix: str = ".final.good.bed",
-) -> None:
-    """Intersect each per-sample good BED with the shared final good BED."""
+) -> dict[str, Path]:
+    """Write and return per-sample retained BEDs after shared paralog filtering.
+
+    Each returned BED is `sample.good.bed ∩ shared_good.final.bed`.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     ref_info = out_dir.parent / "REF_info.txt"
+    written: dict[str, Path] = {}
     for prefix in sample_prefixes:
         prefix = str(prefix)
         good_bed = in_dir / f"{prefix}.good.bed"
@@ -827,6 +831,8 @@ def write_per_sample_final_good(
         run_pipeline([cmd], tmp_out)
         sort_bed_by_reference_order(tmp_out, out_bed, ref_info)
         tmp_out.unlink(missing_ok=True)
+        written[prefix] = out_bed
+    return written
 
 
 if __name__ == "__main__":

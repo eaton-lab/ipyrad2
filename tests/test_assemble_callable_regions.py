@@ -298,10 +298,12 @@ def test_run_paralog_stage_passes_callable_bed_to_sample_jobs(
         _fake_sort_bed_by_reference_order,
     )
     monkeypatch.setattr(
-        assemble_module, "write_per_sample_final_good", lambda **kwargs: None
+        assemble_module,
+        "write_per_sample_final_good",
+        lambda **kwargs: {"sample": kwargs["out_dir"] / "sample.final.good.bed"},
     )
 
-    final_bed = assemble_module._run_paralog_stage(
+    outputs = assemble_module._run_paralog_stage(
         sample_bams=sample_bams,
         regions_bed=regions_bed,
         reference=reference,
@@ -324,7 +326,7 @@ def test_run_paralog_stage_passes_callable_bed_to_sample_jobs(
     job_kwargs = captured["job_kwargs"]
     assert job_kwargs["regions_bed"] == regions_bed
     assert job_kwargs["callable_regions_bed"] == phase_dir / "loci.callable.paralog.bed"
-    assert final_bed.read_text(encoding="utf-8") == "chr1\t0\t10\n"
+    assert outputs.shared_loci_bed.read_text(encoding="utf-8") == "chr1\t0\t10\n"
 
 
 def test_run_variant_stage_chunks_callable_loci_bed(

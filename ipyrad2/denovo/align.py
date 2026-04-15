@@ -1143,7 +1143,7 @@ def _build_alignment_run_summary(
 
 def _log_alignment_summary(summary: AlignmentRunSummary) -> None:
     """Log the alignment scheduling summary in one compact line."""
-    logger.info(
+    logger.debug(
         "alignment scheduling: "
         f"total_loci={summary.total_loci} "
         f"single_sequence_loci={summary.single_sequence_loci} "
@@ -1212,7 +1212,8 @@ def write_ordered_consensus_stream_to_file(
 
     if summary.total_loci == 0:
         out_fa.write_text("", encoding="utf-8")
-        logger.info(f"wrote denovo reference to {out_fa}")
+        logger.info("wrote denovo reference")
+        logger.debug("wrote denovo reference to {}", out_fa)
         return summary
 
     with open(out_fa, "wt", encoding="utf-8") as fh:
@@ -1230,7 +1231,8 @@ def write_ordered_consensus_stream_to_file(
                     )
                     prog.finished += 1
                     prog.update()
-                logger.info(f"wrote denovo reference to {out_fa}")
+                logger.info("wrote denovo reference")
+                logger.debug("wrote denovo reference to {}", out_fa)
                 return summary
 
             jobs_it = _iter_alignment_jobs_from_plan(
@@ -1285,5 +1287,6 @@ def write_ordered_consensus_stream_to_file(
         finally:
             prog.close()
 
-    logger.info(f"wrote denovo reference to {out_fa}")
+    logger.info("wrote denovo reference")
+    logger.debug("wrote denovo reference to {}", out_fa)
     return summary
