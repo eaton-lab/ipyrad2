@@ -730,6 +730,11 @@ def _run_paralog_stage(
     wgs_sample_names: list[str] | None = None,
 ) -> Path:
     """Run the active per-sample and across-sample paralog filtering stage."""
+    rad_sample_names = sorted(rad_sample_names or [])
+    wgs_sample_names = sorted(wgs_sample_names or [])
+    mixed_mode = bool(rad_sample_names and wgs_sample_names)
+    wgs_sample_name_set = set(wgs_sample_names)
+
     logger.info("filtering paralogs within samples")
     callable_regions_bed = write_callable_regions_bed(
         regions_bed,
@@ -739,6 +744,10 @@ def _run_paralog_stage(
     logger.info(
         "excluding non-ACGT reference positions from within-sample paralog variant calling"
     )
+    if mixed_mode and (softclip_len_threshold is not None or softclip_frac_max is not None):
+        logger.info(
+            "mixed RAD/WGS assembly detected; skipping softclip-based paralog failure for WGS samples"
+        )
 
     # Score every sample against the shared RAD-defined loci BED. RAD samples
     # still define the loci, but WGS samples are also evaluated here so their
@@ -762,15 +771,17 @@ def _run_paralog_stage(
     )
     jobs = {}
     for sname, bam_file in sample_bams.items():
-        ikwargs = kwargs | dict(bam=bam_file, prefix=sname)
+        sample_kwargs = kwargs
+        if mixed_mode and sname in wgs_sample_name_set:
+            sample_kwargs = sample_kwargs | {
+                "softclip_len_threshold": None,
+                "softclip_frac_max": None,
+            }
+        ikwargs = sample_kwargs | dict(bam=bam_file, prefix=sname)
         jobs[sname] = (get_sample_paralog_tables, ikwargs)
     run_with_pool(jobs, log_level, workers, msg="Filtering paralogs within samples")
 
     logger.info("aggregating paralog filtering across samples")
-
-    rad_sample_names = sorted(rad_sample_names or [])
-    wgs_sample_names = sorted(wgs_sample_names or [])
-    mixed_mode = bool(rad_sample_names and wgs_sample_names)
 
     if mixed_mode:
         logger.info(

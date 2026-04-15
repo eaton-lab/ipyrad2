@@ -427,23 +427,21 @@ def _mask_high_hetero_samples(
     *,
     max_sample_hetero_frequency: float,
 ) -> tuple[np.ndarray, list[str], dict[str, float]]:
-    """Mask samples that exceed the per-locus heterozygosity threshold."""
+    """Mask samples whose observed bases exceed the per-locus heterozygosity threshold."""
     if tseqs.size == 0:
         return tseqs.copy(), [], {}
 
     masked = tseqs.copy()
-    variable_sites = snp_count_numba(tseqs) > 0
     masked_samples: list[str] = []
     sample_props: dict[str, float] = {}
     for row_idx, sname in enumerate(tnames):
         if sname == "assembly_reference_sequence":
             continue
         row = masked[row_idx]
-        masked_variable_n = (row == 78) & variable_sites
         observed = (row != 78) & (row != 45)
         explicit_hetero = np.isin(row, HETERO_CODES)
-        numer = int(explicit_hetero.sum() + masked_variable_n.sum())
-        denom = int(observed.sum() + masked_variable_n.sum())
+        numer = int(explicit_hetero.sum())
+        denom = int(observed.sum())
         sample_props[sname] = float(numer / denom) if denom else 0.0
         if denom and sample_props[sname] > max_sample_hetero_frequency:
             masked[row_idx, :] = np.uint8(ord("N"))

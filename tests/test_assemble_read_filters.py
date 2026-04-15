@@ -1250,9 +1250,11 @@ def test_run_paralog_stage_uses_rad_aggregate_for_mixed_shared_bed(
     reference.write_text(">chr1\n" + ("A" * 100) + "\n", encoding="utf-8")
     regions_bed = tmp_path / "regions.bed"
     regions_bed.write_text("chr1\t0\t30\n", encoding="utf-8")
+    captured: dict[str, object] = {}
 
     def _fake_run_with_pool(jobs, log_level, workers, msg=None):
-        del jobs, log_level, workers, msg
+        captured["jobs"] = jobs
+        del log_level, workers, msg
         return {}
 
     def _fake_aggregate_across_samples(*, sample_prefixes, out_prefix, **kwargs):
@@ -1325,6 +1327,11 @@ def test_run_paralog_stage_uses_rad_aggregate_for_mixed_shared_bed(
     assert "loci_fail_paralog_wgs\t1" in counts
     assert "loci_fail_paralog_both\t0" in counts
     assert "loci_pass_paralog_rad_fail_paralog_wgs\t1" in counts
+    jobs = captured["jobs"]
+    assert jobs["rad"][1]["softclip_len_threshold"] == 20
+    assert jobs["rad"][1]["softclip_frac_max"] == 0.25
+    assert jobs["wgs"][1]["softclip_len_threshold"] is None
+    assert jobs["wgs"][1]["softclip_frac_max"] is None
 
 
 def test_normalize_user_loci_bed_rejects_unknown_scaffolds(tmp_path: Path) -> None:
@@ -2641,7 +2648,7 @@ def test_write_loci_and_stats_files_masks_samples_above_max_sample_hetero_freque
     assert "chr1:1-4\tchr1:1-4\ts1" in manifest
 
 
-def test_filter_trim_locus_counts_masked_n_at_variable_sites_for_sample_hetero_filter() -> None:
+def test_filter_trim_locus_ignores_missing_bases_for_sample_hetero_filter() -> None:
     header = "chr1:1-4"
     locus_dict = {
         "assembly_reference_sequence": "AAAA",
@@ -2662,8 +2669,33 @@ def test_filter_trim_locus_counts_masked_n_at_variable_sites_for_sample_hetero_f
     )
 
     assert not any(filters.values())
+    assert stats["masked_samples_by_max_sample_hetero_frequency"] == ()
+    assert bytes(tseqs[1]).decode() == "ANAA"
+
+
+def test_filter_trim_locus_masks_explicit_hetero_among_observed_bases() -> None:
+    header = "chr1:1-5"
+    locus_dict = {
+        "assembly_reference_sequence": "AAAAA",
+        "s1": "ARNAA",
+        "s2": "ATGAA",
+        "s3": "AAAAA",
+    }
+
+    _header, _names, tseqs, _snps, filters, stats = filter_trim_locus(
+        header,
+        locus_dict,
+        min_locus_sample_coverage=1,
+        min_locus_trim_sample_coverage=1,
+        min_locus_length=1,
+        max_locus_hetero_frequency=1.0,
+        max_locus_variant_frequency=1.0,
+        max_sample_hetero_frequency=0.20,
+    )
+
+    assert not any(filters.values())
     assert stats["masked_samples_by_max_sample_hetero_frequency"] == ("s1",)
-    assert bytes(tseqs[1]).decode() == "NNNN"
+    assert bytes(tseqs[1]).decode() == "NNNNN"
 
 
 def test_get_sample_depth_stats_in_final_loci_uses_full_shared_locus_length(
