@@ -110,6 +110,7 @@ def build_mapped_read_filter_expr(
     max_tlen: int | None,
     max_softclip: int | None,
     max_nm: int | None,
+    min_aligned_len: int | None,
 ) -> str | None:
     """Return one samtools view -e expression for assemble-time BAM filtering."""
     clauses: list[str] = []
@@ -129,6 +130,9 @@ def build_mapped_read_filter_expr(
 
     if max_nm is not None:
         clauses.append(f"([NM] <= {max_nm})")
+
+    if min_aligned_len is not None:
+        clauses.append(f"((qlen - sclen) >= {min_aligned_len})")
 
     if not clauses:
         return None
@@ -150,6 +154,7 @@ def prepare_filtered_analysis_bam(
     max_tlen: int | None,
     max_softclip: int | None,
     max_nm: int | None,
+    min_aligned_len: int | None,
     threads: int,
 ) -> Path:
     """Write and index one assemble-time filtered BAM, then return its path."""
@@ -173,6 +178,7 @@ def prepare_filtered_analysis_bam(
         max_tlen=max_tlen,
         max_softclip=max_softclip,
         max_nm=max_nm,
+        min_aligned_len=min_aligned_len,
     )
     if expr is not None:
         cmd.extend(["-e", expr])

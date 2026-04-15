@@ -48,6 +48,7 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
         "-o, --out",
         "-qm, --min-map-q",
         "-ms, --max-softclip",
+        "-ml, --min-aligned-len",
         "-me, --max-nm",
         "-mt, --max-tlen",
         "-m, --min-locus-sample-coverage",
@@ -111,6 +112,7 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
         "-o, --out",
         "-qm, --min-map-q",
         "-ms, --max-softclip",
+        "-ml, --min-aligned-len",
         "-me, --max-nm",
         "-mt, --max-tlen",
         "-m, --min-locus-sample-coverage",
@@ -150,6 +152,7 @@ def test_assemble_parser_defaults_match_current_cli() -> None:
     assert args.out == Path("OUT")
     assert args.min_map_q == 10
     assert args.max_softclip is None
+    assert args.min_aligned_len is None
     assert args.max_nm is None
     assert args.max_tlen is None
     assert not hasattr(args, "require_same_scaffold")
