@@ -244,6 +244,7 @@ def test_run_denovo_rejects_mixed_input_layout(
             outdir=tmp_path / "out",
             within_similarity=0.95,
             across_similarity=0.85,
+            query_cov=0.75,
             min_derep_size=2,
             min_length=35,
             min_merge_overlap=20,
@@ -280,6 +281,7 @@ def test_run_denovo_requires_working_binaries(
             outdir=tmp_path / "out",
             within_similarity=0.95,
             across_similarity=0.85,
+            query_cov=0.75,
             min_derep_size=2,
             min_length=35,
             min_merge_overlap=20,
@@ -295,6 +297,22 @@ def test_run_denovo_requires_working_binaries(
             use_all_samples=False,
             keep_intermediates=False,
             log_level="INFO",
+        )
+
+
+def test_validate_runtime_args_rejects_out_of_range_query_cov() -> None:
+    with pytest.raises(IPyradError, match="query_cov must be > 0 and <= 1"):
+        denovo_module._validate_runtime_args(
+            within_similarity=0.95,
+            across_similarity=0.85,
+            query_cov=0.0,
+            min_derep_size=2,
+            min_length=35,
+            min_merge_overlap=20,
+            max_merge_diffs=4,
+            cores=6,
+            threads=3,
+            delim_idx=1,
         )
 
 
@@ -339,11 +357,14 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
         )
         return pd.DataFrame()
 
-    def fake_vsearch_cluster_across(outdir, summary_tsv, across_similarity, threads):
+    def fake_vsearch_cluster_across(
+        outdir, summary_tsv, across_similarity, query_cov, threads
+    ):
         calls["across"] = {
             "outdir": outdir,
             "summary_tsv": summary_tsv,
             "across_similarity": across_similarity,
+            "query_cov": query_cov,
             "threads": threads,
         }
 
@@ -443,6 +464,7 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
             outdir=outdir,
             within_similarity=0.95,
             across_similarity=0.85,
+            query_cov=0.75,
             min_derep_size=2,
             min_length=35,
             min_merge_overlap=20,
@@ -482,6 +504,11 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
     assert "# Outputs" in stats_text
     assert _report_has_value_line(stats_text, "Selected samples", "1")
     assert _report_has_value_line(stats_text, "Sample selection mode", "all")
+    assert _report_has_value_line(
+        stats_text,
+        "Minimum VSEARCH query coverage",
+        "0.750000",
+    )
     assert _report_has_value_line(stats_text, "Keep intermediates", "False")
     assert _report_has_value_line(stats_text, "Alignment mode", "mafft")
     assert _report_has_value_line(stats_text, "VSEARCH threads per job", "3")
@@ -534,6 +561,8 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
         calls["across"]["summary_tsv"]
         == outdir / denovo_module.WORKDIR_NAME / "concat.summary.tsv"
     )
+    assert calls["across"]["across_similarity"] == 0.85
+    assert calls["across"]["query_cov"] == 0.75
     assert calls["across"]["threads"] == 6
 
 
@@ -643,6 +672,7 @@ def test_run_denovo_keep_intermediates_preserves_workdir(
         outdir=outdir,
         within_similarity=0.95,
         across_similarity=0.85,
+        query_cov=0.75,
         min_derep_size=2,
         min_length=35,
         min_merge_overlap=20,
@@ -855,6 +885,7 @@ def test_vsearch_pairs_cleans_large_sample_files_after_derep_and_summary(
         max_merge_diffs=4,
         allow_reverse_complement=False,
         within_similarity=0.95,
+        query_cov=0.75,
         threads=1,
         keep_intermediates=False,
         paired=True,
@@ -930,6 +961,7 @@ def test_vsearch_pairs_keeps_sample_intermediates_when_requested(
         max_merge_diffs=4,
         allow_reverse_complement=False,
         within_similarity=0.95,
+        query_cov=0.75,
         threads=1,
         keep_intermediates=True,
         paired=False,
@@ -988,6 +1020,7 @@ def test_vsearch_pairs_preserves_pre_derep_files_when_derep_fails(
             max_merge_diffs=4,
             allow_reverse_complement=False,
             within_similarity=0.95,
+            query_cov=0.75,
             threads=1,
             keep_intermediates=False,
             paired=True,
@@ -1055,6 +1088,7 @@ def test_vsearch_pairs_preserves_post_derep_files_when_summary_fails(
             max_merge_diffs=4,
             allow_reverse_complement=False,
             within_similarity=0.95,
+            query_cov=0.75,
             threads=1,
             keep_intermediates=False,
             paired=False,
@@ -1065,6 +1099,111 @@ def test_vsearch_pairs_preserves_post_derep_files_when_summary_fails(
     assert derep.exists()
     assert consensus.exists()
     assert clusters.exists()
+
+
+def test_vsearch_pairs_threads_query_cov_into_cluster_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    r1 = tmp_path / "sample.fastq.gz"
+    r1.write_text("", encoding="utf-8")
+    captured_cluster_cmd: list[str] | None = None
+
+    def fake_run_pipeline(cmds):
+        nonlocal captured_cluster_cmd
+        cmd = cmds[-1]
+        if "--fastx_subsample" in cmd:
+            (tmp_path / "sample.joined.fa").write_text(">sample;S1\nAAATTT\n", encoding="utf-8")
+            return
+        if "--fastx_uniques" in cmd:
+            (tmp_path / "sample.derep.fa").write_text(">sample;S1;size=5\nAAATTT\n", encoding="utf-8")
+            return
+        if "--sortbylength" in cmd:
+            (tmp_path / "sample.derep.sizesorted.fa").write_text(">sample;S1;size=5\nAAATTT\n", encoding="utf-8")
+            return
+        if "--cluster_fast" in cmd:
+            captured_cluster_cmd = cmd
+            (tmp_path / "sample.consensus.fa").write_text(
+                ">centroid=sample;S1;size=5;seqs=1\nAAATTT\n",
+                encoding="utf-8",
+            )
+            (tmp_path / "sample.clusters.tsv").write_text(
+                "S\t0\t6\t*\t*\t*\t*\t*\tsample;S1;size=5\t*\n",
+                encoding="utf-8",
+            )
+            return
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(denovo_module, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(
+        denovo_module,
+        "build_sample_summary",
+        lambda sname, outdir, **kwargs: (outdir / f"{sname}.summary.tsv").write_text(
+            "sample\tcluster_id\nsample\t0\n",
+            encoding="utf-8",
+        ),
+    )
+
+    denovo_module.vsearch_pairs(
+        sname="sample",
+        r1=r1,
+        r2=None,
+        outdir=tmp_path,
+        min_derep_size=5,
+        min_merge_overlap=20,
+        min_length=35,
+        max_merge_diffs=4,
+        allow_reverse_complement=False,
+        within_similarity=0.95,
+        query_cov=0.63,
+        threads=1,
+        keep_intermediates=True,
+        paired=False,
+    )
+
+    assert captured_cluster_cmd is not None
+    assert "--query_cov" in captured_cluster_cmd
+    assert captured_cluster_cmd[captured_cluster_cmd.index("--query_cov") + 1] == "0.63"
+
+
+def test_vsearch_cluster_across_threads_query_cov_into_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    summary_tsv = tmp_path / "concat.summary.tsv"
+    summary_tsv.write_text(
+        _summary_header()
+        + _summary_row(
+            sample="sample_a",
+            cluster_id=0,
+            seed="sample_a;S1",
+            cluster_sequence="ACGTACGTAA",
+            record_type="single",
+            n_reads=5,
+            length=10,
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        denovo_module,
+        "_run_vsearch_with_progress",
+        lambda cmd, *, message: captured.update({"cmd": cmd, "message": message}),
+    )
+
+    denovo_module.vsearch_cluster_across(
+        outdir=tmp_path,
+        summary_tsv=summary_tsv,
+        across_similarity=0.85,
+        query_cov=0.61,
+        threads=4,
+    )
+
+    cmd = captured["cmd"]
+    assert captured["message"] == "Across-sample clustering"
+    assert "--query_cov" in cmd
+    assert cmd[cmd.index("--query_cov") + 1] == "0.61"
 
 
 def test_select_denovo_samples_keeps_all_when_input_count_is_at_most_cap(
@@ -1581,6 +1720,109 @@ def test_mafft_align_one_reports_locus_details_on_timeout(
         )
 
 
+def test_mafft_align_one_normalizes_adjustdirection_header_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run_pipeline(*args, **kwargs):
+        return (
+            0,
+            b">seq_000001\nACGT-\n>_R_seq_000002\nACGTA\n",
+            b"",
+        )
+
+    monkeypatch.setattr(align_module, "run_pipeline", fake_run_pipeline)
+
+    aligned = align_module.mafft_align_one(
+        [("left", "ACGT"), ("right", "TACGT")],
+        mafft_binary="mafft",
+        threads=1,
+        locus_id=5,
+    )
+
+    assert aligned == [("left", "ACGT-"), ("right", "ACGTA")]
+
+
+def test_mafft_align_one_raises_on_missing_or_unexpected_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run_pipeline(*args, **kwargs):
+        return (
+            0,
+            b">seq_000001\nACGT-\n>seq_999999\nACGTA\n",
+            b"",
+        )
+
+    monkeypatch.setattr(align_module, "run_pipeline", fake_run_pipeline)
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"mafft returned unexpected sequence header for locus_9: seq_999999",
+    ):
+        align_module.mafft_align_one(
+            [("left", "ACGT"), ("right", "TACGT")],
+            mafft_binary="mafft",
+            threads=1,
+            locus_id=9,
+        )
+
+
+def test_worker_build_consensus_mixed_spaced_locus_handles_adjustdirection_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run_pipeline(*args, **kwargs):
+        return (
+            0,
+            b">seq_000001\nAAA---TTT\n>_R_seq_000002\nAAATTT---\n",
+            b"",
+        )
+
+    monkeypatch.setattr(align_module, "run_pipeline", fake_run_pipeline)
+
+    locus_id, locus_name, consensus, uses_output_spacer = (
+        align_module.worker_build_consensus(
+            locus_id=11,
+            locus_name="locus_11_1",
+            record=[
+                align_module.LocusMember(
+                    locus_id=11,
+                    locus_name="locus_11_1",
+                    contract_group="contract_11_1",
+                    core="joined_core",
+                    sample="s1",
+                    record_type="joined",
+                    cluster_sequence="AAATTT",
+                    left_arm="AAA",
+                    right_arm="TTT",
+                    reconcile_mode="mixed",
+                    output_form="spaced",
+                ),
+                align_module.LocusMember(
+                    locus_id=11,
+                    locus_name="locus_11_1",
+                    contract_group="contract_11_2",
+                    core="merged_core",
+                    sample="s2",
+                    record_type="merged",
+                    cluster_sequence="AAATTT",
+                    left_arm="AAATTT",
+                    right_arm="",
+                    reconcile_mode="mixed",
+                    output_form="spaced",
+                ),
+            ],
+            mafft_binary="mafft",
+            min_prop=0.5,
+            threads=1,
+            alignment_mode="mafft",
+        )
+    )
+
+    assert locus_id == 11
+    assert locus_name == "locus_11_1"
+    assert consensus == f"AAA{'N' * 50}TTT"
+    assert uses_output_spacer is True
+
+
 def test_write_ordered_consensus_stream_to_file_no_alignment_uses_longest_stripped_sequence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1925,6 +2167,7 @@ def test_run_denovo_no_alignment_passes_alignment_mode_none(
         outdir=outdir,
         within_similarity=0.95,
         across_similarity=0.85,
+        query_cov=0.75,
         min_derep_size=2,
         min_length=35,
         min_merge_overlap=20,
@@ -1946,6 +2189,9 @@ def test_run_denovo_no_alignment_passes_alignment_mode_none(
     assert calls["consensus"]["cores"] == 6
     stats_text = (outdir / "denovo.stats.txt").read_text(encoding="utf-8")
     assert _report_has_value_line(stats_text, "Alignment mode", "none")
+    assert _report_has_value_line(
+        stats_text, "Minimum VSEARCH query coverage", "0.750000"
+    )
     assert _report_has_value_line(stats_text, "MAFFT worker processes", "0")
     assert (outdir / "denovo.sample_graph_summary.tsv").exists()
 
@@ -1980,6 +2226,7 @@ def test_write_denovo_stats_formats_assemble_style_sections(
         paired=False,
         within_similarity=0.95,
         across_similarity=0.85,
+        query_cov=0.75,
         min_derep_size=5,
         min_length=35,
         min_merge_overlap=20,
@@ -2095,6 +2342,7 @@ def test_write_denovo_stats_formats_assemble_style_sections(
     assert re.search(r"^1\s+2\s+0\.666667\s*$", text, re.MULTILINE)
     assert re.search(r"^2\s+1\s+0\.333333\s*$", text, re.MULTILINE)
     assert _report_has_value_line(text, "Selected samples", "2")
+    assert _report_has_value_line(text, "Minimum VSEARCH query coverage", "0.750000")
     assert _report_has_value_line(
         text, "Sample graph summary", str(outdir / "denovo.sample_graph_summary.tsv")
     )

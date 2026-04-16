@@ -263,6 +263,7 @@ def run_subcommand(args, _exit=True):
             outdir=args.out,
             within_similarity=args.within_similarity,
             across_similarity=args.across_similarity,
+            query_cov=args.query_cov,
             min_derep_size=args.min_derep_size,
             min_length=args.min_length,
             min_merge_overlap=args.min_merge_overlap,

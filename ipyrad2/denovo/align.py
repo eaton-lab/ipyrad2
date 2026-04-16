@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import csv
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
@@ -172,6 +172,18 @@ def _record_length_summary(record: LegacyRecord) -> tuple[int, int, int]:
     return len(lengths), min(lengths), max(lengths)
 
 
+def _mafft_surrogate_name(idx: int) -> str:
+    """Return one stable synthetic FASTA header for MAFFT input."""
+    return f"seq_{idx:06d}"
+
+
+def _normalize_mafft_header_name(name: str) -> str:
+    """Normalize one MAFFT output header to its submitted surrogate token."""
+    if name.startswith("_R_"):
+        return name[3:]
+    return name
+
+
 def mafft_align_one(
     record: LegacyRecord,
     mafft_binary: str,
@@ -183,6 +195,14 @@ def mafft_align_one(
     """Run MAFFT on one record via stdin and return aligned sequences."""
     if not record:
         raise RuntimeError("record is empty.")
+    surrogate_to_name = {
+        _mafft_surrogate_name(idx): name
+        for idx, (name, _seq) in enumerate(record, start=1)
+    }
+    surrogate_record = [
+        (surrogate, seq)
+        for surrogate, (_name, seq) in zip(surrogate_to_name, record, strict=True)
+    ]
     argv = [
         mafft_binary,
         "--quiet",
@@ -196,7 +216,7 @@ def mafft_align_one(
         rc, out, err = run_pipeline(
             [argv],
             outfile=None,
-            stdin_text=fasta_text(record),
+            stdin_text=fasta_text(surrogate_record),
             timeout_s=timeout_s,
         )
     except PipelineTimeoutError as exc:
@@ -212,6 +232,7 @@ def mafft_align_one(
         )
 
     aligned: list[tuple[str, str]] = []
+    returned_surrogates: list[str] = []
     name, buf = None, []
     for line in out.decode("utf-8", "replace").splitlines():
         if line.startswith(">"):
@@ -222,7 +243,40 @@ def mafft_align_one(
         buf.append(line.strip())
     if name is not None:
         aligned.append((name, "".join(buf)))
-    return aligned
+
+    normalized_aligned: list[tuple[str, str]] = []
+    for raw_name, aligned_seq in aligned:
+        surrogate = _normalize_mafft_header_name(raw_name)
+        returned_surrogates.append(surrogate)
+        original_name = surrogate_to_name.get(surrogate)
+        if original_name is None:
+            locus_label = f" for locus_{locus_id}" if locus_id is not None else ""
+            raise RuntimeError(
+                f"mafft returned unexpected sequence header{locus_label}: {raw_name}"
+            )
+        normalized_aligned.append((original_name, aligned_seq))
+
+    missing = sorted(set(surrogate_to_name).difference(returned_surrogates))
+    unexpected = sorted(set(returned_surrogates).difference(surrogate_to_name))
+    duplicate = sorted(
+        surrogate
+        for surrogate, count in Counter(returned_surrogates).items()
+        if count > 1
+    )
+    if missing or unexpected or duplicate:
+        locus_label = f" for locus_{locus_id}" if locus_id is not None else ""
+        details: list[str] = []
+        if missing:
+            details.append(f"missing={','.join(missing)}")
+        if unexpected:
+            details.append(f"unexpected={','.join(unexpected)}")
+        if duplicate:
+            details.append(f"duplicate={','.join(duplicate)}")
+        raise RuntimeError(
+            f"mafft returned inconsistent sequence headers{locus_label}: "
+            + "; ".join(details)
+        )
+    return normalized_aligned
 
 
 def _validate_alignment_mode(alignment_mode: str) -> str:
