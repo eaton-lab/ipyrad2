@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from ipyrad2.cli.cli_denovo import validate_denovo_args
 from ipyrad2.cli.cli_main import setup_parsers
 
 
@@ -17,6 +18,14 @@ def _get_denovo_parser() -> argparse.ArgumentParser:
 
 def test_denovo_help_uses_grouped_layout_and_updated_examples() -> None:
     help_text = _get_denovo_parser().format_help()
+    clustering_section = help_text.split("Clustering and consensus:", 1)[1].split(
+        "Sample naming and library type:",
+        1,
+    )[0]
+    naming_section = help_text.split("Sample naming and library type:", 1)[1].split(
+        "Runtime:",
+        1,
+    )[0]
 
     assert "ipyrad2 denovo: construct a reference locus library" in help_text
     assert "Core inputs:" in help_text
@@ -31,9 +40,12 @@ def test_denovo_help_uses_grouped_layout_and_updated_examples() -> None:
     assert "--keep-intermediates" in help_text
     assert "--imap" in help_text
     assert "--use-all-samples" in help_text
+    assert "--query-cov" in help_text
     assert "--no-alignment" in help_text
-    assert "glob<TAB>group" in help_text
-    assert "all matched samples are retained" in help_text
+    assert "--allow-reverse-complement" in clustering_section
+    assert "--allow-reverse-complement" not in naming_section
+    assert "selecting denovo samples by `sample<TAB>group` or `glob<TAB>group`" in help_text
+    assert "Minimum VSEARCH query coverage; lower for variable read lengths." in help_text
     assert "ipyrad denovo" not in help_text
 
 
@@ -45,6 +57,7 @@ def test_denovo_parser_defaults_are_updated() -> None:
     assert args.out == Path("output-denovo")
     assert args.within_similarity == 0.95
     assert args.across_similarity == 0.85
+    assert args.query_cov == 0.75
     assert args.min_derep_size == 5
     assert args.min_length == 35
     assert args.min_merge_overlap == 20
@@ -67,3 +80,16 @@ def test_denovo_parser_rejects_removed_graph_splitter_flag() -> None:
         setup_parsers().parse_args(
             ["denovo", "-d", "a.fastq.gz", "--graph-splitter", "constrained"]
         )
+
+
+@pytest.mark.parametrize("value", ["0", "1.1"])
+def test_denovo_parser_rejects_out_of_range_query_cov(value: str) -> None:
+    parser = setup_parsers()
+    args = parser.parse_args(["denovo", "-d", "a.fastq.gz", "--query-cov", value])
+    subparsers = next(
+        action for action in parser._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+
+    with pytest.raises(SystemExit):
+        validate_denovo_args(args, subparsers.choices["denovo"])

@@ -50,6 +50,7 @@ BIN_MAFFT = str(BIN / "mafft")
 def _validate_runtime_args(
     within_similarity: float,
     across_similarity: float,
+    query_cov: float,
     min_derep_size: int,
     min_length: int,
     min_merge_overlap: int,
@@ -63,6 +64,8 @@ def _validate_runtime_args(
         raise IPyradError("within_similarity must be > 0 and <= 1")
     if not 0 < across_similarity <= 1:
         raise IPyradError("across_similarity must be > 0 and <= 1")
+    if not 0 < query_cov <= 1:
+        raise IPyradError("query_cov must be > 0 and <= 1")
     if min_derep_size < 1:
         raise IPyradError("min_derep_size must be >= 1")
     if min_length < 1:
@@ -935,6 +938,7 @@ def _human_denovo_report_label(key: str) -> str:
         "paired_mode": "Read layout",
         "within_similarity": "Within-sample similarity",
         "across_similarity": "Across-sample similarity",
+        "query_cov": "Minimum VSEARCH query coverage",
         "min_derep_size": "Minimum dereplication size",
         "min_length": "Minimum read length",
         "min_merge_overlap": "Minimum merge overlap",
@@ -1011,6 +1015,7 @@ def _write_denovo_stats(
     paired: bool,
     within_similarity: float,
     across_similarity: float,
+    query_cov: float,
     min_derep_size: int,
     min_length: int,
     min_merge_overlap: int,
@@ -1044,6 +1049,7 @@ def _write_denovo_stats(
     clustering_rows = [
         ("within_similarity", _format_report_fraction(within_similarity)),
         ("across_similarity", _format_report_fraction(across_similarity)),
+        ("query_cov", _format_report_fraction(query_cov)),
         ("min_derep_size", _format_report_count(min_derep_size)),
         ("min_length", _format_report_count(min_length)),
         ("min_merge_overlap", _format_report_count(min_merge_overlap)),
@@ -1297,6 +1303,7 @@ def vsearch_pairs(
     max_merge_diffs: int,
     allow_reverse_complement: bool,
     within_similarity: float,
+    query_cov: float,
     threads: int,
     keep_intermediates: bool,
     paired: bool = False,
@@ -1394,7 +1401,7 @@ def vsearch_pairs(
         "--strand", "both" if allow_reverse_complement else "plus",
         "--maxaccepts", "1",
         "--maxrejects", "0",
-        "--query_cov", "0.75",
+        "--query_cov", str(query_cov),
         "--fasta_width", "0",
         "--qmask", "none",
         "--consout", str(consensus),
@@ -1436,6 +1443,7 @@ def vsearch_cluster_across(
     outdir: Path,
     summary_tsv: Path,
     across_similarity: float,
+    query_cov: float,
     threads: int,
 ) -> None:
     """Cluster all sample-level consensus sequences across samples."""
@@ -1456,7 +1464,7 @@ def vsearch_cluster_across(
         "--userfields", "query+target+id+qstrand+qcov+ql+tl",
         "--maxaccepts", "0",
         "--maxrejects", "0",
-        "--query_cov", "0.75",
+        "--query_cov", str(query_cov),
         "--self",
         "--qmask", "none",
         "--notmatched", "/dev/null",
@@ -1471,6 +1479,7 @@ def run_denovo(
     outdir: Path,
     within_similarity: float,
     across_similarity: float,
+    query_cov: float,
     min_derep_size: int,
     min_length: int,
     min_merge_overlap: int,
@@ -1492,6 +1501,7 @@ def run_denovo(
     _validate_runtime_args(
         within_similarity=within_similarity,
         across_similarity=across_similarity,
+        query_cov=query_cov,
         min_derep_size=min_derep_size,
         min_length=min_length,
         min_merge_overlap=min_merge_overlap,
@@ -1543,6 +1553,7 @@ def run_denovo(
             max_merge_diffs=max_merge_diffs,
             allow_reverse_complement=allow_reverse_complement,
             within_similarity=within_similarity,
+            query_cov=query_cov,
             threads=threads,
             keep_intermediates=keep_intermediates,
             paired=is_paired,
@@ -1566,6 +1577,7 @@ def run_denovo(
         outdir=workdir,
         summary_tsv=workdir / "concat.summary.tsv",
         across_similarity=across_similarity,
+        query_cov=query_cov,
         threads=cores,
     )
 
@@ -1617,6 +1629,7 @@ def run_denovo(
         paired=is_paired,
         within_similarity=within_similarity,
         across_similarity=across_similarity,
+        query_cov=query_cov,
         min_derep_size=min_derep_size,
         min_length=min_length,
         min_merge_overlap=min_merge_overlap,

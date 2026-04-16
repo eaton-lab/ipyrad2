@@ -41,6 +41,11 @@ def validate_denovo_args(args: Namespace, parser: ArgumentParser) -> None:
         not 0 < args.across_similarity <= 1,
         "--across-similarity must be > 0 and <= 1",
     )
+    _parser_error_if(
+        parser,
+        not 0 < args.query_cov <= 1,
+        "--query-cov must be > 0 and <= 1",
+    )
     _parser_error_if(parser, args.min_derep_size < 1, "--min-derep-size must be >= 1")
     _parser_error_if(parser, args.min_length < 1, "--min-length must be >= 1")
     _parser_error_if(parser, args.min_merge_overlap < 1, "--min-merge-overlap must be >= 1")
@@ -85,10 +90,7 @@ def _setup_denovo_subparser(subparsers: argparse._SubParsersAction, header: str 
 
     selection.add_argument(
         "--imap", metavar="Path", type=Path,
-        help=(
-            "Optional IMAP file with `sample<TAB>group` or `glob<TAB>group` lines; "
-            "all matched samples are retained for denovo pseudoreference construction."
-        ),
+        help="Optional IMAP file selecting denovo samples by `sample<TAB>group` or `glob<TAB>group`.",
     )
     selection.add_argument(
         "--use-all-samples", action="store_true",
@@ -120,14 +122,18 @@ def _setup_denovo_subparser(subparsers: argparse._SubParsersAction, header: str 
         help="Maximum mismatches allowed in the merged region. [default=%(default)s]",
     )
     clustering.add_argument(
+        "--query-cov", metavar="float", type=float, default=0.75,
+        help="Minimum VSEARCH query coverage; lower for variable read lengths. [default=%(default)s]",
+    )
+    clustering.add_argument(
+        "-b", "--allow-reverse-complement", action="store_true",
+        help="Cluster both strands rather than plus strand only.",
+    )
+    clustering.add_argument(
         "--no-alignment", action="store_true",
         help="Skip MAFFT in the final locus step and use the longest stripped sequence per locus.",
     )
 
-    naming.add_argument(
-        "-b", "--allow-reverse-complement", action="store_true",
-        help="Cluster both strands rather than plus strand only.",
-    )
     naming.add_argument(
         "-dx", "--delim-str", metavar="str", type=str, default=None,
         help="Delimiter substring used to parse sample names from filenames.",
