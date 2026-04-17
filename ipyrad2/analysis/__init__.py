@@ -2,11 +2,6 @@
 
 from importlib import import_module
 
-from .converters.vcf_to_hdf5 import VCFToHDF5, run_vcf_to_hdf5
-from .extracters.locus_extracter import LocusExtracter, run_locus_extracter
-from .extracters.snps_extracter import SNPsExtracter, run_snps_extracter
-from .extracters.window_extracter import WindowExtracter, run_window_extracter
-
 __all__ = [
     "Bpp",
     "LocusExtracter",
@@ -32,6 +27,14 @@ __all__ = [
 
 
 _LAZY_EXPORTS = {
+    "VCFToHDF5": (".converters.vcf_to_hdf5", "VCFToHDF5"),
+    "run_vcf_to_hdf5": (".converters.vcf_to_hdf5", "run_vcf_to_hdf5"),
+    "LocusExtracter": (".extracters.locus_extracter", "LocusExtracter"),
+    "run_locus_extracter": (".extracters.locus_extracter", "run_locus_extracter"),
+    "SNPsExtracter": (".extracters.snps_extracter", "SNPsExtracter"),
+    "run_snps_extracter": (".extracters.snps_extracter", "run_snps_extracter"),
+    "WindowExtracter": (".extracters.window_extracter", "WindowExtracter"),
+    "run_window_extracter": (".extracters.window_extracter", "run_window_extracter"),
     "SNPsImputer": (".methods.snps_imputer", "SNPsImputer"),
     "Bpp": (".methods.bpp", "Bpp"),
     "run_admixture_method": (".methods.admixture", "run_admixture_method"),

@@ -2,31 +2,17 @@
 
 """Top-level CLI parser and subcommand dispatcher."""
 
-import sys
 import argparse
+import importlib
+import sys
+from typing import Optional, Sequence, Tuple
+
+from loguru import logger
+
 from .common import RAW_HELP_FORMATTER
 from .command_log import format_logged_command
-from .cli_demux import _setup_demux_subparser, validate_demux_args
-from .cli_trim import _setup_trim_subparser, validate_trim_args
-from .cli_denovo import _setup_denovo_subparser, validate_denovo_args
-from .cli_map import _setup_map_subparser
-from .cli_assemble import _setup_assemble_subparser
-from .cli_analysis import (
-    ANALYSIS_TOOL_NAMES,
-    RESERVED_TOOL_NAMES,
-    _setup_analysis_tool_subparsers,
-    run_analysis_tool,
-)
-
-import importlib
-# from ..demuxer import run_demuxer
-# from ..trimmer import run_trimmer
-# from ..denovo import run_denovo
-# from ..mapper import run_mapper
-# from ..assembler import run_assembler
 from ..utils.logger import set_log_level
 from ..utils.exceptions import IPyradError
-from loguru import logger
 from ipyrad2 import __version__ as VERSION
 
 HEADER = f"""
@@ -91,6 +77,59 @@ $ ipyrad2 pca -d OUT/HDF5 -i IMAP -g MINMAP -I sample --plot
 """
 
 
+_CORE_SUBCOMMAND_SPECS = {
+    "demux": {
+        "module": ".cli_demux",
+        "setup": "_setup_demux_subparser",
+        "validator": "validate_demux_args",
+        "header": "ipyrad2 demux: demultiplex pooled reads to sample files by barcode or index",
+    },
+    "trim": {
+        "module": ".cli_trim",
+        "setup": "_setup_trim_subparser",
+        "validator": "validate_trim_args",
+        "header": "ipyrad2 trim: trim reads for quality, adapters, and cutsite motifs",
+    },
+    "denovo": {
+        "module": ".cli_denovo",
+        "setup": "_setup_denovo_subparser",
+        "validator": "validate_denovo_args",
+        "header": "ipyrad2 denovo: construct a reference locus library",
+    },
+    "map": {
+        "module": ".cli_map",
+        "setup": "_setup_map_subparser",
+        "validator": None,
+        "header": "ipyrad2 map: map reads and write coordinate-sorted BAM files",
+    },
+    "assemble": {
+        "module": ".cli_assemble",
+        "setup": "_setup_assemble_subparser",
+        "validator": None,
+        "header": "ipyrad2 assemble: delimit loci, call variants, and write outputs",
+    },
+}
+
+_CORE_TOOL_NAMES = tuple(_CORE_SUBCOMMAND_SPECS)
+ANALYSIS_TOOL_NAMES = (
+    "wex",
+    "lex",
+    "snpex",
+    "vcf2hdf5",
+    "pca",
+    "snmf",
+    "dapc",
+    "admixture",
+    "popgen",
+    "bpp",
+)
+RESERVED_TOOL_NAMES = (
+    "baba",
+    "treeslider",
+)
+ALL_TOP_LEVEL_COMMANDS = _CORE_TOOL_NAMES + ANALYSIS_TOOL_NAMES + RESERVED_TOOL_NAMES
+
+
 class TopLevelParser(argparse.ArgumentParser):
     """Root parser with grouped top-level help text."""
 
@@ -100,6 +139,18 @@ class TopLevelParser(argparse.ArgumentParser):
 
 def setup_parsers() -> argparse.ArgumentParser:
     """Setup and return an ArgumentParser w/ subcommands."""
+    return _setup_parsers()
+
+
+def _load_cli_module(module_name: str):
+    """Import one CLI helper module lazily."""
+    return importlib.import_module(module_name, package=__package__)
+
+
+def _setup_parsers(
+    selected_subcommands: Optional[Sequence[str]] = None,
+) -> argparse.ArgumentParser:
+    """Setup and return an ArgumentParser with lazily imported subcommands."""
     parser = TopLevelParser(
         prog="ipyrad2",
         description=f"{HEADER}\n{DESCRIPTION}",
@@ -114,13 +165,23 @@ def setup_parsers() -> argparse.ArgumentParser:
         parser_class=argparse.ArgumentParser,
     )
 
-    # add subcommands: these messages are subcommand headers
-    _setup_demux_subparser(subparser, f"{HEADER}\nipyrad2 demux: demultiplex pooled reads to sample files by barcode or index")
-    _setup_trim_subparser(subparser, f"{HEADER}\nipyrad2 trim: trim reads for quality, adapters, and cutsite motifs")
-    _setup_denovo_subparser(subparser, f"{HEADER}\nipyrad2 denovo: construct a reference locus library")
-    _setup_map_subparser(subparser, f"{HEADER}\nipyrad2 map: map reads and write coordinate-sorted BAM files")
-    _setup_assemble_subparser(subparser, f"{HEADER}\nipyrad2 assemble: delimit loci, call variants, and write outputs")
-    _setup_analysis_tool_subparsers(subparser, HEADER)
+    selected = None if selected_subcommands is None else set(selected_subcommands)
+
+    for name in _CORE_TOOL_NAMES:
+        if selected is not None and name not in selected:
+            continue
+        spec = _CORE_SUBCOMMAND_SPECS[name]
+        module = _load_cli_module(spec["module"])
+        setup = getattr(module, spec["setup"])
+        setup(subparser, f"{HEADER}\n{spec['header']}")
+
+    if selected is None or selected.intersection(ANALYSIS_TOOL_NAMES + RESERVED_TOOL_NAMES):
+        analysis_module = _load_cli_module(".cli_analysis")
+        analysis_module._setup_analysis_tool_subparsers(
+            subparser,
+            HEADER,
+            selected_tools=None if selected is None else selected,
+        )
     return parser
 
 
@@ -141,30 +202,58 @@ def main():
         raise exc
 
 
-def command_line():
-    parser = setup_parsers()
-    args = parser.parse_args()
+def _get_subparsers_action(parser: argparse.ArgumentParser) -> argparse._SubParsersAction:
+    """Return the top-level subparsers action."""
+    return next(
+        action for action in parser._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
 
-    if args.subcommand == "demux":
-        subparsers = next(
-            action for action in parser._actions
-            if isinstance(action, argparse._SubParsersAction)
-        )
-        validate_demux_args(args, subparsers.choices["demux"])
 
-    if args.subcommand == "trim":
-        subparsers = next(
-            action for action in parser._actions
-            if isinstance(action, argparse._SubParsersAction)
-        )
-        validate_trim_args(args, subparsers.choices["trim"])
+def _validate_subcommand_args(args, parser: argparse.ArgumentParser) -> None:
+    """Run any subcommand-specific argparse validation hooks."""
+    if args.subcommand not in _CORE_SUBCOMMAND_SPECS:
+        return
+    validator_name = _CORE_SUBCOMMAND_SPECS[args.subcommand]["validator"]
+    if validator_name is None:
+        return
+    module = _load_cli_module(_CORE_SUBCOMMAND_SPECS[args.subcommand]["module"])
+    validator = getattr(module, validator_name)
+    subparsers = _get_subparsers_action(parser)
+    validator(args, subparsers.choices[args.subcommand])
 
-    if args.subcommand == "denovo":
-        subparsers = next(
-            action for action in parser._actions
-            if isinstance(action, argparse._SubParsersAction)
-        )
-        validate_denovo_args(args, subparsers.choices["denovo"])
+
+def _print_top_level_help() -> None:
+    """Print the curated top-level help text."""
+    print(TOP_LEVEL_HELP)
+
+
+def _is_top_level_help_argv(argv: Sequence[str]) -> bool:
+    """Return True when argv requests top-level help or no command."""
+    return not argv or argv[0] in {"-h", "--help"}
+
+
+def _help_only_selected_subcommands(argv: Sequence[str]) -> Optional[Tuple[str, ...]]:
+    """Return a single-command selection when argv only requests one help screen."""
+    if len(argv) < 2:
+        return None
+    if argv[0] not in ALL_TOP_LEVEL_COMMANDS:
+        return None
+    if not any(token in {"-h", "--help"} for token in argv[1:]):
+        return None
+    return (argv[0],)
+
+
+def command_line(argv: Optional[Sequence[str]] = None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+
+    if _is_top_level_help_argv(argv):
+        _print_top_level_help()
+        sys.exit(0)
+
+    parser = _setup_parsers(selected_subcommands=_help_only_selected_subcommands(argv))
+    args = parser.parse_args(argv)
+    _validate_subcommand_args(args, parser)
 
     # LOGGING: -----------------------------------------------------
     if hasattr(args, "log_level"):
@@ -362,11 +451,13 @@ def run_subcommand(args, _exit=True):
 
     # EXPORT / ANALYSIS: -----------------------------------------
     if args.subcommand in ANALYSIS_TOOL_NAMES:
-        run_analysis_tool(args, _exit=_exit)
+        analysis_module = _load_cli_module(".cli_analysis")
+        analysis_module.run_analysis_tool(args, _exit=_exit)
         return
 
     if args.subcommand in RESERVED_TOOL_NAMES:
-        run_analysis_tool(args, _exit=_exit)
+        analysis_module = _load_cli_module(".cli_analysis")
+        analysis_module.run_analysis_tool(args, _exit=_exit)
         return
 
 
