@@ -5,32 +5,14 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import sys
+from typing import Optional, Sequence
 
 from loguru import logger
 
 from .command_log import format_logged_command
 from .common import RAW_HELP_FORMATTER
-from .cli_wex import _setup_wex_subparser
-from .cli_lex import _setup_lex_subparser
-from .cli_snpex import _setup_snpex_subparser
-from .cli_vcf_to_hdf5 import _setup_vcf_to_hdf5_subparser
-from .cli_pca import _setup_pca_subparser
-from .cli_snmf import _setup_snmf_subparser
-from .cli_dapc import _setup_dapc_subparser
-from .cli_admixture import _setup_admixture_subparser
-from .cli_popgen import _setup_popgen_subparser
-from .cli_bpp import _setup_bpp_subparser
-from ..analysis.extracters.window_extracter import run_window_extracter
-from ..analysis.extracters.locus_extracter import run_locus_extracter
-from ..analysis.extracters.snps_extracter import run_snps_extracter
-from ..analysis.converters.vcf_to_hdf5 import run_vcf_to_hdf5
-from ..analysis.methods.pca import run_pca_method
-from ..analysis.methods.snmf import run_snmf_method
-from ..analysis.methods.dapc import run_dapc_method
-from ..analysis.methods.admixture import run_admixture_method
-from ..analysis.methods.popgen import run_popgen_method
-from ..analysis.methods.bpp import run_bpp_method
 from ..utils.exceptions import IPyradError
 from ipyrad2 import __version__ as VERSION
 
@@ -59,6 +41,53 @@ RESERVED_TOOL_NAMES = (
     "baba",
     "treeslider",
 )
+
+
+_PARSER_SPECS = {
+    "wex": (".cli_wex", "_setup_wex_subparser", "ipyrad2 wex: extract one alignment from selected genomic windows"),
+    "lex": (".cli_lex", "_setup_lex_subparser", "ipyrad2 lex: extract delimited loci from HDF5 database"),
+    "snpex": (".cli_snpex", "_setup_snpex_subparser", "ipyrad2 snpex: extract filtered SNP matrices from HDF5 database"),
+    "vcf2hdf5": (".cli_vcf_to_hdf5", "_setup_vcf_to_hdf5_subparser", "ipyrad2 vcf2hdf5: convert VCF to SNP-capable HDF5 database"),
+    "pca": (".cli_pca", "_setup_pca_subparser", "ipyrad2 pca: run PCA, t-SNE, or UMAP on SNP HDF5 data"),
+    "snmf": (".cli_snmf", "_setup_snmf_subparser", "ipyrad2 snmf: run sNMF-style clustering on SNP HDF5 data"),
+    "dapc": (".cli_dapc", "_setup_dapc_subparser", "ipyrad2 dapc: run DAPC-style clustering on SNP HDF5 data"),
+    "admixture": (".cli_admixture", "_setup_admixture_subparser", "ipyrad2 admixture: run external ADMIXTURE on SNP HDF5 data"),
+    "popgen": (".cli_popgen", "_setup_popgen_subparser", "ipyrad2 popgen: compute genome-wide population-genetic statistics"),
+    "bpp": (".cli_bpp", "_setup_bpp_subparser", "ipyrad2 bpp: stage one BPP analysis from sequence HDF5 data"),
+}
+
+
+_RUNTIME_RUNNERS = {
+    "wex": ("..analysis.extracters.window_extracter", "run_window_extracter"),
+    "lex": ("..analysis.extracters.locus_extracter", "run_locus_extracter"),
+    "snpex": ("..analysis.extracters.snps_extracter", "run_snps_extracter"),
+    "vcf2hdf5": ("..analysis.converters.vcf_to_hdf5", "run_vcf_to_hdf5"),
+    "pca": ("..analysis.methods.pca", "run_pca_method"),
+    "snmf": ("..analysis.methods.snmf", "run_snmf_method"),
+    "dapc": ("..analysis.methods.dapc", "run_dapc_method"),
+    "admixture": ("..analysis.methods.admixture", "run_admixture_method"),
+    "popgen": ("..analysis.methods.popgen.runner", "run_popgen_method"),
+    "bpp": ("..analysis.methods.bpp", "run_bpp_method"),
+}
+
+
+def _load_runner(tool: str):
+    """Load one runtime analysis runner lazily on first use."""
+    module_name, attr_name = _RUNTIME_RUNNERS[tool]
+    module = importlib.import_module(module_name, package=__package__)
+    return getattr(module, attr_name)
+
+
+def _setup_tool_subparser(
+    subparsers: argparse._SubParsersAction,
+    tool: str,
+    header: str,
+) -> None:
+    """Load one parser module lazily and add its subparser."""
+    module_name, setup_name, description = _PARSER_SPECS[tool]
+    module = importlib.import_module(module_name, package=__package__)
+    setup = getattr(module, setup_name)
+    setup(subparsers, f"{header}\n{description}")
 
 
 def _setup_reserved_tool_subparser(
@@ -90,61 +119,50 @@ def _setup_reserved_tool_subparser(
 def _setup_analysis_tool_subparsers(
     subparsers: argparse._SubParsersAction,
     header: str = None,
+    selected_tools: Optional[Sequence[str]] = None,
 ) -> None:
     """Add top-level export and analysis subcommand parsers."""
     header = HEADER if header is None else header
-    _setup_wex_subparser(
-        subparsers,
-        f"{header}\nipyrad2 wex: extract one alignment from selected genomic windows",
+    selected = (
+        set(ANALYSIS_TOOL_NAMES + RESERVED_TOOL_NAMES)
+        if selected_tools is None
+        else set(selected_tools)
     )
-    _setup_lex_subparser(
-        subparsers,
-        f"{header}\nipyrad2 lex: extract delimited loci from HDF5 database",
-    )
-    _setup_snpex_subparser(
-        subparsers,
-        f"{header}\nipyrad2 snpex: extract filtered SNP matrices from HDF5 database",
-    )
-    _setup_vcf_to_hdf5_subparser(
-        subparsers,
-        f"{header}\nipyrad2 vcf2hdf5: convert VCF to SNP-capable HDF5 database",
-    )
-    _setup_pca_subparser(
-        subparsers,
-        f"{header}\nipyrad2 pca: run PCA, t-SNE, or UMAP on SNP HDF5 data",
-    )
-    _setup_snmf_subparser(
-        subparsers,
-        f"{header}\nipyrad2 snmf: run sNMF-style clustering on SNP HDF5 data",
-    )
-    _setup_dapc_subparser(
-        subparsers,
-        f"{header}\nipyrad2 dapc: run DAPC-style clustering on SNP HDF5 data",
-    )
-    _setup_admixture_subparser(
-        subparsers,
-        f"{header}\nipyrad2 admixture: run external ADMIXTURE on SNP HDF5 data",
-    )
-    _setup_popgen_subparser(
-        subparsers,
-        f"{header}\nipyrad2 popgen: compute genome-wide population-genetic statistics",
-    )
-    _setup_bpp_subparser(
-        subparsers,
-        f"{header}\nipyrad2 bpp: stage one BPP analysis from sequence HDF5 data",
-    )
-    _setup_reserved_tool_subparser(
-        subparsers,
-        name="baba",
-        help_text="Reserved ABBA/BABA admixture metrics command.",
-        header=f"{header}\nipyrad2 baba: reserved ABBA/BABA admixture metrics command",
-    )
-    _setup_reserved_tool_subparser(
-        subparsers,
-        name="treeslider",
-        help_text="Reserved per-locus or per-window gene-tree command.",
-        header=f"{header}\nipyrad2 treeslider: reserved per-locus or per-window gene-tree command",
-    )
+
+    if "wex" in selected:
+        _setup_tool_subparser(subparsers, "wex", header)
+    if "lex" in selected:
+        _setup_tool_subparser(subparsers, "lex", header)
+    if "snpex" in selected:
+        _setup_tool_subparser(subparsers, "snpex", header)
+    if "vcf2hdf5" in selected:
+        _setup_tool_subparser(subparsers, "vcf2hdf5", header)
+    if "pca" in selected:
+        _setup_tool_subparser(subparsers, "pca", header)
+    if "snmf" in selected:
+        _setup_tool_subparser(subparsers, "snmf", header)
+    if "dapc" in selected:
+        _setup_tool_subparser(subparsers, "dapc", header)
+    if "admixture" in selected:
+        _setup_tool_subparser(subparsers, "admixture", header)
+    if "popgen" in selected:
+        _setup_tool_subparser(subparsers, "popgen", header)
+    if "bpp" in selected:
+        _setup_tool_subparser(subparsers, "bpp", header)
+    if "baba" in selected:
+        _setup_reserved_tool_subparser(
+            subparsers,
+            name="baba",
+            help_text="Reserved ABBA/BABA admixture metrics command.",
+            header=f"{header}\nipyrad2 baba: reserved ABBA/BABA admixture metrics command",
+        )
+    if "treeslider" in selected:
+        _setup_reserved_tool_subparser(
+            subparsers,
+            name="treeslider",
+            help_text="Reserved per-locus or per-window gene-tree command.",
+            header=f"{header}\nipyrad2 treeslider: reserved per-locus or per-window gene-tree command",
+        )
 
 
 def _tool_name(args) -> str:
@@ -157,6 +175,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
     tool = _tool_name(args)
 
     if tool == "wex":
+        run_window_extracter = _load_runner(tool)
         logger.info("-------------------------------------------------------")
         logger.info("----- ipyrad2 wex: extract alignments from windows -----")
         logger.info("-------------------------------------------------------")
@@ -182,6 +201,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
         return
 
     if tool == "lex":
+        run_locus_extracter = _load_runner(tool)
         logger.info("-------------------------------------------------------")
         logger.info("---- ipyrad2 lex: extract delimited loci from HDF5 database ----")
         logger.info("-------------------------------------------------------")
@@ -209,6 +229,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
         return
 
     if tool == "snpex":
+        run_snps_extracter = _load_runner(tool)
         logger.info("------------------------------------------------------------")
         logger.info("---- ipyrad2 snpex: extract filtered SNP matrices ----")
         logger.info("------------------------------------------------------------")
@@ -242,6 +263,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
         return
 
     if tool == "vcf2hdf5":
+        run_vcf_to_hdf5 = _load_runner(tool)
         logger.info("--------------------------------------------------")
         logger.info("---- ipyrad2 vcf2hdf5: convert VCF to HDF5 ----")
         logger.info("--------------------------------------------------")
@@ -258,6 +280,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
         return
 
     if tool == "pca":
+        run_pca_method = _load_runner(tool)
         logger.info("-------------------------------------------------")
         logger.info("---- ipyrad2 pca: numerical PCA-family methods ----")
         logger.info("-------------------------------------------------")
@@ -294,6 +317,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
         return
 
     if tool == "snmf":
+        run_snmf_method = _load_runner(tool)
         logger.info("-------------------------------------------------------")
         logger.info("---- ipyrad2 snmf: numerical clustering on SNPs ----")
         logger.info("-------------------------------------------------------")
@@ -329,6 +353,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
         return
 
     if tool == "dapc":
+        run_dapc_method = _load_runner(tool)
         logger.info("-------------------------------------------------------")
         logger.info("---- ipyrad2 dapc: numerical clustering on SNPs ----")
         logger.info("-------------------------------------------------------")
@@ -359,6 +384,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
         return
 
     if tool == "admixture":
+        run_admixture_method = _load_runner(tool)
         logger.info("-----------------------------------------------------------")
         logger.info("---- ipyrad2 admixture: external clustering on SNPs ----")
         logger.info("-----------------------------------------------------------")
@@ -390,6 +416,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
         return
 
     if tool == "popgen":
+        run_popgen_method = _load_runner(tool)
         logger.info("-------------------------------------------------------")
         logger.info("---- ipyrad2 popgen: genome-wide population genetics ----")
         logger.info("-------------------------------------------------------")
@@ -421,6 +448,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
         return
 
     if tool == "bpp":
+        run_bpp_method = _load_runner(tool)
         logger.info("-------------------------------------------------------")
         logger.info("---- ipyrad2 bpp: single-run BPP staging and execution ----")
         logger.info("-------------------------------------------------------")

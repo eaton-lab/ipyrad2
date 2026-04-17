@@ -261,15 +261,11 @@ def get_coverage_bed_graphs(
             bedgraph_cmds.append([
                 BIN_SAM,
                 "collate",
-                "-@",
-                str(min(threads, 4)),  # doesn't benefit from >4
-                "-T",
-                str(coll_dir / f"{sname}"),
-                "-r",
-                "1000000",
+                "-@", str(min(threads, 4)),  # doesn't benefit from >4
+                "-T", str(coll_dir / f"{sname}"),
+                "-r", "1000000",
                 "-u",
-                "-O",
-                str(bam_file),
+                "-O", str(bam_file),
             ])
             # compute bedpe table for each pair record (skipping pairs if one
             # was filtered out), e.g.,
