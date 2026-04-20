@@ -109,6 +109,7 @@ That report includes:
 
 - raw file statistics
 - sample demux statistics
+- suspected missing barcode statistics for frequent unassigned barcode-like observations
 - barcode detection statistics
 - restriction motif inference details for inline demux
 - barcode-boundary ambiguity and collision details when relevant
@@ -140,6 +141,8 @@ If inferred cutsite motifs do not match the library design, inline demux can fai
 ### Zero-read samples
 
 ipyrad2 warns when a listed sample receives zero reads. That usually means the sample truly failed, the barcode table is wrong, or the demux mode does not match the run structure.
+
+The demux stats report can also list suspected missing barcodes. These are frequent unassigned barcode-like observations supported by the expected index or cutsite structure. When one appears at high frequency, compare it to the barcode table; it often indicates a missing sample row, a typo, or an index/barcode assignment error.
 
 ## Examples
 

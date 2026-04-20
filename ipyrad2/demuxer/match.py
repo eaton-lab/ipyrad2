@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Sequence, Tuple
+import heapq
 import io
 from pathlib import Path
 import gzip
@@ -25,6 +26,10 @@ DEFAULT_PIPELINE_BATCH_BYTES = 64 * 1024 * 1024
 DEFAULT_WRITER_FLUSH_BYTES = 1 * 1024 * 1024
 DEFAULT_PROGRESS_REPORT_READS = 10_000
 DEFAULT_QUEUE_PUT_TIMEOUT = 0.25
+DEFAULT_SUSPECTED_BARCODE_CAPACITY = 4096
+
+SuspectedBarcodeKey = Tuple[str, bytes]
+SuspectedBarcodeSummary = Dict[SuspectedBarcodeKey, Tuple[int, int]]
 
 
 @dataclass(frozen=True)
@@ -54,6 +59,7 @@ class DemuxRunConfig:
     batch_bytes: int = DEFAULT_PIPELINE_BATCH_BYTES
     writer_flush_bytes: int = DEFAULT_WRITER_FLUSH_BYTES
     queue_put_timeout: float = DEFAULT_QUEUE_PUT_TIMEOUT
+    suspected_barcode_capacity: int = DEFAULT_SUSPECTED_BARCODE_CAPACITY
 
 
 @dataclass(frozen=True)
@@ -64,6 +70,73 @@ class BarcodeBoundaryCandidate:
     slack: int
     trim_start: int
     mismatch_distance: int = 0
+
+
+@dataclass
+class BoundedBarcodeCounter:
+    """Bounded Space-Saving counter for frequent suspected barcodes."""
+
+    capacity: int = DEFAULT_SUSPECTED_BARCODE_CAPACITY
+    _counts: Dict[SuspectedBarcodeKey, Tuple[int, int]] = field(default_factory=dict)
+    _heap: List[Tuple[int, int, SuspectedBarcodeKey]] = field(default_factory=list)
+    _serial: int = 0
+
+    def add(self, key: SuspectedBarcodeKey) -> None:
+        """Observe one key while keeping at most ``capacity`` counters."""
+        if self.capacity <= 0:
+            return
+        current = self._counts.get(key)
+        if current is not None:
+            count, error = current
+            self._set(key, count + 1, error)
+            return
+        if len(self._counts) < self.capacity:
+            self._set(key, 1, 0)
+            return
+
+        min_key, min_count, _min_error = self._pop_min()
+        del self._counts[min_key]
+        self._set(key, min_count + 1, min_count)
+
+    def summary(self) -> SuspectedBarcodeSummary:
+        """Return serializable estimated counts and maximum errors."""
+        return {
+            key: value
+            for key, value in sorted(
+                self._counts.items(),
+                key=lambda item: (item[0][0], item[0][1]),
+            )
+        }
+
+    def _set(self, key: SuspectedBarcodeKey, count: int, error: int) -> None:
+        """Store one counter value and refresh its lazy heap entry."""
+        self._counts[key] = (count, error)
+        self._serial += 1
+        heapq.heappush(self._heap, (count, self._serial, key))
+        if len(self._heap) > max(self.capacity * 4, self.capacity + 128):
+            self._rebuild_heap()
+
+    def _pop_min(self) -> Tuple[SuspectedBarcodeKey, int, int]:
+        """Pop the current minimum counter, skipping stale heap entries."""
+        while True:
+            if not self._heap:
+                self._rebuild_heap()
+            count, _serial, key = heapq.heappop(self._heap)
+            current = self._counts.get(key)
+            if current is None:
+                continue
+            current_count, current_error = current
+            if current_count == count:
+                return key, current_count, current_error
+
+    def _rebuild_heap(self) -> None:
+        """Discard stale heap entries."""
+        self._heap = []
+        for key, (count, _error) in self._counts.items():
+            self._serial += 1
+            self._heap.append((count, self._serial, key))
+        heapq.heapify(self._heap)
+
 
 @dataclass
 class BarMatching:
@@ -119,6 +192,8 @@ class BarMatching:
     """: Minimum raw-read interval between progress callback updates."""
     barcode_boundary_slack: int = 1
     """: Maximum 5-prime barcode-boundary offset allowed for inline barcode matching."""
+    suspected_barcode_capacity: int = DEFAULT_SUSPECTED_BARCODE_CAPACITY
+    """: Maximum suspected-barcode counters retained per matcher."""
 
     # stats counters
     barcode_misses: Dict[str, int] = field(default_factory=dict)
@@ -129,6 +204,8 @@ class BarMatching:
     """: Dict to record number of hits per sample."""
     barcode_boundary_ambiguities: Dict[bytes, int] = field(default_factory=dict)
     """: Dict to record ambiguous barcode-boundary candidate sets."""
+    suspected_barcodes: BoundedBarcodeCounter = field(init=False)
+    """: Bounded counter of frequent unassigned putative barcode observations."""
     reads_seen: int = 0
     """: Absolute raw reads examined."""
     matched_seen: int = 0
@@ -137,6 +214,7 @@ class BarMatching:
     """: Last raw-read count reported to progress_callback."""
 
     def __post_init__(self):
+        self.suspected_barcodes = BoundedBarcodeCounter(self.suspected_barcode_capacity)
         self._format_check()
 
     def _ensure_runtime_barcode_maps(self) -> None:
@@ -195,6 +273,33 @@ class BarMatching:
             self.progress_callback(self.reads_seen, self.matched_seen)
             self._last_progress_reads = self.reads_seen
 
+    def _record_suspected_barcode(self, read_end: str, barcode: bytes) -> None:
+        """Record one suspected missing barcode/index observation."""
+        self.suspected_barcodes.add((read_end, barcode))
+
+    def _record_suspected_inline_barcodes(
+        self,
+        read_end: str,
+        read: bytes,
+        barcode_lengths: Iterable[int],
+        cutters: Sequence[bytes],
+        known_barcodes: Dict[bytes, Tuple[str, ...]],
+        maxlen: int,
+    ) -> None:
+        """Record cutsite-supported barcode prefixes absent from the expected set."""
+        observed = set()
+        for candidate in _match_boundary_candidates(
+            read[:maxlen],
+            barcode_lengths,
+            cutters,
+            barcode_candidates_by_length=None,
+            max_slack=self.barcode_boundary_slack,
+        ):
+            if candidate.barcode not in known_barcodes:
+                observed.add(candidate.barcode)
+        for barcode in observed:
+            self._record_suspected_barcode(read_end, barcode)
+
     def _iter_fastq_reads(
         self,
     ) -> Iterator[
@@ -236,6 +341,10 @@ class BarMatching:
     def _output_sample_name(self, sample_name: str) -> str:
         """Return the output sample name after optional replicate merging."""
         return final_output_sample_name(sample_name, self.merge_technical_replicates)
+
+    def suspected_barcode_summary(self) -> SuspectedBarcodeSummary:
+        """Return bounded suspected-barcode estimates for stats reporting."""
+        return self.suspected_barcodes.summary()
 
     def iter_output_records(self) -> Iterator[Tuple[str, bytes, bytes | None]]:
         """Yield matched FASTQ payloads ready for downstream writers."""
@@ -384,6 +493,7 @@ class BarMatchingI7(BarMatching):
                 yield read1, read2, match
             else:
                 self.barcode_misses[barcode] = self.barcode_misses.get(barcode, 0) + 1
+                self._record_suspected_barcode("i7", barcode)
 
 
 @dataclass
@@ -404,6 +514,7 @@ class BarMatchingSingleInline(BarMatching):
     """: Max len of the read1 inline barcodes."""
 
     def __post_init__(self):
+        self.suspected_barcodes = BoundedBarcodeCounter(self.suspected_barcode_capacity)
         self._ensure_runtime_barcode_maps()
         self.maxlen1 = _match_window_length(
             self.barcode1_candidates_by_length,
@@ -443,6 +554,14 @@ class BarMatchingSingleInline(BarMatching):
                 _record_boundary_ambiguity(self.barcode_boundary_ambiguities, sample_candidates)
                 continue
 
+            self._record_suspected_inline_barcodes(
+                "R1",
+                read1[1],
+                self.barcode_lengths1,
+                self.cuts1,
+                self.barcode1_to_samples,
+                self.maxlen1,
+            )
             _record_barcode_miss(self.barcode_misses, candidates)
 
 
@@ -476,6 +595,7 @@ class BarMatchingCombinatorialInline(BarMatching):
     """: Max len of the read2 inline barcodes + re."""
 
     def __post_init__(self):
+        self.suspected_barcodes = BoundedBarcodeCounter(self.suspected_barcode_capacity)
         self._ensure_runtime_barcode_maps()
         self.maxlen1 = _match_window_length(
             self.barcode1_candidates_by_length,
@@ -549,6 +669,22 @@ class BarMatchingCombinatorialInline(BarMatching):
                 )
                 continue
 
+            self._record_suspected_inline_barcodes(
+                "R1",
+                read1[1],
+                self.barcode_lengths1,
+                self.cuts1,
+                self.barcode1_to_samples,
+                self.maxlen1,
+            )
+            self._record_suspected_inline_barcodes(
+                "R2",
+                read2[1],
+                self.barcode_lengths2,
+                self.cuts2,
+                self.barcode2_to_samples,
+                self.maxlen2,
+            )
             _record_combined_barcode_miss(self.barcode_misses, candidates_r1, candidates_r2)
 
 
@@ -790,6 +926,7 @@ def build_matcher(
         max_reads=config.max_reads,
         workers=workers,
         barcode_boundary_slack=config.barcode_boundary_slack,
+        suspected_barcode_capacity=config.suspected_barcode_capacity,
     )
     if config.i7:
         return BarMatchingI7(**kwargs)
@@ -802,7 +939,13 @@ def run_serial_demux(
     fastq_tuple: Tuple[Path, Path | None],
     config: DemuxRunConfig,
     workers: int,
-) -> Tuple[Dict[bytes, int], Dict[bytes, int], Dict[str, int], Dict[bytes, int]]:
+) -> Tuple[
+    Dict[bytes, int],
+    Dict[bytes, int],
+    Dict[str, int],
+    Dict[bytes, int],
+    SuspectedBarcodeSummary,
+]:
     """Run one serial demux job through the shared matcher builder."""
     barmatcher = build_matcher(fastq_tuple, config, workers=workers)
     try:
@@ -815,4 +958,5 @@ def run_serial_demux(
         barmatcher.barcode_hits,
         barmatcher.sample_hits,
         barmatcher.barcode_boundary_ambiguities,
+        barmatcher.suspected_barcode_summary(),
     )

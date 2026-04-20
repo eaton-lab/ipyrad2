@@ -158,6 +158,24 @@ def test_put_with_timeout_raises_queued_worker_error() -> None:
         )
 
 
+def test_bounded_barcode_counter_retains_frequent_keys_with_bounded_state() -> None:
+    counter = match_module.BoundedBarcodeCounter(capacity=4)
+    for _ in range(100):
+        counter.add(("R1", b"AAAA"))
+    for _ in range(30):
+        counter.add(("R1", b"CCCC"))
+    for idx in range(100):
+        counter.add(("R1", f"{idx:04d}".encode()))
+
+    summary = counter.summary()
+
+    assert len(summary) <= 4
+    assert ("R1", b"AAAA") in summary
+    for estimate, error in summary.values():
+        assert estimate >= error
+    assert len(counter._heap) <= max(counter.capacity * 4, counter.capacity + 128)
+
+
 def test_bar_matching_progress_callback_reports_raw_and_matched_reads(tmp_path: Path) -> None:
     raw = _write_fastq(
         tmp_path / "lane.fastq.gz",
@@ -186,6 +204,28 @@ def test_bar_matching_progress_callback_reports_raw_and_matched_reads(tmp_path: 
 
     assert reports[0] == (1, 0)
     assert reports[-1] == (2, 2)
+
+
+def test_bar_matching_single_inline_records_suspected_unknown_barcode(tmp_path: Path) -> None:
+    raw = _write_fastq(tmp_path / "lane.fastq.gz", ["TTTTATCGGAAAA"])
+    matcher = BarMatchingSingleInline(
+        fastqs=(raw, None),
+        barcodes_to_names={b"ACGT": "sample1"},
+        barcode_lengths1=(4,),
+        barcode_lengths2=(),
+        cuts1=[b"ATCGG"],
+        cuts2=[],
+        merge_technical_replicates=False,
+        outdir=tmp_path / "out",
+        log_level="WARNING",
+        workers=1,
+        chunksize=10,
+        max_reads=10,
+    )
+
+    assert list(matcher.iter_output_records()) == []
+    assert matcher.barcode_misses == {b"XXX": 1}
+    assert matcher.suspected_barcode_summary() == {("R1", b"TTTT"): (1, 0)}
 
 
 def test_bar_matching_boundary_ambiguous_reads_are_not_output_by_default(tmp_path: Path) -> None:
@@ -1093,6 +1133,40 @@ def test_demux_stats_report_barcode_boundary_classes_for_auto_inference(tmp_path
     assert "not assigned or written to any sample output file" in stats_text
 
 
+def test_demux_stats_report_suspected_missing_inline_barcode(tmp_path: Path) -> None:
+    raw = _write_fastq(
+        tmp_path / "lane.fastq.gz",
+        ["TTTTATCGGAAAA"] * 60 + ["ACGTATCGGCCCC"],
+    )
+    barcodes = tmp_path / "barcodes.tsv"
+    barcodes.write_text("sample1 ACGT\nsample2 TGCA\n", encoding="utf-8")
+
+    tool = Demux(
+        fastqs=[raw],
+        barcodes=barcodes,
+        cutsite_1="ATCGG",
+        cutsite_2=None,
+        max_mismatch=0,
+        cores=1,
+        chunksize=10,
+        merge_technical_replicates=False,
+        outdir=tmp_path / "out",
+        i7=False,
+        disable_infer_cutsite_motifs=True,
+        max_reads=100,
+        max_reads_kmer=100,
+        log_level="WARNING",
+    )
+    tool.run()
+
+    stats_text = (tmp_path / "out" / "ipyrad_demux_stats_0.txt").read_text(encoding="utf-8")
+
+    assert "# Suspected missing barcode statistics" in stats_text
+    assert "bounded-memory estimated counts" in stats_text
+    assert "TTTT" in stats_text
+    assert "nearest_expected_mismatches" in stats_text
+
+
 def test_demux_pipeline_single_inline_writes_expected_outputs(tmp_path: Path) -> None:
     raw1 = _write_fastq(
         tmp_path / "lane1.fastq.gz",
@@ -1131,6 +1205,61 @@ def test_demux_pipeline_single_inline_writes_expected_outputs(tmp_path: Path) ->
     )
     assert tool._sample_stats["sample1"] == 3
     assert tool._sample_stats["sample2"] == 2
+
+
+def test_demux_accepted_mismatch_barcode_is_not_suspected(tmp_path: Path) -> None:
+    raw = _write_fastq(tmp_path / "lane.fastq.gz", ["AGGTATCGGAAAA"])
+    barcodes = tmp_path / "barcodes.tsv"
+    barcodes.write_text("sample1 ACGT\nsample2 TGCA\n", encoding="utf-8")
+
+    tool = Demux(
+        fastqs=[raw],
+        barcodes=barcodes,
+        cutsite_1="ATCGG",
+        cutsite_2=None,
+        max_mismatch=1,
+        cores=1,
+        chunksize=1,
+        merge_technical_replicates=False,
+        outdir=tmp_path / "out",
+        i7=False,
+        disable_infer_cutsite_motifs=True,
+        max_reads=100,
+        max_reads_kmer=100,
+        log_level="WARNING",
+    )
+    tool.run()
+
+    assert _read_fastq_sequences(tmp_path / "out" / "sample1_R1.fastq.gz") == ["ATCGGAAAA"]
+    assert report_module.aggregate_suspected_barcode_stats(tool._file_stats) == {}
+
+
+def test_demux_pipeline_aggregates_suspected_unknown_barcodes(tmp_path: Path) -> None:
+    raw1 = _write_fastq(tmp_path / "lane1.fastq.gz", ["TTTTATCGGAAAA"] * 30)
+    raw2 = _write_fastq(tmp_path / "lane2.fastq.gz", ["TTTTATCGGCCCC"] * 30)
+    barcodes = tmp_path / "barcodes.tsv"
+    barcodes.write_text("sample1 ACGT\nsample2 TGCA\n", encoding="utf-8")
+
+    tool = Demux(
+        fastqs=[raw1, raw2],
+        barcodes=barcodes,
+        cutsite_1="ATCGG",
+        cutsite_2=None,
+        max_mismatch=0,
+        cores=2,
+        chunksize=5,
+        merge_technical_replicates=False,
+        outdir=tmp_path / "out",
+        i7=False,
+        disable_infer_cutsite_motifs=True,
+        max_reads=100,
+        max_reads_kmer=100,
+        log_level="WARNING",
+    )
+    tool.run()
+
+    suspected = report_module.aggregate_suspected_barcode_stats(tool._file_stats)
+    assert suspected == {("R1", b"TTTT"): (60, 0)}
 
 
 def test_demux_pipeline_paired_end_writes_r1_and_r2_outputs(tmp_path: Path) -> None:
@@ -1172,6 +1301,37 @@ def test_demux_pipeline_paired_end_writes_r1_and_r2_outputs(tmp_path: Path) -> N
     assert _read_fastq_sequences(tmp_path / "out" / "sample2_R2.fastq.gz") == ["CCCCGGGG"]
 
 
+def test_demux_combinatorial_records_suspected_unknown_r2_barcode(tmp_path: Path) -> None:
+    r1 = _write_fastq(tmp_path / "lane_R1.fastq.gz", ["ACGTATCGGAAAA"])
+    r2 = _write_fastq(tmp_path / "lane_R2.fastq.gz", ["CCCCCGATCCAAAA"])
+    barcodes = tmp_path / "barcodes.tsv"
+    barcodes.write_text(
+        "sample1 ACGT TTTA\nsample2 TGCA GGGA\n",
+        encoding="utf-8",
+    )
+
+    tool = Demux(
+        fastqs=[r1, r2],
+        barcodes=barcodes,
+        cutsite_1="ATCGG",
+        cutsite_2="CGATCC",
+        max_mismatch=0,
+        cores=1,
+        chunksize=1,
+        merge_technical_replicates=False,
+        outdir=tmp_path / "out",
+        i7=False,
+        disable_infer_cutsite_motifs=True,
+        max_reads=100,
+        max_reads_kmer=100,
+        log_level="WARNING",
+    )
+    tool.run()
+
+    suspected = report_module.aggregate_suspected_barcode_stats(tool._file_stats)
+    assert suspected == {("R2", b"CCCC"): (1, 0)}
+
+
 def test_demux_pipeline_i7_writes_expected_outputs(tmp_path: Path) -> None:
     raw = _write_fastq_records(
         tmp_path / "lane.fastq.gz",
@@ -1206,6 +1366,43 @@ def test_demux_pipeline_i7_writes_expected_outputs(tmp_path: Path) -> None:
         ["AAAACCCC", "CCCCAAAA"]
     )
     assert _read_fastq_sequences(tmp_path / "out" / "sample2_R1.fastq.gz") == ["GGGGTTTT"]
+
+
+def test_demux_i7_records_and_reports_suspected_unknown_index(tmp_path: Path) -> None:
+    raw = _write_fastq_records(
+        tmp_path / "lane.fastq.gz",
+        [("@known 1:N:0:ACGT+AAAA", "AAAACCCC", "IIIIIIII")]
+        + [
+            (f"@unknown{i} 1:N:0:CCCC+AAAA", "GGGGTTTT", "IIIIIIII")
+            for i in range(60)
+        ],
+    )
+    barcodes = tmp_path / "barcodes.tsv"
+    barcodes.write_text("sample1 ACGT\nsample2 TGCA\n", encoding="utf-8")
+
+    tool = Demux(
+        fastqs=[raw],
+        barcodes=barcodes,
+        cutsite_1=None,
+        cutsite_2=None,
+        max_mismatch=0,
+        cores=1,
+        chunksize=10,
+        merge_technical_replicates=False,
+        outdir=tmp_path / "out",
+        i7=True,
+        disable_infer_cutsite_motifs=True,
+        max_reads=100,
+        max_reads_kmer=100,
+        log_level="WARNING",
+    )
+    tool.run()
+
+    suspected = report_module.aggregate_suspected_barcode_stats(tool._file_stats)
+    assert suspected == {("i7", b"CCCC"): (60, 0)}
+    stats_text = (tmp_path / "out" / "ipyrad_demux_stats_0.txt").read_text(encoding="utf-8")
+    assert "i7" in stats_text
+    assert "CCCC" in stats_text
 
 
 def test_demux_pipeline_i7_paired_end_writes_r1_and_r2_outputs(tmp_path: Path) -> None:
