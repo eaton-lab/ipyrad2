@@ -391,6 +391,7 @@ def _reader_process(
                     matcher.barcode_hits,
                     matcher.sample_hits,
                     matcher.barcode_boundary_ambiguities,
+                    matcher.suspected_barcode_summary(),
                 )
             )
     except BaseException as exc:
@@ -468,15 +469,28 @@ def _writer_process(
 
 def _drain_queue_into_dict(
     qobj: Any,
-    file_stats: Dict[str, Tuple[Dict[str, int], Dict[str, int], Dict[str, int], Dict[bytes, int]]],
+    file_stats: Dict[str, Tuple],
 ) -> None:
     """Drain completed file statistics from a multiprocessing queue."""
     while True:
         try:
-            fname, barcode_misses, barcode_hits, sample_hits, boundary_ambiguities = _queue_get_nowait(qobj)
+            (
+                fname,
+                barcode_misses,
+                barcode_hits,
+                sample_hits,
+                boundary_ambiguities,
+                suspected_barcodes,
+            ) = _queue_get_nowait(qobj)
         except queue.Empty:
             return
-        file_stats[fname] = (barcode_misses, barcode_hits, sample_hits, boundary_ambiguities)
+        file_stats[fname] = (
+            barcode_misses,
+            barcode_hits,
+            sample_hits,
+            boundary_ambiguities,
+            suspected_barcodes,
+        )
 
 
 def _drain_progress_queue(
@@ -689,7 +703,7 @@ def run_demux_pipeline(
     filenames_to_fastqs: Dict[str, Tuple[Path, Path | None]],
     config: DemuxRunConfig,
     cores: int,
-) -> Dict[str, Tuple[Dict[str, int], Dict[str, int], Dict[str, int], Dict[bytes, int]]]:
+) -> Dict[str, Tuple]:
     """Demultiplex raw FASTQs with concurrent reader and persistent writer processes."""
     if config.pigz and shutil.which("pigz") is None:
         raise IPyradError(
@@ -762,7 +776,7 @@ def run_demux_pipeline(
     ]
     all_procs = writers + readers
 
-    file_stats: Dict[str, Tuple[Dict[str, int], Dict[str, int], Dict[str, int], Dict[bytes, int]]] = {}
+    file_stats: Dict[str, Tuple] = {}
     progress_by_reader: Dict[int, Tuple[int, int]] = {}
     chunk_reads = max(1, config.chunksize)
     next_log_threshold = chunk_reads

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from math import ceil
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -16,6 +17,9 @@ from ipyrad2.utils.kmers import InferredJunctionSet
 
 DEMUX_STATS_PREFIX = "ipyrad_demux_stats_"
 PRESERVED_WARNING_PREVIEW = 3
+SUSPECTED_BARCODE_REPORT_LIMIT = 25
+SUSPECTED_BARCODE_MIN_COUNT = 50
+SUSPECTED_BARCODE_MIN_FRACTION = 0.0001
 
 
 def format_motif_set(junction: InferredJunctionSet | None) -> str:
@@ -104,7 +108,7 @@ def next_demux_stats_path(outdir: Path) -> Path:
 
 
 def aggregate_file_stat_counter(
-    file_stats: Dict[str, Tuple[Dict[str, int], Dict[bytes, int], Dict[str, int], Dict[bytes, int]]],
+    file_stats: Dict[str, Tuple],
     stat_idx: int,
 ) -> Counter:
     """Aggregate one counter-like column across all raw file stats."""
@@ -114,6 +118,33 @@ def aggregate_file_stat_counter(
     return aggregate
 
 
+def aggregate_suspected_barcode_stats(
+    file_stats: Dict[str, Tuple],
+) -> Dict[Tuple[str, bytes], Tuple[int, int]]:
+    """Aggregate bounded suspected-barcode summaries across raw files."""
+    aggregate: Dict[Tuple[str, bytes], Tuple[int, int]] = {}
+    for stats in file_stats.values():
+        if len(stats) < 5:
+            continue
+        for key, (estimate, error) in stats[4].items():
+            current_estimate, current_error = aggregate.get(key, (0, 0))
+            aggregate[key] = (
+                current_estimate + int(estimate),
+                current_error + int(error),
+            )
+    return aggregate
+
+
+def total_raw_reads_from_file_stats(file_stats: Dict[str, Tuple]) -> int:
+    """Return total raw reads represented by demux per-file stats."""
+    total = 0
+    for stats in file_stats.values():
+        total += sum(stats[0].values())
+        total += sum(stats[1].values())
+        total += sum(stats[3].values())
+    return total
+
+
 def format_observed_barcode(barcode: bytes) -> str | Tuple[str, ...]:
     """Return a human-readable barcode observation for stats output."""
     if b"_" in barcode:
@@ -121,10 +152,88 @@ def format_observed_barcode(barcode: bytes) -> str | Tuple[str, ...]:
     return barcode.decode()
 
 
+def _expected_barcodes_by_read_end(
+    names_to_barcodes: Dict[str, Tuple[str, str]],
+) -> Dict[str, Tuple[str, ...]]:
+    """Return user-entered expected barcode strings grouped by read end."""
+    expected = {"R1": set(), "R2": set(), "i7": set()}
+    for barcode1, barcode2 in names_to_barcodes.values():
+        if barcode1:
+            expected["R1"].add(barcode1)
+            expected["i7"].add(barcode1)
+        if barcode2:
+            expected["R2"].add(barcode2)
+    return {
+        read_end: tuple(sorted(values))
+        for read_end, values in expected.items()
+    }
+
+
+def _hamming_distance(left: str, right: str) -> int:
+    """Return Hamming distance for equal-length strings."""
+    return sum(a != b for a, b in zip(left, right))
+
+
+def _nearest_expected_barcode(
+    observed: str,
+    expected: Tuple[str, ...],
+) -> Tuple[str, int | None]:
+    """Return nearest same-length expected barcode and mismatch count."""
+    same_length = [barcode for barcode in expected if len(barcode) == len(observed)]
+    if not same_length:
+        return "", None
+    nearest = min(same_length, key=lambda barcode: (_hamming_distance(observed, barcode), barcode))
+    return nearest, _hamming_distance(observed, nearest)
+
+
+def _suspected_barcode_report_rows(
+    *,
+    file_stats: Dict[str, Tuple],
+    names_to_barcodes: Dict[str, Tuple[str, str]],
+) -> List[List[object]]:
+    """Return report rows for frequent suspected missing barcodes."""
+    raw_reads = total_raw_reads_from_file_stats(file_stats)
+    if raw_reads <= 0:
+        return []
+
+    threshold = max(
+        SUSPECTED_BARCODE_MIN_COUNT,
+        ceil(raw_reads * SUSPECTED_BARCODE_MIN_FRACTION),
+    )
+    expected_by_read_end = _expected_barcodes_by_read_end(names_to_barcodes)
+    rows = []
+    for (read_end, barcode), (estimate, error) in aggregate_suspected_barcode_stats(file_stats).items():
+        min_count = max(0, estimate - error)
+        if min_count < threshold:
+            continue
+        observed = barcode.decode(errors="replace")
+        nearest, distance = _nearest_expected_barcode(
+            observed,
+            expected_by_read_end.get(read_end, ()),
+        )
+        rows.append(
+            [
+                read_end,
+                observed,
+                estimate,
+                min_count,
+                error,
+                estimate / raw_reads,
+                nearest,
+                "" if distance is None else distance,
+            ]
+        )
+
+    return sorted(
+        rows,
+        key=lambda row: (-int(row[3]), row[0], row[1]),
+    )[:SUSPECTED_BARCODE_REPORT_LIMIT]
+
+
 def write_demux_stats(
     *,
     outdir: Path,
-    file_stats: Dict[str, Tuple[Dict[str, int], Dict[bytes, int], Dict[str, int], Dict[bytes, int]]],
+    file_stats: Dict[str, Tuple],
     sample_stats: Dict[str, int],
     names_to_barcodes: Dict[str, Tuple[str, str]],
     barcodes_to_names: Dict[bytes, str],
@@ -249,6 +358,38 @@ def write_demux_stats(
                 outfile.write(ambiguity_df.to_string(index=False) + "\n\n")
             else:
                 outfile.write("none\n\n")
+
+        outfile.write("# Suspected missing barcode statistics\n######################\n")
+        outfile.write(
+            "This section reports frequent unassigned barcode-like observations with "
+            "bounded-memory estimated counts. min_records is a conservative lower bound.\n"
+        )
+        suspected_rows = _suspected_barcode_report_rows(
+            file_stats=file_stats,
+            names_to_barcodes=names_to_barcodes,
+        )
+        if suspected_rows:
+            suspected_df = pd.DataFrame(
+                suspected_rows,
+                columns=[
+                    "read_end",
+                    "observed_barcode",
+                    "estimated_records",
+                    "min_records",
+                    "max_error",
+                    "fraction_raw_reads_est",
+                    "nearest_expected_barcode",
+                    "nearest_expected_mismatches",
+                ],
+            )
+            outfile.write(
+                suspected_df.to_string(
+                    index=False,
+                    float_format=lambda value: f"{value:.6f}",
+                ) + "\n\n"
+            )
+        else:
+            outfile.write("none\n\n")
 
         outfile.write("# Barcode detection statistics\n######################\n")
         data = []

@@ -15,6 +15,7 @@ class ProgressBar(object):
         self.start = (start if start else time.time())
         self.message = message
         self.finished = 0
+        self._tty = bool(sys.stderr.isatty())
         self._visible = False
         self._last_render = None
 
@@ -41,13 +42,17 @@ class ProgressBar(object):
             return
         self._last_render = rendered
         self._visible = True
-        logger.bind(end="\r").opt(depth=1).info(rendered)
+        if self._tty:
+            logger.bind(end="\r").opt(depth=1).info(rendered)
+            return
+        logger.opt(depth=1).info(rendered)
 
     def close(self) -> None:
         """Finish the transient progress bar line if it was visible."""
         if not self._visible:
             return
-        sys.stderr.write("\n")
-        sys.stderr.flush()
+        if self._tty:
+            sys.stderr.write("\n")
+            sys.stderr.flush()
         self._visible = False
         self._last_render = None
