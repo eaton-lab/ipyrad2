@@ -1167,6 +1167,39 @@ def test_demux_stats_report_suspected_missing_inline_barcode(tmp_path: Path) -> 
     assert "nearest_expected_mismatches" in stats_text
 
 
+def test_demux_stats_report_labels_leading_base_deletion_candidate(tmp_path: Path) -> None:
+    raw = _write_fastq(
+        tmp_path / "lane.fastq.gz",
+        ["CATGGTCAATCGGAAAA"] * 60,
+    )
+    barcodes = tmp_path / "barcodes.tsv"
+    barcodes.write_text("sample1 TCATGGTCA\nsample2 GGTCTACGT\n", encoding="utf-8")
+
+    tool = Demux(
+        fastqs=[raw],
+        barcodes=barcodes,
+        cutsite_1="ATCGG",
+        cutsite_2=None,
+        max_mismatch=0,
+        cores=1,
+        chunksize=10,
+        merge_technical_replicates=False,
+        outdir=tmp_path / "out",
+        i7=False,
+        disable_infer_cutsite_motifs=True,
+        max_reads=100,
+        max_reads_kmer=100,
+        log_level="WARNING",
+    )
+    tool.run()
+
+    stats_text = (tmp_path / "out" / "ipyrad_demux_stats_0.txt").read_text(encoding="utf-8")
+
+    assert "CATGGTCA" in stats_text
+    assert "TCATGGTCA" in stats_text
+    assert "leading_base_deletion" in stats_text
+
+
 def test_demux_pipeline_single_inline_writes_expected_outputs(tmp_path: Path) -> None:
     raw1 = _write_fastq(
         tmp_path / "lane1.fastq.gz",
@@ -1232,6 +1265,120 @@ def test_demux_accepted_mismatch_barcode_is_not_suspected(tmp_path: Path) -> Non
 
     assert _read_fastq_sequences(tmp_path / "out" / "sample1_R1.fastq.gz") == ["ATCGGAAAA"]
     assert report_module.aggregate_suspected_barcode_stats(tool._file_stats) == {}
+
+
+def test_demux_leading_barcode_deletion_requires_opt_in(tmp_path: Path) -> None:
+    raw = _write_fastq(tmp_path / "lane.fastq.gz", ["CATGGTCAATCGGAAAA"])
+    barcodes = tmp_path / "barcodes.tsv"
+    barcodes.write_text("sample1 TCATGGTCA\nsample2 GGTCTACGT\n", encoding="utf-8")
+
+    tool = Demux(
+        fastqs=[raw],
+        barcodes=barcodes,
+        cutsite_1="ATCGG",
+        cutsite_2=None,
+        max_mismatch=0,
+        cores=1,
+        chunksize=1,
+        merge_technical_replicates=False,
+        outdir=tmp_path / "out",
+        i7=False,
+        disable_infer_cutsite_motifs=True,
+        max_reads=100,
+        max_reads_kmer=100,
+        log_level="WARNING",
+    )
+    tool.run()
+
+    assert not (tmp_path / "out" / "sample1_R1.fastq.gz").exists()
+    assert report_module.aggregate_suspected_barcode_stats(tool._file_stats) == {
+        ("R1", b"CATGGTCA"): (1, 0)
+    }
+
+
+def test_demux_recovers_leading_barcode_deletion_when_enabled(tmp_path: Path) -> None:
+    raw = _write_fastq(tmp_path / "lane.fastq.gz", ["CATGGTCAATCGGAAAA"])
+    barcodes = tmp_path / "barcodes.tsv"
+    barcodes.write_text("sample1 TCATGGTCA\nsample2 GGTCTACGT\n", encoding="utf-8")
+
+    tool = Demux(
+        fastqs=[raw],
+        barcodes=barcodes,
+        cutsite_1="ATCGG",
+        cutsite_2=None,
+        max_mismatch=0,
+        cores=1,
+        chunksize=1,
+        merge_technical_replicates=False,
+        outdir=tmp_path / "out",
+        i7=False,
+        disable_infer_cutsite_motifs=True,
+        max_reads=100,
+        max_reads_kmer=100,
+        log_level="WARNING",
+        allow_leading_barcode_deletion=True,
+    )
+    tool.run()
+
+    assert _read_fastq_sequences(tmp_path / "out" / "sample1_R1.fastq.gz") == ["ATCGGAAAA"]
+    assert report_module.aggregate_suspected_barcode_stats(tool._file_stats) == {}
+    bar_obs = report_module.aggregate_file_stat_counter(tool._file_stats, 1)
+    assert bar_obs[b"CATGGTCA"] == 1
+
+
+def test_demux_leading_barcode_deletion_is_not_substitution_expanded(tmp_path: Path) -> None:
+    raw = _write_fastq(tmp_path / "lane.fastq.gz", ["CGTATCGGAAAA", "CCTATCGGCCCC"])
+    barcodes = tmp_path / "barcodes.tsv"
+    barcodes.write_text("sample1 TCGT\nsample2 AGCA\n", encoding="utf-8")
+
+    tool = Demux(
+        fastqs=[raw],
+        barcodes=barcodes,
+        cutsite_1="ATCGG",
+        cutsite_2=None,
+        max_mismatch=1,
+        cores=1,
+        chunksize=1,
+        merge_technical_replicates=False,
+        outdir=tmp_path / "out",
+        i7=False,
+        disable_infer_cutsite_motifs=True,
+        max_reads=100,
+        max_reads_kmer=100,
+        log_level="WARNING",
+        allow_leading_barcode_deletion=True,
+    )
+    tool.run()
+
+    assert _read_fastq_sequences(tmp_path / "out" / "sample1_R1.fastq.gz") == ["ATCGGAAAA"]
+    assert report_module.aggregate_suspected_barcode_stats(tool._file_stats) == {
+        ("R1", b"CCT"): (1, 0)
+    }
+
+
+def test_demux_rejects_ambiguous_leading_barcode_deletion(tmp_path: Path) -> None:
+    raw = _write_fastq(tmp_path / "lane.fastq.gz", ["ACGTATCGGAAAA"])
+    barcodes = tmp_path / "barcodes.tsv"
+    barcodes.write_text("sample1 ACGT\nsample2 TACGT\n", encoding="utf-8")
+
+    with pytest.raises(IPyradError, match="ambiguous barcode candidates"):
+        Demux(
+            fastqs=[raw],
+            barcodes=barcodes,
+            cutsite_1="ATCGG",
+            cutsite_2=None,
+            max_mismatch=0,
+            cores=1,
+            chunksize=1,
+            merge_technical_replicates=False,
+            outdir=tmp_path / "out",
+            i7=False,
+            disable_infer_cutsite_motifs=True,
+            max_reads=100,
+            max_reads_kmer=100,
+            log_level="WARNING",
+            allow_leading_barcode_deletion=True,
+        )
 
 
 def test_demux_pipeline_aggregates_suspected_unknown_barcodes(tmp_path: Path) -> None:
