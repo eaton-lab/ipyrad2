@@ -38,6 +38,7 @@ def test_demux_help_groups_and_examples_are_updated() -> None:
         "-m, --max_mismatch",
         "-M, --merge-technical-replicates",
         "--barcode-boundary-slack",
+        "--allow-leading-barcode-deletion",
         "-e1, --cutsite-1",
         "-e2, --cutsite-2",
         "-E, --disable-infer-cutsite-motifs",
@@ -86,6 +87,7 @@ def test_demux_parser_defaults_are_unchanged() -> None:
     assert args.disable_infer_cutsite_motifs is False
     assert args.merge_technical_replicates is False
     assert args.barcode_boundary_slack == 1
+    assert args.allow_leading_barcode_deletion is False
     assert args.i7 is False
     assert args.cores == 4
     assert args.log_level == "INFO"
@@ -132,6 +134,21 @@ def test_demux_parser_accepts_barcode_boundary_slack_zero() -> None:
     assert args.barcode_boundary_slack == 0
 
 
+def test_demux_parser_accepts_leading_barcode_deletion_flag() -> None:
+    args = setup_parsers().parse_args(
+        [
+            "demux",
+            "-d",
+            "a.fastq.gz",
+            "-b",
+            "bars.tsv",
+            "--allow-leading-barcode-deletion",
+        ]
+    )
+
+    assert args.allow_leading_barcode_deletion is True
+
+
 def test_demux_parser_rejects_invalid_barcode_boundary_slack() -> None:
     with pytest.raises(SystemExit):
         setup_parsers().parse_args(
@@ -153,6 +170,18 @@ def test_demux_parser_rejects_invalid_barcode_boundary_slack() -> None:
         (["demux", "-d", "a.fastq.gz", "-b", "bars.tsv", "-m", "-1"], "--max-mismatch must be between 0 and 2"),
         (["demux", "-d", "a.fastq.gz", "-b", "bars.tsv", "-m", "3"], "--max-mismatch must be between 0 and 2"),
         (["demux", "-d", "a.fastq.gz", "-b", "bars.tsv", "--max-reads-kmer", "0"], "--max-reads-kmer must be >= 1"),
+        (
+            [
+                "demux",
+                "-d",
+                "a.fastq.gz",
+                "-b",
+                "bars.tsv",
+                "--i7",
+                "--allow-leading-barcode-deletion",
+            ],
+            "--allow-leading-barcode-deletion applies only to inline barcode demux",
+        ),
     ],
 )
 def test_demux_parser_validation(argv: list[str], message: str, capsys: pytest.CaptureFixture[str]) -> None:

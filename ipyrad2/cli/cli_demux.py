@@ -44,6 +44,11 @@ def validate_demux_args(args: Namespace, parser: ArgumentParser) -> None:
         args.barcode_boundary_slack not in (0, 1),
         "--barcode-boundary-slack must be 0 or 1",
     )
+    _parser_error_if(
+        parser,
+        args.i7 and args.allow_leading_barcode_deletion,
+        "--allow-leading-barcode-deletion applies only to inline barcode demux",
+    )
 
 
 def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str = None) -> None:
@@ -94,6 +99,13 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
     mode.add_argument(
         "--barcode-boundary-slack", metavar="int", type=int, choices=(0, 1), default=1,
         help="Position offset allowed for inline barcode matching [default=%(default)s]"
+    )
+    mode.add_argument(
+        "--allow-leading-barcode-deletion", action="store_true",
+        help=(
+            "Recover inline barcode observations missing the first expected barcode base. "
+            "Disabled by default."
+        ),
     )
 
     cutsites.add_argument(

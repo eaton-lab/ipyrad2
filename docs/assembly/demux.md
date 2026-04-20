@@ -59,8 +59,11 @@ ipyrad2 demux -d RAW/*.fastq.gz -b BARCODES.tsv -o DEMUX/
 - `--i7`: demultiplex by i7 index instead of inline barcodes
 - `-m, --max-mismatch`: allow barcode/index mismatches, from `0` to `2`
 - `-M, --merge-technical-replicates`: merge replicated sample names into one output sample
+- `--allow-leading-barcode-deletion`: for inline demux, recover exact observations missing the first expected barcode base, such as `CATGGTCA` for expected barcode `TCATGGTCA`
 
 Use mismatches conservatively. Allowing mismatches can rescue reads from low-quality barcode positions, but it also increases the chance of ambiguous assignments when barcode sequences are too similar.
+
+Leading-barcode-deletion rescue is disabled by default and is not implied by `--max-mismatch`. When enabled, ipyrad2 adds only the exact `barcode[1:]` candidate for each expected inline barcode. It does not add additional mismatch variants of that shortened candidate, and it is rejected if the rescue candidates make sample assignment ambiguous.
 
 ### Cutsite motifs
 
@@ -142,7 +145,7 @@ If inferred cutsite motifs do not match the library design, inline demux can fai
 
 ipyrad2 warns when a listed sample receives zero reads. That usually means the sample truly failed, the barcode table is wrong, or the demux mode does not match the run structure.
 
-The demux stats report can also list suspected missing barcodes. These are frequent unassigned barcode-like observations supported by the expected index or cutsite structure. When one appears at high frequency, compare it to the barcode table; it often indicates a missing sample row, a typo, or an index/barcode assignment error.
+The demux stats report can also list suspected missing barcodes. These are frequent unassigned barcode-like observations supported by the expected index or cutsite structure. When one appears at high frequency, compare it to the barcode table; it often indicates a missing sample row, a typo, or an index/barcode assignment error. The report labels observations that exactly match a known barcode after dropping the expected barcode's first base as `leading_base_deletion`; rerun with `--allow-leading-barcode-deletion` only when that relationship matches the library design and the assignments remain unambiguous.
 
 ## Examples
 
@@ -156,6 +159,12 @@ ipyrad2 demux -d RAW/*.fastq.gz -b BARCODES.tsv -o DEMUX/ -c 10
 
 ```bash
 ipyrad2 demux -d RAW/*.fastq.gz -b BARCODES.tsv --i7 -o DEMUX/
+```
+
+### Recover first-base-deleted inline barcodes
+
+```bash
+ipyrad2 demux -d RAW/*.fastq.gz -b BARCODES.tsv --allow-leading-barcode-deletion -o DEMUX/
 ```
 
 ### Merge technical replicates across runs

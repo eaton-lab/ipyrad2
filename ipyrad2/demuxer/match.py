@@ -47,6 +47,8 @@ class DemuxRunConfig:
     max_reads: int | None
     i7: bool
     log_level: str
+    suspected_barcode_lengths1: Tuple[int, ...] = ()
+    suspected_barcode_lengths2: Tuple[int, ...] = ()
     barcode_boundary_slack: int = 1
     barcodes_to_samples: Dict[bytes, Tuple[str, ...]] = field(default_factory=dict)
     barcode1_to_samples: Dict[bytes, Tuple[str, ...]] = field(default_factory=dict)
@@ -170,6 +172,10 @@ class BarMatching:
     """: ..."""
     chunksize: int
     """: Number of reads to store in memory before writing to disk."""
+    suspected_barcode_lengths1: Tuple[int, ...] = ()
+    """: Barcode lengths to probe when tracking suspected R1 barcode observations."""
+    suspected_barcode_lengths2: Tuple[int, ...] = ()
+    """: Barcode lengths to probe when tracking suspected R2 barcode observations."""
     barcodes_to_samples: Dict[bytes, Tuple[str, ...]] = field(default_factory=dict)
     """: Runtime barcode combinations mapped to all matching sample names."""
     barcode1_to_samples: Dict[bytes, Tuple[str, ...]] = field(default_factory=dict)
@@ -287,18 +293,23 @@ class BarMatching:
         maxlen: int,
     ) -> None:
         """Record cutsite-supported barcode prefixes absent from the expected set."""
-        observed = set()
-        for candidate in _match_boundary_candidates(
+        candidates = _match_boundary_candidates(
             read[:maxlen],
             barcode_lengths,
             cutters,
             barcode_candidates_by_length=None,
             max_slack=self.barcode_boundary_slack,
-        ):
-            if candidate.barcode not in known_barcodes:
-                observed.add(candidate.barcode)
-        for barcode in observed:
-            self._record_suspected_barcode(read_end, barcode)
+        )
+        if any(candidate.barcode in known_barcodes for candidate in candidates):
+            return
+
+        unknown = [
+            candidate
+            for candidate in candidates
+            if candidate.barcode not in known_barcodes
+        ]
+        if unknown:
+            self._record_suspected_barcode(read_end, unknown[0].barcode)
 
     def _iter_fastq_reads(
         self,
@@ -557,7 +568,7 @@ class BarMatchingSingleInline(BarMatching):
             self._record_suspected_inline_barcodes(
                 "R1",
                 read1[1],
-                self.barcode_lengths1,
+                self.suspected_barcode_lengths1 or self.barcode_lengths1,
                 self.cuts1,
                 self.barcode1_to_samples,
                 self.maxlen1,
@@ -672,7 +683,7 @@ class BarMatchingCombinatorialInline(BarMatching):
             self._record_suspected_inline_barcodes(
                 "R1",
                 read1[1],
-                self.barcode_lengths1,
+                self.suspected_barcode_lengths1 or self.barcode_lengths1,
                 self.cuts1,
                 self.barcode1_to_samples,
                 self.maxlen1,
@@ -680,7 +691,7 @@ class BarMatchingCombinatorialInline(BarMatching):
             self._record_suspected_inline_barcodes(
                 "R2",
                 read2[1],
-                self.barcode_lengths2,
+                self.suspected_barcode_lengths2 or self.barcode_lengths2,
                 self.cuts2,
                 self.barcode2_to_samples,
                 self.maxlen2,
@@ -917,6 +928,8 @@ def build_matcher(
         barcode2_mismatch_by_barcode=config.barcode2_mismatch_by_barcode,
         barcode_lengths1=config.barcode_lengths1,
         barcode_lengths2=config.barcode_lengths2,
+        suspected_barcode_lengths1=config.suspected_barcode_lengths1,
+        suspected_barcode_lengths2=config.suspected_barcode_lengths2,
         cuts1=config.cuts1,
         cuts2=config.cuts2,
         merge_technical_replicates=config.merge_technical_replicates,

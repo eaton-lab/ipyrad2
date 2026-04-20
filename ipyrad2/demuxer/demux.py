@@ -95,25 +95,65 @@ def _expand_cuts(motifs: Tuple[str, ...]) -> List[bytes]:
     return [i.encode() for i in sorted(expanded, key=lambda item: (-len(item), item))]
 
 
-def _expand_barcode_candidates(barcode: str, max_mismatch: int) -> Dict[str, int]:
+def _expand_barcode_candidates(
+    barcode: str,
+    max_mismatch: int,
+    *,
+    allow_leading_deletion: bool = False,
+) -> Dict[str, int]:
     """Return acceptable barcode candidates mapped to their minimum mismatch distance."""
     best = {barcode: 0}
-    if max_mismatch <= 0:
-        return best
+    if max_mismatch > 0:
+        frontier = {barcode}
+        for distance in range(1, max_mismatch + 1):
+            next_frontier = set()
+            for seq in frontier:
+                for candidate in mutate(seq):
+                    current = best.get(candidate)
+                    if current is None or distance < current:
+                        best[candidate] = distance
+                        next_frontier.add(candidate)
+            frontier = next_frontier
+            if not frontier:
+                break
 
-    frontier = {barcode}
-    for distance in range(1, max_mismatch + 1):
-        next_frontier = set()
-        for seq in frontier:
-            for candidate in mutate(seq):
-                current = best.get(candidate)
-                if current is None or distance < current:
-                    best[candidate] = distance
-                    next_frontier.add(candidate)
-        frontier = next_frontier
-        if not frontier:
-            break
+    if allow_leading_deletion and len(barcode) > 1:
+        candidate = barcode[1:]
+        current = best.get(candidate)
+        if current is None or current > 1:
+            best[candidate] = 1
+
     return best
+
+
+def _add_barcode_candidate(
+    barcode_to_samples: Dict[bytes, set[str]],
+    mismatch_by_barcode: Dict[bytes, int],
+    barcode: str,
+    sample_name: str,
+    distance: int,
+) -> None:
+    """Add one runtime barcode candidate to sample and distance maps."""
+    barcode_bytes = barcode.encode()
+    barcode_to_samples[barcode_bytes].add(sample_name)
+    current = mismatch_by_barcode.get(barcode_bytes)
+    if current is None or distance < current:
+        mismatch_by_barcode[barcode_bytes] = distance
+
+
+def _barcode_candidates_for_runtime(
+    barcode: str,
+    max_mismatch: int,
+    allow_leading_deletion: bool,
+) -> Dict[str, int]:
+    """Return runtime barcode candidates for one expected inline barcode/index."""
+    if not allow_leading_deletion:
+        return _expand_barcode_candidates(barcode, max_mismatch)
+    return _expand_barcode_candidates(
+        barcode,
+        max_mismatch,
+        allow_leading_deletion=True,
+    )
 
 
 def _freeze_sample_map(mapping: Dict[bytes, set[str]]) -> Dict[bytes, Tuple[str, ...]]:
@@ -135,6 +175,13 @@ def _barcode_candidates_by_length(mapping: Dict[bytes, Tuple[str, ...]]) -> Dict
         for length, values in sorted(grouped.items())
         if values
     }
+
+
+def _suspected_barcode_lengths(lengths: Tuple[int, ...]) -> Tuple[int, ...]:
+    """Return expected barcode lengths plus first-base-deletion lengths."""
+    suspected = set(lengths)
+    suspected.update(length - 1 for length in lengths if length > 1)
+    return tuple(sorted(suspected))
 
 
 def _barcode_sample_map_from_names(
@@ -231,6 +278,8 @@ class Demux:
     log_level: str
     barcode_boundary_slack: int = 1
     """: Max 5-prime barcode-boundary offset allowed for inline barcode matching."""
+    allow_leading_barcode_deletion: bool = False
+    """: Recover exact barcode[1:] observations for inline barcode demux."""
     pigz: bool = False
     force: bool = False
 
@@ -367,6 +416,10 @@ class Demux:
             raise IPyradError("max_mismatch must be between 0 and 2.")
         if self.barcode_boundary_slack not in (0, 1):
             raise IPyradError("barcode_boundary_slack must be 0 or 1.")
+        if self.i7 and self.allow_leading_barcode_deletion:
+            raise IPyradError(
+                "allow_leading_barcode_deletion applies only to inline barcode demux."
+            )
 
     def _prepare_outdir_path(self) -> None:
         """Normalize the outdir path and create missing parent directories."""
@@ -844,26 +897,38 @@ class Demux:
         barcode1_mismatch_by_barcode: Dict[bytes, int] = {}
         barcode2_mismatch_by_barcode: Dict[bytes, int] = {}
         for name, barcode in self._names_to_barcodes.items():
-            bars1 = _expand_barcode_candidates(barcode[0], self.max_mismatch)
+            bars1 = _barcode_candidates_for_runtime(
+                barcode[0],
+                self.max_mismatch,
+                self.allow_leading_barcode_deletion,
+            )
             bars2 = (
-                _expand_barcode_candidates(barcode[1], self.max_mismatch)
+                _barcode_candidates_for_runtime(
+                    barcode[1],
+                    self.max_mismatch,
+                    self.allow_leading_barcode_deletion,
+                )
                 if barcode[1]
                 else {}
             )
 
             for bar1, distance1 in bars1.items():
-                bar1_bytes = bar1.encode()
-                barcode1_to_samples[bar1_bytes].add(name)
-                current = barcode1_mismatch_by_barcode.get(bar1_bytes)
-                if current is None or distance1 < current:
-                    barcode1_mismatch_by_barcode[bar1_bytes] = distance1
+                _add_barcode_candidate(
+                    barcode1_to_samples,
+                    barcode1_mismatch_by_barcode,
+                    bar1,
+                    name,
+                    distance1,
+                )
 
             for bar2, distance2 in bars2.items():
-                bar2_bytes = bar2.encode()
-                barcode2_to_samples[bar2_bytes].add(name)
-                current = barcode2_mismatch_by_barcode.get(bar2_bytes)
-                if current is None or distance2 < current:
-                    barcode2_mismatch_by_barcode[bar2_bytes] = distance2
+                _add_barcode_candidate(
+                    barcode2_to_samples,
+                    barcode2_mismatch_by_barcode,
+                    bar2,
+                    name,
+                    distance2,
+                )
 
             if not bars2:
                 for bar1 in bars1:
@@ -887,10 +952,15 @@ class Demux:
             )
             if len(ambiguous) > 6:
                 details += f"; ... and {len(ambiguous) - 6} more"
+            advice = "Lower --max-mismatch or revise the barcodes."
+            if self.allow_leading_barcode_deletion:
+                advice = (
+                    "Lower --max-mismatch, disable --allow-leading-barcode-deletion, "
+                    "or revise the barcodes."
+                )
             raise IPyradError(
-                "Barcode mismatch expansion creates ambiguous barcode candidates that "
-                "map to multiple samples. Lower --max-mismatch or revise the barcodes. "
-                f"{details}"
+                "Barcode candidate expansion creates ambiguous barcode candidates that "
+                f"map to multiple samples. {advice} {details}"
             )
         self._barcodes_to_names = {
             barcode: samples[0]
@@ -1017,6 +1087,8 @@ class Demux:
             barcode2_mismatch_by_barcode=self._barcode2_mismatch_by_barcode,
             barcode_lengths1=self._barcode_lengths1,
             barcode_lengths2=self._barcode_lengths2,
+            suspected_barcode_lengths1=_suspected_barcode_lengths(self._barcode_lengths1),
+            suspected_barcode_lengths2=_suspected_barcode_lengths(self._barcode_lengths2),
             barcode_boundary_slack=self.barcode_boundary_slack,
             cuts1=self._cuts1,
             cuts2=self._cuts2,

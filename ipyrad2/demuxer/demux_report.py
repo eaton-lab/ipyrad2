@@ -177,13 +177,21 @@ def _hamming_distance(left: str, right: str) -> int:
 def _nearest_expected_barcode(
     observed: str,
     expected: Tuple[str, ...],
-) -> Tuple[str, int | None]:
-    """Return nearest same-length expected barcode and mismatch count."""
+) -> Tuple[str, int | None, str]:
+    """Return nearest expected barcode, mismatch count, and relationship label."""
+    leading_deletion = [
+        barcode
+        for barcode in expected
+        if len(barcode) == len(observed) + 1 and barcode[1:] == observed
+    ]
+    if leading_deletion:
+        return sorted(leading_deletion)[0], 0, "leading_base_deletion"
+
     same_length = [barcode for barcode in expected if len(barcode) == len(observed)]
     if not same_length:
-        return "", None
+        return "", None, ""
     nearest = min(same_length, key=lambda barcode: (_hamming_distance(observed, barcode), barcode))
-    return nearest, _hamming_distance(observed, nearest)
+    return nearest, _hamming_distance(observed, nearest), "same_length"
 
 
 def _suspected_barcode_report_rows(
@@ -207,7 +215,7 @@ def _suspected_barcode_report_rows(
         if min_count < threshold:
             continue
         observed = barcode.decode(errors="replace")
-        nearest, distance = _nearest_expected_barcode(
+        nearest, distance, relationship = _nearest_expected_barcode(
             observed,
             expected_by_read_end.get(read_end, ()),
         )
@@ -221,6 +229,7 @@ def _suspected_barcode_report_rows(
                 estimate / raw_reads,
                 nearest,
                 "" if distance is None else distance,
+                relationship,
             ]
         )
 
@@ -380,6 +389,7 @@ def write_demux_stats(
                     "fraction_raw_reads_est",
                     "nearest_expected_barcode",
                     "nearest_expected_mismatches",
+                    "nearest_expected_relationship",
                 ],
             )
             outfile.write(
