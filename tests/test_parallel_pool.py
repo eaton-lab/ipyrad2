@@ -104,6 +104,60 @@ def test_run_with_pool_iter_requires_msg_and_njobs_together() -> None:
         list(run_with_pool_iter(jobs, "WARNING", njobs=1))
 
 
+def test_managed_pool_drains_metadata_while_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class _FakeFuture:
+        def result(self) -> str:
+            return "done"
+
+        def cancel(self) -> None:
+            pass
+
+    fake_future = _FakeFuture()
+
+    class _FakeExecutor:
+        def __init__(self, *args, **kwargs) -> None:
+            self._processes = {}
+
+        def submit(self, func, **kwargs):
+            return fake_future
+
+        def shutdown(self, wait=True, cancel_futures=False) -> None:
+            pass
+
+    def fake_collect(self) -> None:
+        events.append("collect")
+
+    def fake_wait(futures, timeout=None, return_when=None):
+        events.append("wait")
+        assert timeout == parallel_pool_mod.POOL_WAIT_POLL_SECONDS
+        assert return_when == parallel_pool_mod.FIRST_COMPLETED
+        if events.count("wait") == 1:
+            return set(), set(futures)
+        return {fake_future}, set()
+
+    monkeypatch.setattr(parallel_pool_mod, "ProcessPoolExecutor", _FakeExecutor)
+    monkeypatch.setattr(parallel_pool_mod._ManagedProcessPool, "collect", fake_collect)
+    monkeypatch.setattr(parallel_pool_mod, "wait", fake_wait)
+
+    pool = parallel_pool_mod._ManagedProcessPool("WARNING", max_workers=1)
+    try:
+        results = list(
+            pool.iter_results(
+                [("job", (_add, {"a": 1, "b": 2}))],
+                max_inflight=1,
+            )
+        )
+    finally:
+        pool.close()
+
+    assert results == [("job", "done")]
+    assert events[:4] == ["collect", "wait", "collect", "wait"]
+
+
 def test_run_with_pool_returns_results() -> None:
     jobs = {
         "a": (_add, {"a": 1, "b": 2}),
