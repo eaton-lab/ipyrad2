@@ -22,6 +22,9 @@ from ..progress import ProgressBar
 from .pipeline import _init_worker_with_pid
 
 
+POOL_WAIT_POLL_SECONDS = 0.25
+
+
 def _validate_positive_int(name: str, value: int | None) -> int | None:
     """Validate optional positive integer parameters."""
     if value is None:
@@ -363,8 +366,14 @@ class _ManagedProcessPool:
             pass
 
         while inflight:
-            self.collect()
-            done, _ = wait(tuple(inflight), return_when=FIRST_COMPLETED)
+            done: set[Future[Any]] = set()
+            while not done:
+                self.collect()
+                done, _ = wait(
+                    tuple(inflight),
+                    timeout=POOL_WAIT_POLL_SECONDS,
+                    return_when=FIRST_COMPLETED,
+                )
 
             for fut in done:
                 info = inflight.pop(fut)
@@ -467,7 +476,9 @@ def run_with_pool_iter(
     if njobs is not None:
         _validate_positive_int("njobs", njobs)
     if progress_increment is None:
-        progress_increment = lambda _key, _result: 1
+        def progress_increment(_key, _result) -> int:
+            return 1
+
     primed_iter = _prime_jobs_iter(jobs_iter)
     if primed_iter is None:
         return
