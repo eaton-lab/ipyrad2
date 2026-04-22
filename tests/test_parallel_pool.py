@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import multiprocessing as mp
 import subprocess
 import sys
 import time
@@ -156,6 +157,41 @@ def test_managed_pool_drains_metadata_while_waiting(
 
     assert results == [("job", "done")]
     assert events[:4] == ["collect", "wait", "collect", "wait"]
+
+
+def test_collect_nonblock_drains_spawn_simple_queues() -> None:
+    ctx = mp.get_context("spawn")
+    pid_queue = ctx.SimpleQueue()
+    child_pg_queue = ctx.SimpleQueue()
+    try:
+        pid_queue.put(101)
+        pid_queue.put(102)
+        child_pg_queue.put(201)
+        child_pg_queue.put(202)
+
+        worker_pids: set[int] = set()
+        child_pgids: set[int] = set()
+        parallel_pool_mod._collect_nonblock(
+            pid_queue,
+            child_pg_queue,
+            worker_pids,
+            child_pgids,
+        )
+
+        assert worker_pids == {101, 102}
+        assert child_pgids == {201, 202}
+
+        parallel_pool_mod._collect_nonblock(
+            pid_queue,
+            child_pg_queue,
+            worker_pids,
+            child_pgids,
+        )
+        assert worker_pids == {101, 102}
+        assert child_pgids == {201, 202}
+    finally:
+        parallel_pool_mod._close_queue(pid_queue)
+        parallel_pool_mod._close_queue(child_pg_queue)
 
 
 def test_run_with_pool_returns_results() -> None:

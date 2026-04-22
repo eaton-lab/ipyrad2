@@ -86,6 +86,29 @@ def _log_parallel_job_error(exc: ParallelJobError) -> None:
     )
 
 
+def _queue_get_nonblock(qobj: Any) -> Any:
+    """Return one queue item without blocking across Queue and SimpleQueue APIs."""
+    get_nowait = getattr(qobj, "get_nowait", None)
+    if get_nowait is not None:
+        return get_nowait()
+
+    reader = getattr(qobj, "_reader", None)
+    poll = getattr(reader, "poll", None)
+    if poll is not None:
+        if not poll():
+            raise queue.Empty
+        return qobj.get()
+
+    empty = getattr(qobj, "empty", None)
+    if empty is not None and empty():
+        raise queue.Empty
+
+    get = getattr(qobj, "get", None)
+    if get is None:
+        raise queue.Empty
+    return get(block=False)
+
+
 def _collect_nonblock(
     pid_queue: mp.queues.Queue[int],
     child_pg_queue: mp.queues.Queue[int],
@@ -95,7 +118,7 @@ def _collect_nonblock(
     """Drain PID and PGID queues without blocking."""
     while True:
         try:
-            worker_pids.add(pid_queue.get_nowait())
+            worker_pids.add(_queue_get_nonblock(pid_queue))
         except queue.Empty:
             break
         except Exception:
@@ -103,7 +126,7 @@ def _collect_nonblock(
 
     while True:
         try:
-            child_pgids.add(child_pg_queue.get_nowait())
+            child_pgids.add(_queue_get_nonblock(child_pg_queue))
         except queue.Empty:
             break
         except Exception:
