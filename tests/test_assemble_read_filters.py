@@ -2945,6 +2945,155 @@ def test_run_assembler_rename_bams_overrides_header_names_for_populations_and_ou
     assert observed["snames"] == ["renamed_rad"]
 
 
+def test_run_assembler_counts_mapper_collapsed_sample_once_in_shared_bed_stage(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    merged_bam = tmp_path / "merged.filtered.bam"
+    merged_bam.write_text("", encoding="utf-8")
+    populations = tmp_path / "groups.tsv"
+    populations.write_text("merged_rep\tpop1\n", encoding="utf-8")
+
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble.get_name_from_bam",
+        lambda _path: "merged_rep",
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._collect_bam_metadata",
+        lambda bam_dict, log_level, max_workers: {
+            sname: {"layout": "paired", "header_records": [("chr1", 4)]}
+            for sname in bam_dict
+        },
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble.get_reference_sort_order",
+        lambda _reference, tmpdir: (tmpdir / "REF_info.txt").write_text(
+            "chr1\t4\n",
+            encoding="utf-8",
+        ),
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._prepare_analysis_bams",
+        lambda **kwargs: {
+            sname: kwargs["tmpdir"] / "analysis_bams" / f"{sname}.analysis.filtered.bam"
+            for sname in kwargs["bam_dict"]
+        },
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._validate_bam_header_records_match_reference",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble.run_with_pool",
+        lambda jobs, log_level, max_workers=None, msg="Processing": {
+            sname: None for sname in jobs
+        },
+    )
+
+    def _fake_get_across_sample_loci_bed(_snames, _mincov, _merge, _minlen, _suffix, tmpdir):
+        observed["shared_bed_snames"] = list(_snames)
+        loci_bed = tmpdir / "beds" / "merged_rep.shared_input.bed"
+        loci_bed.write_text("chr1\t0\t4\n", encoding="utf-8")
+        return loci_bed
+
+    def _fake_run_paralog_stage(**kwargs):
+        observed["paralog_sample_bams"] = sorted(kwargs["sample_bams"])
+        final_bed = kwargs["bed_dir"] / "loci.bed"
+        final_bed.write_text("chr1\t0\t4\n", encoding="utf-8")
+        return ParalogStageOutputs(
+            shared_loci_bed=final_bed,
+            debug_shared_loci_bed=kwargs["bed_dir"] / "loci.paralog_filtered.bed",
+            sample_retained_beds={"merged_rep": kwargs["bed_dir"] / "merged_rep.final.good.bed"},
+        )
+
+    def _fake_run_variant_stage(**kwargs):
+        observed["group_samples_file"] = kwargs["group_samples_file"]
+        observed["variant_bams"] = sorted(kwargs["bam_dict"])
+        return kwargs["tmpdir"] / "vcfs" / "variants.resolved.vcf.gz"
+
+    def _fake_write_consensus_and_outputs(**kwargs):
+        observed["snames"] = kwargs["snames"]
+
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble.get_across_sample_loci_bed",
+        _fake_get_across_sample_loci_bed,
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._run_paralog_stage",
+        _fake_run_paralog_stage,
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._prepare_variant_call_bams",
+        lambda **kwargs: {
+            sname: kwargs["tmpdir"] / "calling_bams" / f"{sname}.variant.filtered.bam"
+            for sname in kwargs["sample_bams"]
+        },
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._run_variant_stage",
+        _fake_run_variant_stage,
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._build_sample_masks",
+        lambda **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._write_consensus_and_outputs",
+        _fake_write_consensus_and_outputs,
+    )
+
+    run_assembler(
+        rad_bams=[merged_bam],
+        wgs_bams=None,
+        reference=reference,
+        outdir=tmp_path / "OUT",
+        name="assembly",
+        loci_bed=None,
+        min_map_q=10,
+        max_tlen=None,
+        max_softclip=None,
+        max_nm=None,
+        min_site_q=13,
+        min_geno_q=13,
+        min_base_q=13,
+        min_sample_depth=1,
+        min_locus_sample_coverage=1,
+        min_locus_trim_sample_coverage=1,
+        min_locus_length=25,
+        min_locus_merge_distance=300,
+        max_locus_hetero_frequency=0.3,
+        max_locus_variant_frequency=1.0,
+        max_sample_hetero_frequency=0.10,
+        softclip_len_threshold=20,
+        softclip_frac_max=0.5,
+        depth_z_max=7.0,
+        third_frac_cut=0.10,
+        min_3allele_sites=2,
+        maf_threshold=0.20,
+        max_sites_above_maf=8,
+        paralog_fail_frac_max=0.10,
+        populations=populations,
+        rename_bams=None,
+        masks=None,
+        cores=2,
+        threads=1,
+        force=False,
+        log_level="WARNING",
+    )
+
+    assert observed["shared_bed_snames"] == ["merged_rep"]
+    assert observed["paralog_sample_bams"] == ["merged_rep"]
+    assert observed["variant_bams"] == ["merged_rep"]
+    assert observed["snames"] == ["merged_rep"]
+    group_samples_file = observed["group_samples_file"]
+    assert group_samples_file == tmp_path / "OUT" / "assembly_tmpdir" / "populations.normalized.tsv"
+    assert group_samples_file.read_text(encoding="utf-8") == "merged_rep\tpop1\n"
+
+
 def test_run_assembler_requires_rad_bams_when_no_loci_bed(
     monkeypatch,
     tmp_path: Path,
