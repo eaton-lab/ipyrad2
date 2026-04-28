@@ -12,6 +12,7 @@ Examples
 --------
 $ ipyrad2 map -d DATA/*.fastq.gz -r REF.fa -o BAMS
 $ ipyrad2 map -d DATA/*.fastq.gz -r REF.fa -o BAMS -i IMAP.tsv
+$ ipyrad2 map -d DATA/*.fastq.gz -r REF.fa -o BAMS --reindex-reference
 $ ipyrad2 map -d DATA/*.fastq.gz -r REF.fa -o BAMS -m
 $ ipyrad2 map -d DATA/*.fastq.gz -r REF.fa -o BAMS -u
 """
@@ -39,7 +40,7 @@ def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = N
     )
     core.add_argument(
         "-r", "--reference", metavar="Path", type=Path, required=True,
-        help="Reference FASTA to index and map against.",
+        help="Reference FASTA to map against. Build bwa-mem2 indexes if missing, otherwise reuse existing indexes.",
     )
     core.add_argument(
         "-o", "--out", metavar="Path", type=Path, default="./MAPPED",
@@ -82,7 +83,11 @@ def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = N
     )
     performance.add_argument(
         "-f", "--force", action="store_true",
-        help="Overwrite existing BAM outputs for matching sample names.",
+        help="Overwrite existing BAM outputs for matching sample names. Does not re-index the reference.",
+    )
+    performance.add_argument(
+        "--reindex-reference", action="store_true",
+        help="Rebuild bwa-mem2 reference indexes even when matching sidecar files already exist.",
     )
 
     logging.add_argument(

@@ -740,7 +740,7 @@ def test_validate_analysis_bams_match_reference_mentions_stale_bwa_indexes(
 
     with pytest.raises(
         IPyradError,
-        match=r"stale bwa-mem2 sidecar index files",
+        match=r"stale bwa-mem2 sidecar index files.*ipyrad2 map --reindex-reference",
     ):
         assemble_module._validate_analysis_bams_match_reference(
             {"sample": bam_file},

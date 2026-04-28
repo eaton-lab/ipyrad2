@@ -393,6 +393,7 @@ def run_subcommand(args, _exit=True):
             cores=args.cores,
             threads=args.threads,
             force=args.force,
+            reindex_reference=args.reindex_reference,
             delim_str=args.delim_str,
             delim_idx=args.delim_idx,
             log_level=args.log_level,

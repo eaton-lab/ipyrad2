@@ -118,14 +118,19 @@ def _check_duplicate_mode_warnings(
         )
 
 
-def _index_ref_with_bwa(reference: Path) -> None:
-    """Index the reference with bwa-mem2 unless it is already indexed."""
+def _reference_bwa_index_paths(reference: Path) -> list[Path]:
+    """Return expected bwa-mem2 sidecar index paths for one reference FASTA."""
+    suffixes = [".pac", ".ann", ".amb", ".0123", ".bwt.2bit.64"]
+    return [reference.with_suffix(reference.suffix + suffix) for suffix in suffixes]
+
+
+def _index_ref_with_bwa(reference: Path, force_reindex: bool = False) -> None:
+    """Index the reference with bwa-mem2 when missing or explicitly requested."""
     _require(reference.exists(), f"reference path {reference} does not exist.")
 
-    suffixes = [".pac", ".ann", ".amb", ".0123", ".bwt.2bit.64"]
-    index_paths = [reference.with_suffix(reference.suffix + suffix) for suffix in suffixes]
-    if all(path.exists() for path in index_paths):
-        logger.debug(f"reference is already bwa indexed: {reference}")
+    index_paths = _reference_bwa_index_paths(reference)
+    if all(path.exists() for path in index_paths) and not force_reindex:
+        logger.info(f"using existing bwa-mem2 reference index: {reference.name}")
         return
 
     if not os.access(reference.parent, os.W_OK | os.X_OK):
@@ -133,7 +138,10 @@ def _index_ref_with_bwa(reference: Path) -> None:
             "cannot index reference because you do not have write access to its directory."
         )
 
-    logger.info(f"indexing reference: {reference.name}")
+    if force_reindex:
+        logger.info(f"re-indexing reference: {reference.name}")
+    else:
+        logger.info(f"indexing reference: {reference.name}")
     cmd = [
         BIN_BWA, "index",
         str(reference),
@@ -424,6 +432,7 @@ def run_mapper(
     cores: int,
     threads: int,
     force: bool,
+    reindex_reference: bool,
     mark_dups_by_coords: bool,
     mark_dups_by_umis: bool,
     delim_str: str | None,
@@ -467,7 +476,7 @@ def run_mapper(
         logger.info("all samples are completed.")
         raise SystemExit(0)
 
-    _index_ref_with_bwa(reference)
+    _index_ref_with_bwa(reference, force_reindex=reindex_reference)
 
     workers = max(1, cores // threads)
     logger.info(
