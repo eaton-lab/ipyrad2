@@ -14,7 +14,7 @@ attrs["indexing"]: [0, 0, 0, 0, 0]
 genos
 -----
 description: The ordered diploid genotype call of the ordered samples at
-every SNP position. If call is "1/1" and
+every SNP position.
 dtype: np.uint8
 shape: (nsamples, nsnps, 3)
 example:
@@ -29,27 +29,54 @@ shape: (nsnps,)
 """
 
 from __future__ import annotations
-from typing import Dict, Iterator, Tuple, Union, List, Optional
+
+from dataclasses import dataclass
 from pathlib import Path
-import gzip
+import sys
+from typing import Dict, List, Tuple, Union
+
 import h5py
-import pandas as pd
-import numpy as np
 from loguru import logger
+import numpy as np
+import pandas as pd
+
+from ..utils.parallel import run_pipeline
+from ..utils.parallel import run_with_pool
 from .hdf5_utils import choose_hdf5_cache_settings
 from .hdf5_utils import choose_unsigned_int_dtype
 from .hdf5_utils import format_bytes
 from .hdf5_utils import get_fai_values
 
-# IUPAC ambiguity codes for heterozygous SNPs (unordered allele pairs).
-_IUPAC = {
-    frozenset(("A", "G")): "R",
-    frozenset(("C", "T")): "Y",
-    frozenset(("G", "C")): "S",
-    frozenset(("A", "T")): "W",
-    frozenset(("G", "T")): "K",
-    frozenset(("A", "C")): "M",
-}
+
+BIN = Path(sys.prefix) / "bin"
+BIN_BCF = str(BIN / "bcftools")
+_N_ORD = np.uint8(ord("N"))
+_VALID_BASE_BYTES = np.array(
+    [ord("A"), ord("C"), ord("G"), ord("T")],
+    dtype=np.uint8,
+)
+_IUPAC_BYTE_LOOKUP = np.full((256, 256), _N_ORD, dtype=np.uint8)
+for (base0, base1), code in {
+    ("A", "G"): "R",
+    ("C", "T"): "Y",
+    ("G", "C"): "S",
+    ("A", "T"): "W",
+    ("G", "T"): "K",
+    ("A", "C"): "M",
+}.items():
+    b0 = ord(base0)
+    b1 = ord(base1)
+    _IUPAC_BYTE_LOOKUP[b0, b1] = ord(code)
+    _IUPAC_BYTE_LOOKUP[b1, b0] = ord(code)
+
+
+@dataclass(frozen=True)
+class _SnpChunkPlan:
+    """Metadata for one chunk-local SNP query job."""
+
+    chunk_idx: int
+    chunk_bed: Path
+    bed_offset: int
 
 
 def _choose_chunk_snps(
@@ -59,9 +86,355 @@ def _choose_chunk_snps(
     max_snps: int = 262_144,
 ) -> int:
     """Choose the SNP-axis chunk size for the read-optimized HDF5 datasets."""
-    bytes_per_snp = max(1, nsamples * 3)             # uint8 * 3 planes
+    bytes_per_snp = max(1, nsamples * 3)
     by_size = int((target_mb * 1024 * 1024) // bytes_per_snp)
     return max(min_snps, min(by_size, max_snps))
+
+
+def _choose_worker_count(cores: int, threads: int) -> int:
+    """Bound SNP-writer workers to the assemble job budget."""
+    return max(1, int(cores) // max(1, int(threads)))
+
+
+def _choose_chunk_count(
+    nloci: int,
+    worker_count: int,
+    requested_chunks: int | None = None,
+) -> int:
+    """Choose a bounded number of loci chunks for SNP conversion."""
+    if requested_chunks is not None:
+        return max(1, min(int(requested_chunks), nloci))
+    return max(1, min(nloci, max(8, worker_count * 8)))
+
+
+def load_bed_index_nonoverlap(
+    bed_path: Union[str, Path],
+) -> Tuple[Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]], Dict[str, int]]:
+    """Load a non-overlapping BED into per-chrom arrays and a scaffold index map."""
+    df = pd.read_csv(
+        bed_path,
+        sep="\t",
+        header=None,
+        dtype={0: str, 1: "Int64", 2: "Int64"},
+        engine="c",
+        na_filter=False,
+    )
+    df = df[[0, 1, 2]].rename(columns={0: "chrom", 1: "start", 2: "end"})
+    df["bed_idx"] = df.index.to_numpy()
+
+    bed_index: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    chrom_order: List[str] = []
+
+    for chrom, sub in df.groupby("chrom", sort=False):
+        chrom_order.append(chrom)
+        sub = sub.sort_values("start", kind="mergesort")
+        starts = sub["start"].to_numpy(dtype=np.int64, copy=True)
+        ends = sub["end"].to_numpy(dtype=np.int64, copy=True)
+        idxs = sub["bed_idx"].to_numpy(dtype=np.int64, copy=True)
+        if starts.size and np.any(starts[1:] < ends[:-1]):
+            raise ValueError(
+                f"BED intervals overlap on {chrom}, but non-overlap was assumed."
+            )
+        bed_index[chrom] = (starts, ends, idxs)
+
+    scaff2idx = {name: i for i, name in enumerate(chrom_order)}
+    return bed_index, scaff2idx
+
+
+def _write_chunk_beds_with_offsets(
+    *,
+    loci_bed: Path,
+    workdir: Path,
+    nchunks: int,
+) -> list[_SnpChunkPlan]:
+    """Split one BED into chunk BEDs while tracking global BED row offsets."""
+    lines = [line for line in loci_bed.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not lines:
+        raise ValueError(f"No loci found in {loci_bed}.")
+
+    nchunks = max(1, min(int(nchunks), len(lines)))
+    q, r = divmod(len(lines), nchunks)
+    plans: list[_SnpChunkPlan] = []
+    offset = 0
+    cursor = 0
+    for chunk_idx in range(nchunks):
+        size = q + (1 if chunk_idx < r else 0)
+        chunk_lines = lines[cursor : cursor + size]
+        chunk_bed = workdir / f"snp-writer-chunk-{chunk_idx}.bed"
+        chunk_bed.write_text("\n".join(chunk_lines) + "\n", encoding="utf-8")
+        plans.append(
+            _SnpChunkPlan(
+                chunk_idx=chunk_idx,
+                chunk_bed=chunk_bed,
+                bed_offset=offset,
+            )
+        )
+        offset += size
+        cursor += size
+    return plans
+
+
+def _return_gt_allele(gt_field: str, index: int) -> np.uint8:
+    """Return one allele index from a bare GT token, else 255 for missing."""
+    try:
+        value = gt_field[index]
+    except (IndexError, TypeError):
+        return np.uint8(255)
+    if value == ".":
+        return np.uint8(255)
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return np.uint8(255)
+    return np.uint8(parsed if parsed >= 0 else 255)
+
+
+_v_return_gt_allele = np.vectorize(_return_gt_allele, otypes=[np.uint8])
+
+
+def _chunk_query_to_gt_arrays(
+    chunkdf: pd.DataFrame,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Convert one bcftools GT-only query chunk into genotype and REF arrays."""
+    nsnps = int(chunkdf.shape[0])
+    nsamples = max(0, int(chunkdf.shape[1]) - 4)
+
+    ref = np.frombuffer(
+        "".join(chunkdf.iloc[:, 2].astype(str)).encode("ascii"),
+        dtype=np.uint8,
+    )
+    alts = chunkdf.iloc[:, 3].astype(bytes).to_numpy(copy=False)
+    alt_bytes = np.char.replace(alts, b",", b"")
+    alts1 = np.zeros(nsps := nsnps, dtype=np.uint8)
+    alts2 = np.zeros(nsps, dtype=np.uint8)
+    alts3 = np.zeros(nsps, dtype=np.uint8)
+    lengths = np.fromiter((len(value) for value in alt_bytes), count=nsps, dtype=np.int64)
+    if np.any(lengths >= 1):
+        alts1[lengths >= 1] = [value[0] for value in alt_bytes[lengths >= 1]]
+    if np.any(lengths >= 2):
+        alts2[lengths >= 2] = [value[1] for value in alt_bytes[lengths >= 2]]
+    if np.any(lengths >= 3):
+        alts3[lengths >= 3] = [value[2] for value in alt_bytes[lengths >= 3]]
+
+    gt_fields = chunkdf.iloc[:, 4:]
+    g0 = _v_return_gt_allele(gt_fields, 0)
+    g1 = _v_return_gt_allele(gt_fields, 2)
+
+    alleles = np.column_stack((ref, alts1, alts2, alts3)).astype(np.uint8, copy=False)
+    row_index = np.arange(nsnps, dtype=np.int64)[:, None]
+    a0 = alleles[row_index, np.minimum(g0, 3)]
+    a1 = alleles[row_index, np.minimum(g1, 3)]
+
+    snps = np.full((nsnps, nsamples), _N_ORD, dtype=np.uint8)
+    homo = (g0 == g1) & (g0 <= 3)
+    homo_bases = a0
+    homo_valid = homo & np.isin(homo_bases, _VALID_BASE_BYTES)
+    snps[homo_valid] = homo_bases[homo_valid]
+
+    het = (g0 != g1) & (g0 <= 3) & (g1 <= 3)
+    het_codes = _IUPAC_BYTE_LOOKUP[a0, a1]
+    het_valid = het & (het_codes != _N_ORD)
+    snps[het_valid] = het_codes[het_valid]
+
+    genos = np.empty((nsamples, nsnps, 3), dtype=np.uint8)
+    genos[:, :, 0] = g0.T
+    genos[:, :, 1] = g1.T
+    genos[:, :, 2] = snps.T
+    return genos, ref, snps
+
+
+def _build_chunk_snpsmap(
+    chunkdf: pd.DataFrame,
+    *,
+    bed_index: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]],
+    scaff2idx: Dict[str, int],
+    bed_offset: int,
+    counters: Dict[str, np.ndarray],
+    map_dtype: np.dtype,
+) -> np.ndarray:
+    """Build `snpsmap` rows for one GT query chunk."""
+    chunkdf = chunkdf.reset_index(drop=True)
+    snpsmap = np.empty((chunkdf.shape[0], 5), dtype=map_dtype)
+
+    for chrom, sub in chunkdf.groupby(0, sort=False):
+        rows = sub.index.to_numpy(dtype=np.int64, copy=False)
+        pos0 = sub.iloc[:, 1].to_numpy(dtype=np.int64, copy=False) - 1
+        tup = bed_index.get(chrom)
+        if tup is None:
+            raise ValueError(f"Variant chunk contains chromosome absent from BED: {chrom}")
+        starts, ends, bedix = tup
+        interval_idx = np.searchsorted(starts, pos0, side="right") - 1
+        valid = (interval_idx >= 0) & (pos0 < ends[interval_idx])
+        if not np.all(valid):
+            bad_pos0 = int(pos0[np.flatnonzero(~valid)[0]])
+            raise ValueError(
+                f"Variant {chrom}:{bad_pos0 + 1} (pos0={bad_pos0}) not covered by chunk BED."
+            )
+
+        snpsmap[rows, 0] = bed_offset + bedix[interval_idx]
+        snpsmap[rows, 2] = pos0 - starts[interval_idx]
+        snpsmap[rows, 3] = scaff2idx[chrom]
+        snpsmap[rows, 4] = pos0
+
+        # Query output is sorted by coordinate, so variants inside the same BED
+        # interval arrive contiguously and can be counted in stable runs.
+        breaks = np.flatnonzero(np.diff(interval_idx)) + 1
+        for run in np.split(np.arange(interval_idx.size), breaks):
+            local_idx = int(interval_idx[run[0]])
+            start = int(counters[chrom][local_idx])
+            count = int(run.size)
+            snpsmap[rows[run], 1] = np.arange(start, start + count, dtype=map_dtype)
+            counters[chrom][local_idx] += count
+
+    return snpsmap
+
+
+def _write_snp_chunk_worker(
+    *,
+    chunk_idx: int,
+    chunk_bed: Path,
+    bed_offset: int,
+    vcf_path: Path,
+    snames: list[str],
+    workdir: Path,
+    scaff2idx: Dict[str, int],
+    map_dtype: np.dtype,
+    vcf_chunk_rows: int,
+) -> Dict[str, object]:
+    """Materialize one BED-local SNP chunk to temporary `.npy` arrays."""
+    workdir.mkdir(parents=True, exist_ok=True)
+    query_tsv = workdir / f"snp-query-{chunk_idx}.tsv"
+    out_map = workdir / f"snp-chunk-{chunk_idx}.snpsmap.npy"
+    out_gen = workdir / f"snp-chunk-{chunk_idx}.genos.npy"
+    out_ref = workdir / f"snp-chunk-{chunk_idx}.reference.npy"
+
+    try:
+        sample_arg = ",".join(snames)
+        query_cmd = [
+            BIN_BCF,
+            "query",
+            "-R",
+            str(chunk_bed),
+            "-s",
+            sample_arg,
+            "-i",
+            'FILTER="PASS" && TYPE="snp"',
+            "-f",
+            "%CHROM\t%POS\t%REF\t%ALT[\t%GT]\n",
+            str(vcf_path),
+        ]
+        run_pipeline([query_cmd], outfile=query_tsv)
+
+        if not query_tsv.exists() or query_tsv.stat().st_size == 0:
+            np.save(out_map, np.empty((0, 5), dtype=map_dtype), allow_pickle=False)
+            np.save(
+                out_gen,
+                np.empty((len(snames), 0, 3), dtype=np.uint8),
+                allow_pickle=False,
+            )
+            np.save(out_ref, np.empty((0,), dtype=np.uint8), allow_pickle=False)
+            return {
+                "chunk_idx": chunk_idx,
+                "nsnps": 0,
+                "snpsmap": str(out_map),
+                "genos": str(out_gen),
+                "reference": str(out_ref),
+            }
+
+        bed_index, _local_scaff2idx = load_bed_index_nonoverlap(chunk_bed)
+        counters: Dict[str, np.ndarray] = {
+            chrom: np.zeros(len(starts), dtype=np.int64)
+            for chrom, (starts, _ends, _idxs) in bed_index.items()
+        }
+        maps: list[np.ndarray] = []
+        genos: list[np.ndarray] = []
+        refs: list[np.ndarray] = []
+        total = 0
+
+        for chunkdf in pd.read_csv(
+            query_tsv,
+            sep="\t",
+            header=None,
+            dtype=str,
+            na_filter=False,
+            engine="c",
+            chunksize=int(vcf_chunk_rows),
+        ):
+            chunkdf = chunkdf.reset_index(drop=True)
+            chunk_map = _build_chunk_snpsmap(
+                chunkdf,
+                bed_index=bed_index,
+                scaff2idx=scaff2idx,
+                bed_offset=bed_offset,
+                counters=counters,
+                map_dtype=map_dtype,
+            )
+            chunk_genos, chunk_ref, _chunk_snps = _chunk_query_to_gt_arrays(chunkdf)
+            maps.append(chunk_map)
+            genos.append(chunk_genos)
+            refs.append(chunk_ref)
+            total += int(chunkdf.shape[0])
+
+        map_arr = (
+            np.concatenate(maps, axis=0)
+            if maps
+            else np.empty((0, 5), dtype=map_dtype)
+        )
+        gen_arr = (
+            np.concatenate(genos, axis=1)
+            if genos
+            else np.empty((len(snames), 0, 3), dtype=np.uint8)
+        )
+        ref_arr = (
+            np.concatenate(refs, axis=0)
+            if refs
+            else np.empty((0,), dtype=np.uint8)
+        )
+        np.save(out_map, map_arr, allow_pickle=False)
+        np.save(out_gen, gen_arr, allow_pickle=False)
+        np.save(out_ref, ref_arr, allow_pickle=False)
+        return {
+            "chunk_idx": chunk_idx,
+            "nsnps": int(total),
+            "snpsmap": str(out_map),
+            "genos": str(out_gen),
+            "reference": str(out_ref),
+        }
+    finally:
+        query_tsv.unlink(missing_ok=True)
+
+
+def _append_snp_chunk(
+    *,
+    result: Dict[str, object],
+    snpsmap_ds: h5py.Dataset,
+    genos_ds: h5py.Dataset,
+    reference_ds: h5py.Dataset,
+    total: int,
+) -> int:
+    """Append one temporary chunk's arrays into the final HDF5 datasets."""
+    map_path = Path(str(result["snpsmap"]))
+    gen_path = Path(str(result["genos"]))
+    ref_path = Path(str(result["reference"]))
+    try:
+        map_arr = np.load(map_path, allow_pickle=False)
+        if map_arr.shape[0] == 0:
+            return total
+        gen_arr = np.load(gen_path, allow_pickle=False)
+        ref_arr = np.load(ref_path, allow_pickle=False)
+        new_total = total + int(map_arr.shape[0])
+        nsamples = int(genos_ds.shape[0])
+        snpsmap_ds.resize((new_total, 5))
+        genos_ds.resize((nsamples, new_total, 3))
+        reference_ds.resize((new_total,))
+        snpsmap_ds[total:new_total, :] = map_arr
+        genos_ds[:, total:new_total, :] = gen_arr
+        reference_ds[total:new_total] = ref_arr
+        return new_total
+    finally:
+        map_path.unlink(missing_ok=True)
+        gen_path.unlink(missing_ok=True)
+        ref_path.unlink(missing_ok=True)
 
 
 def write_snps_hdf5(
@@ -69,24 +442,33 @@ def write_snps_hdf5(
     outdir: Path,
     snames: List[str],
     reference: Path,
+    *,
+    tmpdir: Path | None = None,
+    cores: int = 1,
+    threads: int = 1,
+    log_level: str = "INFO",
+    chunk_count: int | None = None,
+    vcf_chunk_rows: int = 100_000,
 ) -> int:
-    """Stream VCF→HDF5 with read-optimized chunking."""
-    # paths
+    """Write the final assemble SNP HDF5 by chunked GT-only VCF conversion."""
     database = outdir / f"{name}.hdf5"
     vcf_path = outdir / f"{name}.vcf.gz"
     loci_bed = outdir / f"{name}.bed"
+    workdir = Path(tmpdir) if tmpdir is not None else outdir
+    snp_tmpdir = workdir / "snp_writer_tmp"
+    snp_tmpdir.mkdir(parents=True, exist_ok=True)
 
-    # Keep only empirical samples here; the sequence HDF5 already stores the
-    # reference row separately in the `phy` alignment dataset.
     snames = sorted(snames)
     nsamples = len(snames)
-
-    # pick chunk size along SNP axis (tuned for read-many)
     chunk_snps = _choose_chunk_snps(nsamples, target_mb=128, max_snps=131_072)
     bed_index, scaff2idx = load_bed_index_nonoverlap(loci_bed)
     nloci = sum(len(starts) for starts, _ends, _idxs in bed_index.values())
     max_locus_length = max(
-        (int((ends - starts).max()) for starts, ends, _idxs in bed_index.values() if len(starts)),
+        (
+            int((ends - starts).max())
+            for starts, ends, _idxs in bed_index.values()
+            if len(starts)
+        ),
         default=0,
     )
     map_dtype = choose_unsigned_int_dtype(
@@ -97,326 +479,110 @@ def write_snps_hdf5(
             max((int(i) for i in get_fai_values(reference, "length")), default=0),
         )
     )
+    worker_count = _choose_worker_count(cores, threads)
+    nchunks = _choose_chunk_count(nloci, worker_count, requested_chunks=chunk_count)
+    plans = _write_chunk_beds_with_offsets(
+        loci_bed=loci_bed,
+        workdir=snp_tmpdir,
+        nchunks=nchunks,
+    )
 
-    # HDF5 file/open options
     kwargs = choose_hdf5_cache_settings()
     string_dtype = h5py.string_dtype(encoding="utf-8")
     logger.debug(
-        "snps writer config: chunk_snps={}, cache={}, cache_slots={}, map_dtype={}, nloci={}",
+        "snps writer config: chunk_snps={}, cache={}, cache_slots={}, map_dtype={}, nloci={}, workers={}, chunks={}",
         chunk_snps,
         format_bytes(int(kwargs["rdcc_nbytes"])),
         kwargs["rdcc_nslots"],
         map_dtype.name,
         nloci,
+        worker_count,
+        len(plans),
     )
-    with h5py.File(database, "a", **kwargs) as io5:
-        # ---- datasets (extendable along SNP axis) ----
-        # SNP map: (n_snps, 5)
-        snpsmap = io5.create_dataset(
-            "snpsmap",
-            shape=(0, 5),
-            maxshape=(None, 5),
-            dtype=map_dtype,
-            chunks=(chunk_snps, 5),
-            compression="gzip", compression_opts=4, shuffle=True
+
+    jobs = {
+        plan.chunk_idx: (
+            _write_snp_chunk_worker,
+            dict(
+                chunk_idx=plan.chunk_idx,
+                chunk_bed=plan.chunk_bed,
+                bed_offset=plan.bed_offset,
+                vcf_path=vcf_path,
+                snames=snames,
+                workdir=snp_tmpdir,
+                scaff2idx=scaff2idx,
+                map_dtype=map_dtype,
+                vcf_chunk_rows=vcf_chunk_rows,
+            ),
         )
-        snpsmap.attrs["columns"] = ["loc", "loc_idx", "loc_pos", "scaff", "pos"]
-        snpsmap.attrs["indexing"] = [0, 0, 0, 0, 0]
+        for plan in plans
+    }
+    chunk_results = run_with_pool(
+        jobs,
+        log_level,
+        max_workers=worker_count,
+        msg="Building SNP database chunks",
+    )
 
-        # Genotypes: (nsamples, n_snps, 3)  ← note fixed sample axis
-        genos = io5.create_dataset(
-            "genos",
-            shape=(nsamples, 0, 3),
-            maxshape=(nsamples, None, 3),
-            dtype=np.uint8,
-            chunks=(nsamples, chunk_snps, 3),
-            compression="gzip", compression_opts=4, shuffle=True
-        )
-        genos.attrs["names"] = np.array(snames, dtype=string_dtype)
+    try:
+        with h5py.File(database, "a", **kwargs) as io5:
+            snpsmap_ds = io5.create_dataset(
+                "snpsmap",
+                shape=(0, 5),
+                maxshape=(None, 5),
+                dtype=map_dtype,
+                chunks=(chunk_snps, 5),
+                compression="gzip",
+                compression_opts=4,
+                shuffle=True,
+            )
+            snpsmap_ds.attrs["columns"] = ["loc", "loc_idx", "loc_pos", "scaff", "pos"]
+            snpsmap_ds.attrs["indexing"] = [0, 0, 0, 0, 0]
 
-        # Reference ord per SNP: (n_snps,)
-        reference_ord = io5.create_dataset(
-            "reference",
-            shape=(0,),
-            maxshape=(None,),
-            dtype=np.uint8,
-            chunks=(chunk_snps,),
-            compression="gzip", compression_opts=4, shuffle=True
-        )
+            genos_ds = io5.create_dataset(
+                "genos",
+                shape=(nsamples, 0, 3),
+                maxshape=(nsamples, None, 3),
+                dtype=np.uint8,
+                chunks=(nsamples, chunk_snps, 3),
+                compression="gzip",
+                compression_opts=4,
+                shuffle=True,
+            )
+            genos_ds.attrs["names"] = np.array(snames, dtype=string_dtype)
 
-        # --- Streaming buffers (one chunk per flush) ---
-        buf_map = np.empty((chunk_snps, 5), dtype=map_dtype)
-        buf_gen = np.empty((nsamples, chunk_snps, 3), dtype=np.uint8)
-        buf_ref = np.empty((chunk_snps,), dtype=np.uint8)
-        fill = 0
-        total = 0
-        N_ord = np.uint8(ord("N"))
+            reference_ds = io5.create_dataset(
+                "reference",
+                shape=(0,),
+                maxshape=(None,),
+                dtype=np.uint8,
+                chunks=(chunk_snps,),
+                compression="gzip",
+                compression_opts=4,
+                shuffle=True,
+            )
 
-        def flush(n: int):
-            nonlocal total
-            if n == 0:
-                return
-            new_total = total + n
-            snpsmap.resize((new_total, 5))
-            genos.resize((nsamples, new_total, 3))
-            reference_ord.resize((new_total,))
-            # write slices
-            snpsmap[total:new_total, :] = buf_map[:n, :]
-            genos[:, total:new_total, :] = buf_gen[:, :n, :]
-            reference_ord[total:new_total] = buf_ref[:n]
-            total = new_total
+            total = 0
+            for chunk_idx in sorted(chunk_results):
+                total = _append_snp_chunk(
+                    result=chunk_results[chunk_idx],
+                    snpsmap_ds=snpsmap_ds,
+                    genos_ds=genos_ds,
+                    reference_ds=reference_ds,
+                    total=total,
+                )
+            io5.attrs["nsnps"] = int(total)
+    finally:
+        for plan in plans:
+            plan.chunk_bed.unlink(missing_ok=True)
 
-        # drain generator
-        it = iter_vcf_filtered_snps_with_bed(
-            vcf_path,
-            loci_bed,
-            snames,
-            bed_index=bed_index,
-            scaff2idx=scaff2idx,
-        )
-        for bed_idx, var_idx_in_bed, offset_in_bed, scaff_idx, pos0, scaff_name, REF, ALT, QUAL, GT in it:
-            # map row
-            buf_map[fill, 0] = bed_idx
-            buf_map[fill, 1] = var_idx_in_bed
-            buf_map[fill, 2] = offset_in_bed
-            buf_map[fill, 3] = scaff_idx
-            buf_map[fill, 4] = pos0
-
-            # genotypes come as (nsamples,3) → place into current SNP column
-            buf_gen[:, fill, :] = GT
-
-            # reference ord
-            buf_ref[fill] = np.uint8(ord(REF)) if REF in ("A","C","G","T") else N_ord
-
-            fill += 1
-            if fill == chunk_snps:
-                flush(fill)
-                fill = 0
-        flush(fill)
-        io5.attrs["nsnps"] = int(total)
     if total == 0:
         logger.debug("wrote empty SNP dataset to {}", database)
     else:
-        logger.debug("wrote snps dataset to {} (nsnps={:,})", database, total)
+        logger.debug(
+            "wrote snps dataset to {} (nsnps={:,}, chunks={})",
+            database,
+            total,
+            len(plans),
+        )
     return int(total)
-
-
-def load_bed_index_nonoverlap(bed_path: Union[str, Path]) -> Tuple[Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]], Dict[str, int]]:
-    """Load a non-overlapping BED into per-chrom arrays and a scaffold index map."""
-    df = pd.read_csv(
-        bed_path,
-        sep="\t",
-        header=None,
-        dtype={0: str, 1: "Int64", 2: "Int64", 3: "Int64"},
-        engine="c",
-        na_filter=False,
-    )
-    df = df[[0, 1, 2]].rename(columns={0: "chrom", 1: "start", 2: "end"})
-    df["bed_idx"] = df.index.to_numpy()
-
-    # iterate over chroms filling bed_index and chrom_order dicts
-    bed_index: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
-    chrom_order: List[str] = []
-
-    for chrom, sub in df.groupby("chrom", sort=False):  # preserve encounter order
-        chrom_order.append(chrom)
-        sub = sub.sort_values("start", kind="mergesort")
-        starts = sub["start"].to_numpy(dtype=np.int64, copy=True)
-        ends   = sub["end"].to_numpy(dtype=np.int64, copy=True)
-        idxs   = sub["bed_idx"].to_numpy(dtype=np.int64, copy=True)
-        if starts.size and np.any(starts[1:] < ends[:-1]):
-            raise ValueError(f"BED intervals overlap on {chrom}, but non-overlap was assumed.")
-        bed_index[chrom] = (starts, ends, idxs)
-
-    # make dict mapping {scaff-name: scaff-idx}
-    scaff2idx = {name: i for i, name in enumerate(chrom_order)}
-    return bed_index, scaff2idx
-
-
-def _parse_gt_to_uint8(gt_field: str) -> np.ndarray:
-    """Parse a VCF GT subfield into two uint8 allele indexes.
-
-      - REF=0, first ALT=1, etc.
-      - Missing allele -> 255
-    """
-    out = np.array([255, 255], dtype=np.uint8)
-    if not gt_field or gt_field == ".":
-        return out
-    sep = '/' if '/' in gt_field else ('|' if '|' in gt_field else None)
-    if sep is None:
-        # single allele (haploid-like)
-        try:
-            v = int(gt_field)
-            out[0] = v if v >= 0 else 255
-        except ValueError:
-            pass
-        return out
-    a, b = gt_field.split(sep, 1)
-    for i, tok in enumerate((a, b)):
-        if tok == '.' or tok == '':
-            out[i] = 255
-        else:
-            try:
-                v = int(tok)
-                out[i] = v if v >= 0 else 255
-            except ValueError:
-                out[i] = 255
-    return out
-
-
-def _call_char_ord(alleles: List[str], a0: int, a1: int) -> np.uint8:
-    """Convert two allele indexes to a single-byte ASCII code:
-
-      - 'N' if missing/invalid or not single-base A/C/G/T
-      - IUPAC code for heterozygous SNPs
-      - base letter for homozygous SNPs
-    """
-    N = np.uint8(ord('N'))
-
-    # both alleles must be present
-    if a0 == 255 or a1 == 255:
-        return N
-    # indexes in range?
-    if a0 < 0 or a1 < 0 or a0 >= len(alleles) or a1 >= len(alleles):
-        return N
-
-    b0, b1 = alleles[a0], alleles[a1]
-
-    # Only accept single-base A/C/G/T
-    valid = {"A", "C", "G", "T"}
-    if b0 not in valid or b1 not in valid:
-        return N
-
-    if b0 == b1:
-        return np.uint8(ord(b0))
-    # heterozygous: map to IUPAC (unordered)
-    code = _IUPAC.get(frozenset((b0, b1)))
-    return np.uint8(ord(code)) if code else N
-
-
-def iter_vcf_filtered_snps_with_bed(
-    vcf_path: Union[str, Path],
-    bed_path: Union[str, Path],
-    snames: List[str],
-    bed_index: Optional[Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]] = None,
-    scaff2idx: Optional[Dict[str, int]] = None,
-) -> Iterator[Tuple[int, int, int, int, int, str, str, str, str, np.ndarray]]:
-    """Iterate a VCF(.gz) and yield records with FILTER==PASS and NOT 'INDEL' in INFO.
-
-    For each record, returns genotypes for `snames` as a (nsamples, 3) uint8 array:
-      [:,0:2] = allele indexes (0=REF, 1=first ALT, ...; 255=missing)
-      [:,2]   = ASCII ord of a single-letter call:
-                'N' for missing/undeterminable,
-                IUPAC code for heterozygous SNPs,
-                base letter for homozygous SNPs.
-
-    Yields:
-      (bed_idx, var_idx_in_bed, offset_in_bed, scaff_idx, pos0, scaff_name, REF, ALT, QUAL, GT)
-
-    Raises:
-      - ValueError if a kept variant is not inside a BED interval
-      - ValueError if any `snames` are absent from the VCF header
-      - ValueError if a record lacks a GT field in FORMAT
-    """
-    if bed_index is None or scaff2idx is None:
-        bed_index, scaff2idx = load_bed_index_nonoverlap(bed_path)
-
-    # per-interval counters (for var_idx_in_bed)
-    counters: Dict[str, np.ndarray] = {
-        chrom: np.zeros(len(bed_index[chrom][0]), dtype=np.int64)
-        for chrom in bed_index
-    }
-
-    sample_cols: Optional[List[int]] = None
-
-    with gzip.open(vcf_path, "rt") as fh:
-        for line in fh:
-            if line.startswith("##"):
-                continue
-            if line.startswith("#CHROM"):
-                header = line.rstrip("\n").split("\t")
-                vcf_samples = header[9:]
-                name_to_col = {nm: 9 + i for i, nm in enumerate(vcf_samples)}
-                missing = [s for s in snames if s not in name_to_col]
-                if missing:
-                    raise ValueError(f"Samples not found in VCF header: {missing}")
-                sample_cols = [name_to_col[s] for s in snames]
-                continue
-            # format check
-            if sample_cols is None:
-                raise ValueError("VCF header (#CHROM) not found before records.")
-            # parse record; format check
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) < 8:
-                continue
-            # parse record parts
-            chrom, spos, _id, REF, ALT, QUAL, FILTER, INFO = parts[:8]
-
-            # gates
-            if FILTER != "PASS":
-                continue
-            if "INDEL" in INFO.split(";"):
-                continue
-
-            # get position zero-indexed and scaff name and idx zero-ind
-            try:
-                pos = int(spos)
-            except ValueError:
-                continue
-            pos0 = pos - 1
-            scaff_name = chrom
-            scaff_idx = scaff2idx.get(scaff_name, -1)
-
-            # ... returns (starts, ends, bedidx)
-            tup = bed_index.get(chrom)
-            if tup is None:
-                raise ValueError(f"Variant {chrom}:{pos} not covered by BED (chrom absent).")
-
-            starts, ends, bedix = tup
-            i = np.searchsorted(starts, pos0, side="right") - 1
-            if not (i >= 0 and pos0 < ends[i]):
-                left_end = ends[i] if i >= 0 else None
-                right_start = starts[i+1] if (i+1) < len(starts) else None
-                raise ValueError(
-                    f"Variant {chrom}:{pos} (pos0={pos0}) not covered by BED. "
-                    f"Nearest interval ends at {left_end} and next starts at {right_start}."
-                )
-
-            if len(parts) < 9:
-                raise ValueError(f"Record {chrom}:{pos} missing FORMAT/sample columns.")
-            FORMAT = parts[8]
-            fmt_keys = FORMAT.split(":")
-            try:
-                gt_idx = fmt_keys.index("GT")
-            except ValueError:
-                raise ValueError(f"Record {chrom}:{pos} lacks GT in FORMAT: {FORMAT}")
-
-            # Build GT array (nsamples, 3)
-            ns = len(snames)
-            GT = np.empty((ns, 3), dtype=np.uint8)
-
-            # Prepare allele string list: [REF, ALT1, ALT2, ...]
-            alt_list = ALT.split(",") if ALT else []
-            alleles_str = [REF] + alt_list
-
-            for k, col in enumerate(sample_cols):
-                # default missing
-                a = np.array([255, 255], dtype=np.uint8)
-
-                if col < len(parts):
-                    sample_field = parts[col]
-                    if sample_field and sample_field != ".":
-                        sub = sample_field.split(":")
-                        if gt_idx < len(sub):
-                            a = _parse_gt_to_uint8(sub[gt_idx])
-
-                GT[k, 0:2] = a
-
-                # third column: ord of call char
-                GT[k, 2] = _call_char_ord(alleles_str, int(a[0]), int(a[1]))
-
-            var_idx_in_bed = int(counters[chrom][i])
-            counters[chrom][i] += 1
-            offset_in_bed = int(pos0 - starts[i])
-
-            yield int(bedix[i]), var_idx_in_bed, offset_in_bed, scaff_idx, pos0, scaff_name, REF, ALT, QUAL, GT

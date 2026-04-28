@@ -1038,7 +1038,7 @@ def test_write_consensus_and_outputs_logs_locus_database_and_snp_database_summar
     )
     monkeypatch.setattr(
         "ipyrad2.assembler.assemble.write_snps_hdf5",
-        lambda name, outdir, snames, reference: 3,
+        lambda name, outdir, snames, reference, **kwargs: 3,
     )
     monkeypatch.setattr(
         "ipyrad2.assembler.assemble.write_assemble_stats_report",
@@ -2404,7 +2404,7 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
     )
     monkeypatch.setattr(
         "ipyrad2.assembler.assemble.write_snps_hdf5",
-        lambda name, outdir, snames, reference: (
+        lambda name, outdir, snames, reference, **kwargs: (
             (outdir / f"{name}.hdf5").write_text("", encoding="utf-8"),
             1,
         )[1],
@@ -3716,9 +3716,14 @@ def test_write_snps_hdf5_supports_zero_snp_outputs(tmp_path: Path) -> None:
     out_h5 = tmp_path / "assembly.hdf5"
     out_h5.touch()
     (tmp_path / "assembly.bed").write_text("chr1\t0\t4\n", encoding="utf-8")
-    with gzip.open(tmp_path / "assembly.vcf.gz", "wt", encoding="utf-8") as out:
+    plain_vcf = tmp_path / "assembly.vcf"
+    with plain_vcf.open("w", encoding="utf-8") as out:
         out.write("##fileformat=VCFv4.2\n")
         out.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\n")
+    run_pipeline(
+        [[BIN_BCF, "view", "-Oz", "-o", str(tmp_path / "assembly.vcf.gz"), str(plain_vcf)]]
+    )
+    run_pipeline([[BIN_BCF, "index", "-f", "-c", str(tmp_path / "assembly.vcf.gz")]])
     nsnps = write_snps_hdf5("assembly", tmp_path, ["s1"], reference)
     assert nsnps == 0
 
@@ -3730,6 +3735,129 @@ def test_write_snps_hdf5_supports_zero_snp_outputs(tmp_path: Path) -> None:
         assert io5["genos"].chunks[1] <= 131_072
         assert io5["snpsmap"].chunks[0] <= 131_072
         assert io5["reference"].shape == (0,)
+
+
+def _prepare_nonempty_snp_writer_inputs(tmp_path: Path) -> tuple[Path, Path]:
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\nACGTACGTACGTACGTACGT\n", encoding="utf-8")
+    reference.with_suffix(".fa.fai").write_text(
+        "chr1\t20\t6\t20\t21\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "assembly.hdf5").touch()
+    (tmp_path / "assembly.bed").write_text(
+        "chr1\t0\t5\n"
+        "chr1\t10\t15\n"
+        "chr1\t15\t18\n",
+        encoding="utf-8",
+    )
+    plain_vcf = tmp_path / "assembly.vcf"
+    with plain_vcf.open("w", encoding="utf-8") as out:
+        out.write("##fileformat=VCFv4.2\n")
+        out.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\ts2\n")
+        out.write("chr1\t2\t.\tA\tG\t60\tPASS\t.\tGT\t0/1\t1/1\n")
+        out.write("chr1\t4\t.\tC\tT,A\t60\tPASS\t.\tGT\t2/2\t0/1\n")
+        out.write("chr1\t12\t.\tG\tT\t60\tPASS\t.\tGT\t./.\t0/0\n")
+    run_pipeline(
+        [[BIN_BCF, "view", "-Oz", "-o", str(tmp_path / "assembly.vcf.gz"), str(plain_vcf)]]
+    )
+    run_pipeline([[BIN_BCF, "index", "-f", "-c", str(tmp_path / "assembly.vcf.gz")]])
+    return reference, tmp_path / "assembly.hdf5"
+
+
+def test_write_snps_hdf5_writes_expected_nonempty_outputs(tmp_path: Path) -> None:
+    reference, out_h5 = _prepare_nonempty_snp_writer_inputs(tmp_path)
+
+    nsnps = write_snps_hdf5(
+        "assembly",
+        tmp_path,
+        ["s2", "s1"],
+        reference,
+        tmpdir=tmp_path / "tmp",
+        cores=2,
+        threads=1,
+        log_level="WARNING",
+        chunk_count=3,
+        vcf_chunk_rows=2,
+    )
+    assert nsnps == 3
+
+    with h5py.File(out_h5, "r") as io5:
+        assert int(io5.attrs["nsnps"]) == 3
+        np.testing.assert_array_equal(
+            io5["snpsmap"][:],
+            np.array(
+                [
+                    [0, 0, 1, 0, 1],
+                    [0, 1, 3, 0, 3],
+                    [1, 0, 1, 0, 11],
+                ],
+                dtype=np.uint32,
+            ),
+        )
+        np.testing.assert_array_equal(
+            io5["genos"][:],
+            np.array(
+                [
+                    [
+                        [0, 1, ord("R")],
+                        [2, 2, ord("A")],
+                        [255, 255, ord("N")],
+                    ],
+                    [
+                        [1, 1, ord("G")],
+                        [0, 1, ord("Y")],
+                        [0, 0, ord("G")],
+                    ],
+                ],
+                dtype=np.uint8,
+            ),
+        )
+        np.testing.assert_array_equal(
+            io5["reference"][:],
+            np.array([ord("A"), ord("C"), ord("G")], dtype=np.uint8),
+        )
+        assert list(io5["genos"].attrs["names"]) == ["s1", "s2"]
+
+
+def test_write_snps_hdf5_matches_single_and_multi_chunk_outputs(tmp_path: Path) -> None:
+    single = tmp_path / "single"
+    multi = tmp_path / "multi"
+    single.mkdir()
+    multi.mkdir()
+    reference_single, out_h5_single = _prepare_nonempty_snp_writer_inputs(single)
+    reference_multi, out_h5_multi = _prepare_nonempty_snp_writer_inputs(multi)
+
+    nsnps_single = write_snps_hdf5(
+        "assembly",
+        single,
+        ["s1", "s2"],
+        reference_single,
+        tmpdir=single / "tmp",
+        cores=1,
+        threads=1,
+        log_level="WARNING",
+        chunk_count=1,
+        vcf_chunk_rows=2,
+    )
+    nsnps_multi = write_snps_hdf5(
+        "assembly",
+        multi,
+        ["s1", "s2"],
+        reference_multi,
+        tmpdir=multi / "tmp",
+        cores=2,
+        threads=1,
+        log_level="WARNING",
+        chunk_count=3,
+        vcf_chunk_rows=2,
+    )
+
+    assert nsnps_single == nsnps_multi == 3
+    with h5py.File(out_h5_single, "r") as io5_single, h5py.File(out_h5_multi, "r") as io5_multi:
+        np.testing.assert_array_equal(io5_single["snpsmap"][:], io5_multi["snpsmap"][:])
+        np.testing.assert_array_equal(io5_single["genos"][:], io5_multi["genos"][:])
+        np.testing.assert_array_equal(io5_single["reference"][:], io5_multi["reference"][:])
 
 
 def test_write_seqs_hdf5_completes_without_tail_debug_code(tmp_path: Path) -> None:

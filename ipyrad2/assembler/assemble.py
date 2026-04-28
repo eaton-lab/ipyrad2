@@ -1337,7 +1337,16 @@ def _write_consensus_and_outputs(
 
     logger.info("writing SNP database")
     with profile_stage("SNP HDF5 writing"):
-        nsnps_written = write_snps_hdf5(name, outdir, snames, reference)
+        nsnps_written = write_snps_hdf5(
+            name,
+            outdir,
+            snames,
+            reference,
+            tmpdir=tmpdir,
+            cores=cores,
+            threads=threads,
+            log_level=log_level,
+        )
     if nsnps_written:
         logger.info("wrote SNP database with {} SNP sites", nsnps_written)
     else:
