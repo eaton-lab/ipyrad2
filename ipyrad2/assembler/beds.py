@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import sys
 import shutil
+import tempfile
 from pathlib import Path
 import numpy as np
 from loguru import logger
@@ -90,6 +91,36 @@ def sort_bed_by_reference_order(in_bed: Path, out_bed: Path, ref_info: Path) -> 
     cmd = [BIN_BED, "sort", "-i", str(in_bed), "-g", str(ref_info)]
     run_pipeline([cmd], out_bed)
     return out_bed
+
+
+def _prepare_multiinter_inputs(
+    bed_paths: list[Path],
+    ref_info: Path,
+    tmpdir: Path,
+) -> tuple[Path, list[Path], Path]:
+    """Write temporary lexicographically sorted BED/genome inputs for multiinter.
+
+    bedtools multiinter can mis-handle denovo-style contig names when the BED
+    inputs are sorted by a non-lexicographic reference order. Prepare a
+    temporary workspace with lexicographically sorted copies, then sort the
+    merged output back to REF_info.txt order downstream.
+    """
+    workspace = Path(tempfile.mkdtemp(prefix="multiinter_", dir=tmpdir))
+    lex_ref_info = workspace / "REF_info.lex.txt"
+    run_pipeline(
+        [["sort", "-k1,1", "-T", str(tmpdir), str(ref_info)]],
+        lex_ref_info,
+    )
+
+    lex_bed_paths: list[Path] = []
+    for bed_path in bed_paths:
+        lex_path = workspace / bed_path.name
+        run_pipeline(
+            [["sort", "-k1,1", "-k2,2n", "-T", str(tmpdir), str(bed_path)]],
+            lex_path,
+        )
+        lex_bed_paths.append(lex_path)
+    return lex_ref_info, lex_bed_paths, workspace
 
 
 def _iter_selected_fasta_records(
@@ -357,6 +388,12 @@ def get_across_sample_loci_bed(
             "No sample BED files were provided for shared locus delimiting."
         )
     out_bed = bed_dir / "loci.bed"
+    logger.debug("preparing lex-sorted temporary BEDs for cross-sample locus delimiting")
+    lex_ref_info, lex_bed_paths, workspace = _prepare_multiinter_inputs(
+        bed_paths=bed_paths,
+        ref_info=ref_info,
+        tmpdir=tmpdir,
+    )
     # logger.warning(bed_paths)
     # for each bed get [chrom, start, end, nsamples, samplenames, A-present, B-present, ...]
     # Chr1    1789726 1789745 1       C       0       0       1       0
@@ -366,8 +403,8 @@ def get_across_sample_loci_bed(
     # Chr1    1792384 1792386 2       B,C     0       1       1       0
     # Chr1    1799627 1799701 1       B       0       1       0       0
     # Chr1    1810262 1810282 1       D       0       0       0       1
-    cmd1 = [BIN_BED, "multiinter", "-g", str(ref_info)]
-    cmd1 += ["-i"] + [str(p) for p in bed_paths]
+    cmd1 = [BIN_BED, "multiinter", "-g", str(lex_ref_info)]
+    cmd1 += ["-i"] + [str(p) for p in lex_bed_paths]
     cmd1 += ["-names"] + snames
 
     # require at least MIN_SAMPLES_COVERAGE in each bed and print only first 5 cols
@@ -411,8 +448,10 @@ def get_across_sample_loci_bed(
     cmd5 = ["awk", "-v", f"L={min_locus_length}", 'BEGIN{OFS=FS="\t"} ($3-$2) >= L']
     cmd6 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
 
-    # run pipeline
-    run_pipeline([cmd1, cmd2, cmd3, cmd4, cmd5, cmd6], out_bed)
+    try:
+        run_pipeline([cmd1, cmd2, cmd3, cmd4, cmd5, cmd6], out_bed)
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
     return out_bed
 
 

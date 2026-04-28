@@ -1551,6 +1551,64 @@ def test_get_across_sample_loci_bed_handles_denovo_nested_locus_ids(tmp_path: Pa
     )
 
 
+def test_get_across_sample_loci_bed_recovers_shared_denovo_loci_from_ref_sorted_inputs(
+    tmp_path: Path,
+) -> None:
+    tmpdir = tmp_path / "assembly_tmpdir"
+    bed_dir = tmpdir / "beds"
+    bed_dir.mkdir(parents=True)
+    (tmpdir / "REF_info.txt").write_text(
+        "locus_987_1\t400\n"
+        "locus_971160_1\t400\n"
+        "locus_971269_1\t400\n"
+        "locus_982225_1\t400\n",
+        encoding="utf-8",
+    )
+    fixture = {
+        "brevilabris-DE353": (
+            "locus_971160_1\t0\t100\n"
+            "locus_971269_1\t45\t104\n"
+            "locus_982225_1\t0\t132\n"
+        ),
+        "brevilabris-DE624": (
+            "locus_987_1\t0\t325\n"
+            "locus_971160_1\t0\t100\n"
+            "locus_971269_1\t45\t104\n"
+            "locus_982225_1\t0\t132\n"
+        ),
+        "densispica-DE2": (
+            "locus_971160_1\t0\t100\n"
+            "locus_971269_1\t45\t104\n"
+            "locus_982225_1\t0\t53\n"
+        ),
+        "densispica-DE588": (
+            "locus_987_1\t5\t325\n"
+            "locus_971160_1\t0\t100\n"
+            "locus_971269_1\t45\t104\n"
+            "locus_982225_1\t0\t136\n"
+            "locus_982225_1\t217\t323\n"
+        ),
+    }
+    for sample, text in fixture.items():
+        (bed_dir / f"{sample}.goodcov.bed").write_text(text, encoding="utf-8")
+
+    out_bed = get_across_sample_loci_bed(
+        list(fixture),
+        min_sample_coverage=4,
+        min_merge_distance=0,
+        min_locus_length=1,
+        suffix=".goodcov.bed",
+        tmpdir=tmpdir,
+    )
+
+    assert out_bed == bed_dir / "loci.bed"
+    assert out_bed.read_text(encoding="utf-8") == (
+        "locus_971160_1\t0\t100\t4\n"
+        "locus_971269_1\t45\t104\t4\n"
+        "locus_982225_1\t0\t53\t4\n"
+    )
+
+
 def test_make_paralog_mask_accepts_subset_of_denovo_contigs(tmp_path: Path) -> None:
     tmpdir = tmp_path / "assembly_tmpdir"
     bed_dir = tmpdir / "beds"
