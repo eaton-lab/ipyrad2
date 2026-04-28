@@ -39,6 +39,7 @@ def test_map_help_groups_and_examples_are_updated() -> None:
         "-c, --cores",
         "-t, --threads",
         "-f, --force",
+        "--reindex-reference",
         "-l, --log-level",
         "-h, --help",
     ]
@@ -52,11 +53,15 @@ def test_map_help_groups_and_examples_are_updated() -> None:
 
     assert "ipyrad2 map: map reads and write coordinate-sorted BAM files" in help_text
     assert "$ ipyrad2 map -d DATA/*.fastq.gz -r REF.fa -o BAMS -i IMAP.tsv" in help_text
+    assert "$ ipyrad2 map -d DATA/*.fastq.gz -r REF.fa -o BAMS --reindex-reference" in help_text
     assert "$ ipyrad2 map -d DATA/*.fastq.gz -r REF.fa -o BAMS -u" in help_text
     assert "Treat paired FASTQs as single-end" in help_text
-    assert "Reference FASTA to index and map against." in help_text
+    assert "Reference FASTA to map against." in help_text
+    assert "reuse existing indexes" in help_text
     assert "Output directory for coordinate-sorted BAMs and map stats." in help_text
     assert "Sample-to-group table for subsetting, renaming, or merging samples." in help_text
+    assert "Does not re-index the reference." in help_text
+    assert "Rebuild bwa-mem2 reference indexes" in help_text
     assert "ipyrad map" not in help_text
     assert "trimmed read files" not in help_text
     assert "--min-map-q" not in help_text
@@ -79,6 +84,7 @@ def test_map_parser_defaults_are_unchanged() -> None:
     assert args.cores == 6
     assert args.threads == 3
     assert args.force is False
+    assert args.reindex_reference is False
     assert args.delim_str is None
     assert args.delim_idx == 1
     assert args.log_level == "INFO"

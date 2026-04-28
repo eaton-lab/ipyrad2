@@ -509,7 +509,8 @@ def _validate_bam_header_records_match_reference(
         f"to -r ({reference}). These BAMs were mapped against a different reference "
         "dictionary. If you reused the same reference path during mapping, stale "
         "bwa-mem2 sidecar index files (.ann/.amb/.pac/.0123/.bwt.2bit.64) are a "
-        "likely cause. Remap these BAMs against that exact reference before "
+        "likely cause. Re-run `ipyrad2 map --reindex-reference` against that exact "
+        "reference and remap these BAMs before "
         f"running assemble. Affected samples: {sample_summaries}"
     )
 
@@ -1337,7 +1338,16 @@ def _write_consensus_and_outputs(
 
     logger.info("writing SNP database")
     with profile_stage("SNP HDF5 writing"):
-        nsnps_written = write_snps_hdf5(name, outdir, snames, reference)
+        nsnps_written = write_snps_hdf5(
+            name,
+            outdir,
+            snames,
+            reference,
+            tmpdir=tmpdir,
+            cores=cores,
+            threads=threads,
+            log_level=log_level,
+        )
     if nsnps_written:
         logger.info("wrote SNP database with {} SNP sites", nsnps_written)
     else:
