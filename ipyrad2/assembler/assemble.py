@@ -3,6 +3,7 @@
 """Orchestrate the active end-to-end `ipyrad2 assemble` workflow."""
 
 from dataclasses import dataclass
+import json
 from typing import List
 import shutil
 from pathlib import Path
@@ -116,6 +117,14 @@ class ParalogStageOutputs:
     sample_retained_beds: dict[str, Path]
 
 
+@dataclass(frozen=True)
+class SharedLociBuildOutputs:
+    """Minimal outputs around the raw shared-locus delimiting step."""
+
+    shared_loci_bed: Path
+    raw_shared_loci_count: int
+
+
 def _build_sample_artifacts(
     snames: list[str],
     tmpdir: Path,
@@ -208,6 +217,91 @@ def _count_nonempty_lines(path: Path) -> int:
     """Return the number of non-empty lines in a text file."""
     with path.open("r", encoding="utf-8") as handle:
         return sum(1 for line in handle if line.strip())
+
+
+def _build_shared_loci_bed(
+    *,
+    name: str,
+    snames: list[str],
+    min_locus_sample_coverage: int,
+    min_locus_merge_distance: int,
+    min_locus_length: int,
+    suffix: str,
+    tmpdir: Path,
+    preserve_multiinter_debug_workspace: bool = False,
+) -> SharedLociBuildOutputs:
+    """Build and preserve the pre-paralog shared-locus BED."""
+    bed_dir = tmpdir / "beds"
+    sample_bed_paths = tuple(bed_dir / f"{sname}{suffix}" for sname in snames)
+    logger.debug(
+        "building raw shared loci from {} sample BEDs with suffix={!r}, mincov={}, "
+        "merge_distance={}, minlen={}, ref_info={}",
+        len(sample_bed_paths),
+        suffix,
+        min_locus_sample_coverage,
+        min_locus_merge_distance,
+        min_locus_length,
+        tmpdir / "REF_info.txt",
+    )
+    debug_workspace_dir = (
+        bed_dir / "multiinter.debug" if preserve_multiinter_debug_workspace else None
+    )
+    shared_loci_bed = get_across_sample_loci_bed(
+        snames,
+        min_locus_sample_coverage,
+        min_locus_merge_distance,
+        min_locus_length,
+        suffix,
+        tmpdir,
+        debug_workspace_dir=debug_workspace_dir,
+    )
+    raw_shared_loci_bed = bed_dir / "loci.raw.bed"
+    shutil.copy2(shared_loci_bed, raw_shared_loci_bed)
+    raw_count = _count_nonempty_lines(raw_shared_loci_bed)
+    if preserve_multiinter_debug_workspace:
+        debug_manifest = tmpdir / f"{name}.shared_loci_debug.json"
+        debug_manifest.write_text(
+            json.dumps(
+                {
+                    "sample_count": len(snames),
+                    "samples": list(snames),
+                    "suffix": suffix,
+                    "min_locus_sample_coverage": min_locus_sample_coverage,
+                    "min_locus_merge_distance": min_locus_merge_distance,
+                    "min_locus_length": min_locus_length,
+                    "ref_info_path": str(tmpdir / "REF_info.txt"),
+                    "raw_shared_loci_bed_path": str(raw_shared_loci_bed),
+                    "raw_shared_loci_count": raw_count,
+                    "multiinter_debug_workspace": (
+                        str(debug_workspace_dir) if debug_workspace_dir is not None else None
+                    ),
+                    "sample_beds": [
+                        {
+                            "sample": sname,
+                            "path": str(bed_path),
+                            "line_count": _count_nonempty_lines(bed_path),
+                            "size_bytes": bed_path.stat().st_size,
+                            "mtime_ns": bed_path.stat().st_mtime_ns,
+                        }
+                        for sname, bed_path in zip(snames, sample_bed_paths)
+                    ],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        logger.debug("wrote shared-locus debug manifest {}", debug_manifest)
+    logger.debug(
+        "wrote raw shared BED {} with {} loci",
+        raw_shared_loci_bed,
+        raw_count,
+    )
+    return SharedLociBuildOutputs(
+        shared_loci_bed=shared_loci_bed,
+        raw_shared_loci_count=raw_count,
+    )
 
 
 def _get_mixed_paralog_summary_path(phase_dir: Path) -> Path:
@@ -1671,20 +1765,18 @@ def run_assembler(
 
     if normalized_loci_bed is None:
         logger.info("building loci from shared sample coverage BEDs")
-        args = (
-            list(bam_dict),
-            min_locus_sample_coverage,
-            min_locus_merge_distance,
-            min_locus_length,
-            ".fragments.merged.bed",
-            tmpdir,
+        shared_loci_outputs = _build_shared_loci_bed(
+            name=name,
+            snames=list(bam_dict),
+            min_locus_sample_coverage=min_locus_sample_coverage,
+            min_locus_merge_distance=min_locus_merge_distance,
+            min_locus_length=min_locus_length,
+            suffix=".fragments.merged.bed",
+            tmpdir=tmpdir,
+            preserve_multiinter_debug_workspace=log_level.upper() == "DEBUG",
         )
-        loci_bed = get_across_sample_loci_bed(*args)
-
-        # Preserve the pre-paralog shared loci so the raw RAD-defined windows stay
-        # available for debugging after the filtered BED becomes canonical.
-        shutil.copy2(loci_bed, bed_dir / "loci.raw.bed")
-        shared_loci_after_delimiting = _count_nonempty_lines(bed_dir / "loci.raw.bed")
+        loci_bed = shared_loci_outputs.shared_loci_bed
+        shared_loci_after_delimiting = shared_loci_outputs.raw_shared_loci_count
     else:
         loci_bed = normalized_loci_bed
         shared_loci_after_delimiting = _count_nonempty_lines(loci_bed)
