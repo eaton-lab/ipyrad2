@@ -21,6 +21,7 @@ from ..utils.parallel import run_pipeline, run_with_pool, stream_pipeline_lines
 from ..utils.exceptions import IPyradError
 from .hdf5_utils import write_retained_fai
 from .loci import get_indel_overlap_mask_path
+from .sort_utils import assemble_sort_with_args
 
 BIN = Path(sys.prefix) / "bin"
 BIN_BED = str(BIN / "bedtools")
@@ -762,7 +763,9 @@ def _write_final_vcf_mask_manifest(
                     out.write(f"{chrom}\t{start}\t{end}\t{sample_idx}\n")
 
     try:
-        cmd1 = ["sort", "-k1,1", "-k2,2n", "-T", str(tmpdir), str(unsorted_path)]
+        cmd1 = assemble_sort_with_args(
+            ["-k1,1", "-k2,2n", "-T", str(tmpdir), str(unsorted_path)]
+        )
         cmd2 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
         run_pipeline([cmd1, cmd2], out_path)
     finally:
@@ -1218,7 +1221,7 @@ def get_vcf_with_indels_resolved(tmpdir: Path, reference: Path, threads: int) ->
         str(vcf_dir / "indels.vcf.gz"),
     ]
     cmd2 = ["awk", awk_prog]
-    cmd3 = ["sort", "-k1,1", "-k2,2n", "-T", str(vcf_dir)]
+    cmd3 = assemble_sort_with_args(["-k1,1", "-k2,2n", "-T", str(vcf_dir)])
     cmd4 = [BIN_BED, "merge", "-i", "-"]
     run_pipeline([cmd1, cmd2, cmd3, cmd4], indel_beds)
 

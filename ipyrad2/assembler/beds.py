@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 import numpy as np
 from loguru import logger
+from .sort_utils import assemble_sort_with_args
 from ..utils.exceptions import IPyradError
 from ..utils.parallel import run_pipeline
 from ..utils.parallel import PipelineTimeoutError
@@ -108,7 +109,7 @@ def _prepare_multiinter_inputs(
     workspace = Path(tempfile.mkdtemp(prefix="multiinter_", dir=tmpdir))
     lex_ref_info = workspace / "REF_info.lex.txt"
     run_pipeline(
-        [["sort", "-k1,1", "-T", str(tmpdir), str(ref_info)]],
+        [assemble_sort_with_args(["-k1,1", "-T", str(tmpdir), str(ref_info)])],
         lex_ref_info,
     )
 
@@ -116,7 +117,11 @@ def _prepare_multiinter_inputs(
     for bed_path in bed_paths:
         lex_path = workspace / bed_path.name
         run_pipeline(
-            [["sort", "-k1,1", "-k2,2n", "-T", str(tmpdir), str(bed_path)]],
+            [
+                assemble_sort_with_args(
+                    ["-k1,1", "-k2,2n", "-T", str(tmpdir), str(bed_path)]
+                )
+            ],
             lex_path,
         )
         lex_bed_paths.append(lex_path)
@@ -346,7 +351,7 @@ def get_coverage_bed_graphs(
         # stage now reads from that file rather than a live tee split.
         merge_cmds = [
             ["cut", "-f1-3", str(out_bed_count)],
-            ["sort", "-k1,1", "-k2,2n", "-T", str(tmpdir)],
+            assemble_sort_with_args(["-k1,1", "-k2,2n", "-T", str(tmpdir)]),
             [BIN_BED, "merge", "-d", str(min_merge_distance), "-i", "-"],
             [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)],
         ]
@@ -425,7 +430,7 @@ def get_across_sample_loci_bed(
     # Chr1    2665674 2665760 3
     # Chr1    2824851 2824932 4
     # Chr1    3045768 3045944 3
-    cmd3 = ["sort", "-k1,1", "-k2,2n", "-T", str(tmpdir)]
+    cmd3 = assemble_sort_with_args(["-k1,1", "-k2,2n", "-T", str(tmpdir)])
 
     cmd4 = [
         BIN_BED,

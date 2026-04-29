@@ -66,6 +66,7 @@ from ipyrad2.assembler.variants import summarize_variant_support_by_sample_type
 from ipyrad2.assembler.variants import load_variant_resolution_stats
 from ipyrad2.assembler.variants import write_vcf
 from ipyrad2.assembler.paralogs import write_per_sample_final_good
+from ipyrad2.assembler.sort_utils import assemble_sort_with_args
 from ipyrad2.assembler.write_seqs import write_seqs_hdf5
 from ipyrad2.assembler.write_snps import write_snps_hdf5
 from ipyrad2.utils.parallel import PipelineTimeoutError
@@ -88,6 +89,15 @@ def test_choose_hdf5_cache_settings_is_bounded() -> None:
     assert medium["rdcc_nslots"] == 1_000_003
     assert large["rdcc_nbytes"] == 1024**3
     assert large["rdcc_nslots"] == 2_000_003
+
+
+def test_assemble_sort_with_args_forces_c_locale() -> None:
+    assert assemble_sort_with_args(["-k1,1"]) == [
+        "env",
+        "LC_ALL=C",
+        "sort",
+        "-k1,1",
+    ]
 
 
 def test_choose_unsigned_int_dtype_falls_back_to_uint64() -> None:
@@ -492,7 +502,9 @@ def test_get_coverage_bed_graphs_uses_layout_specific_pipeline_and_timeout(
         assert bedgraph_cmds[4] == [BIN_BED, "genomecov", "-i", "-", "-g", str(ref_info), "-bg"]
 
     assert merge_cmds[0] == ["cut", "-f1-3", str(bedgraph_outfile)]
-    assert merge_cmds[1] == ["sort", "-k1,1", "-k2,2n", "-T", str(tmp_path / "TMP")]
+    assert merge_cmds[1] == assemble_sort_with_args(
+        ["-k1,1", "-k2,2n", "-T", str(tmp_path / "TMP")]
+    )
     assert merge_cmds[3] == [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
 
 
@@ -1553,7 +1565,13 @@ def test_get_across_sample_loci_bed_handles_denovo_nested_locus_ids(tmp_path: Pa
 
 def test_get_across_sample_loci_bed_recovers_shared_denovo_loci_from_ref_sorted_inputs(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    monkeypatch.setenv("LANG", "en_US.UTF-8")
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("LC_COLLATE", raising=False)
+    monkeypatch.delenv("LC_CTYPE", raising=False)
+
     tmpdir = tmp_path / "assembly_tmpdir"
     bed_dir = tmpdir / "beds"
     bed_dir.mkdir(parents=True)

@@ -14,6 +14,7 @@ from pathlib import Path
 from collections import Counter
 import numpy as np
 from loguru import logger
+from .sort_utils import assemble_sort_with_args
 from ..utils.seqs import comp
 from ..utils.jit_funcs import snp_count_numba, max_heteros_count_numba
 from ..utils.parallel import run_pipeline, run_with_pool_iter
@@ -168,7 +169,7 @@ def make_lowdepth_mask(
         f'BEGIN{{OFS="\\t"}} $4>={min_sample_depth} {{print $1,$2,$3}}',
         str(sample_bedgraph),
     ]
-    cmd2 = ["sort", "-k1,1", "-k2,2n", "-T", str(sort_tmpdir)]
+    cmd2 = assemble_sort_with_args(["-k1,1", "-k2,2n", "-T", str(sort_tmpdir)])
     cmd3 = [BIN_BED, "merge", "-i", "-"]
     cmd4 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
     run_pipeline([cmd1, cmd2, cmd3, cmd4], good_bed)
@@ -218,7 +219,7 @@ def merge_sample_mask_beds(
     # Merge every active interval source into one sorted mask so consensus
     # calling sees a single BED regardless of why a site was filtered.
     cmd1 = ["cat"] + [str(path) for path in existing]
-    cmd2 = ["sort", "-k1,1", "-k2,2n", "-T", str(sort_tmpdir)]
+    cmd2 = assemble_sort_with_args(["-k1,1", "-k2,2n", "-T", str(sort_tmpdir)])
     cmd3 = [BIN_BED, "merge", "-i", "-"]
     cmd4 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
     run_pipeline([cmd1, cmd2, cmd3, cmd4], out_bed)
@@ -252,7 +253,7 @@ def merge_final_vcf_mask_beds(
         return out_bed
 
     cmd1 = ["cat"] + [str(path) for path in existing]
-    cmd2 = ["sort", "-k1,1", "-k2,2n", "-T", str(sort_tmpdir)]
+    cmd2 = assemble_sort_with_args(["-k1,1", "-k2,2n", "-T", str(sort_tmpdir)])
     cmd3 = [BIN_BED, "merge", "-i", "-"]
     cmd4 = [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
     run_pipeline([cmd1, cmd2, cmd3, cmd4], out_bed)
