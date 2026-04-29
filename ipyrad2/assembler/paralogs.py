@@ -32,6 +32,7 @@ import numpy as np
 import pandas as pd
 
 from ipyrad2.assembler.beds import sort_bed_by_reference_order
+from ipyrad2.assembler.sort_utils import assemble_sort_with_args
 from ipyrad2.utils.parallel import run_pipeline
 
 BIN = Path(sys.prefix) / "bin"
@@ -123,7 +124,7 @@ def make_indel_mask_bed(
         f"X={pad_bp}",
         'BEGIN{OFS="\\t"}{s=$2-X; if(s<0)s=0; e=$3+X; print $1,s,e}',
     ]
-    sort_ = ["sort", "-k1,1", "-k2,2n"]
+    sort_ = assemble_sort_with_args(["-k1,1", "-k2,2n"])
     run_pipeline([view, query, pad, sort_], out_bed)
     return out_bed
 
@@ -137,7 +138,7 @@ def extract_snps_table_tsv(vcf_gz: Path, out_tsv: Path) -> Path:
         "-f",
         "%CHROM\t%POS0\t%POS\t[%DP]\t[%GQ]\t[%AD]\t[%GT]\n",
     ]
-    sort_ = ["sort", "-k1,1", "-k2,2n"]
+    sort_ = assemble_sort_with_args(["-k1,1", "-k2,2n"])
     run_pipeline([view, query, sort_], out_tsv)
     return out_tsv
 

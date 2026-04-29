@@ -66,6 +66,7 @@ from ipyrad2.assembler.variants import summarize_variant_support_by_sample_type
 from ipyrad2.assembler.variants import load_variant_resolution_stats
 from ipyrad2.assembler.variants import write_vcf
 from ipyrad2.assembler.paralogs import write_per_sample_final_good
+from ipyrad2.assembler.sort_utils import assemble_sort_with_args
 from ipyrad2.assembler.write_seqs import write_seqs_hdf5
 from ipyrad2.assembler.write_snps import write_snps_hdf5
 from ipyrad2.utils.parallel import PipelineTimeoutError
@@ -88,6 +89,15 @@ def test_choose_hdf5_cache_settings_is_bounded() -> None:
     assert medium["rdcc_nslots"] == 1_000_003
     assert large["rdcc_nbytes"] == 1024**3
     assert large["rdcc_nslots"] == 2_000_003
+
+
+def test_assemble_sort_with_args_forces_c_locale() -> None:
+    assert assemble_sort_with_args(["-k1,1"]) == [
+        "env",
+        "LC_ALL=C",
+        "sort",
+        "-k1,1",
+    ]
 
 
 def test_choose_unsigned_int_dtype_falls_back_to_uint64() -> None:
@@ -492,7 +502,9 @@ def test_get_coverage_bed_graphs_uses_layout_specific_pipeline_and_timeout(
         assert bedgraph_cmds[4] == [BIN_BED, "genomecov", "-i", "-", "-g", str(ref_info), "-bg"]
 
     assert merge_cmds[0] == ["cut", "-f1-3", str(bedgraph_outfile)]
-    assert merge_cmds[1] == ["sort", "-k1,1", "-k2,2n", "-T", str(tmp_path / "TMP")]
+    assert merge_cmds[1] == assemble_sort_with_args(
+        ["-k1,1", "-k2,2n", "-T", str(tmp_path / "TMP")]
+    )
     assert merge_cmds[3] == [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)]
 
 
@@ -1553,7 +1565,13 @@ def test_get_across_sample_loci_bed_handles_denovo_nested_locus_ids(tmp_path: Pa
 
 def test_get_across_sample_loci_bed_recovers_shared_denovo_loci_from_ref_sorted_inputs(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    monkeypatch.setenv("LANG", "en_US.UTF-8")
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("LC_COLLATE", raising=False)
+    monkeypatch.delenv("LC_CTYPE", raising=False)
+
     tmpdir = tmp_path / "assembly_tmpdir"
     bed_dir = tmpdir / "beds"
     bed_dir.mkdir(parents=True)
@@ -1607,6 +1625,118 @@ def test_get_across_sample_loci_bed_recovers_shared_denovo_loci_from_ref_sorted_
         "locus_971269_1\t45\t104\t4\n"
         "locus_982225_1\t0\t53\t4\n"
     )
+
+
+def test_get_across_sample_loci_bed_rejects_duplicate_sample_names(
+    tmp_path: Path,
+) -> None:
+    tmpdir = tmp_path / "assembly_tmpdir"
+    bed_dir = tmpdir / "beds"
+    bed_dir.mkdir(parents=True)
+    (tmpdir / "REF_info.txt").write_text("chr1\t100\n", encoding="utf-8")
+    (bed_dir / "s1.fragments.merged.bed").write_text("chr1\t0\t10\n", encoding="utf-8")
+
+    with pytest.raises(
+        IPyradError,
+        match=r"Duplicate sample names were provided for shared locus delimiting: s1",
+    ):
+        get_across_sample_loci_bed(
+            ["s1", "s1"],
+            min_sample_coverage=2,
+            min_merge_distance=0,
+            min_locus_length=1,
+            suffix=".fragments.merged.bed",
+            tmpdir=tmpdir,
+        )
+
+
+def test_get_across_sample_loci_bed_rejects_missing_bed_inputs(tmp_path: Path) -> None:
+    tmpdir = tmp_path / "assembly_tmpdir"
+    bed_dir = tmpdir / "beds"
+    bed_dir.mkdir(parents=True)
+    (tmpdir / "REF_info.txt").write_text("chr1\t100\n", encoding="utf-8")
+    (bed_dir / "s1.fragments.merged.bed").write_text("chr1\t0\t10\n", encoding="utf-8")
+
+    with pytest.raises(
+        IPyradError,
+        match=r"Missing sample BED files for shared locus delimiting: .*s2\.fragments\.merged\.bed",
+    ):
+        get_across_sample_loci_bed(
+            ["s1", "s2"],
+            min_sample_coverage=2,
+            min_merge_distance=0,
+            min_locus_length=1,
+            suffix=".fragments.merged.bed",
+            tmpdir=tmpdir,
+        )
+
+
+def test_get_across_sample_loci_bed_preserves_debug_workspace_when_requested(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("LANG", "en_US.UTF-8")
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("LC_COLLATE", raising=False)
+    monkeypatch.delenv("LC_CTYPE", raising=False)
+
+    tmpdir = tmp_path / "assembly_tmpdir"
+    bed_dir = tmpdir / "beds"
+    bed_dir.mkdir(parents=True)
+    (tmpdir / "REF_info.txt").write_text(
+        "locus_987_1\t400\n"
+        "locus_971269_1\t400\n",
+        encoding="utf-8",
+    )
+    for sample in ("s1", "s2"):
+        (bed_dir / f"{sample}.fragments.merged.bed").write_text(
+            "locus_971269_1\t45\t104\n"
+            "locus_987_1\t0\t100\n",
+            encoding="utf-8",
+        )
+
+    debug_workspace_dir = bed_dir / "multiinter.debug"
+    out_bed = get_across_sample_loci_bed(
+        ["s1", "s2"],
+        min_sample_coverage=2,
+        min_merge_distance=0,
+        min_locus_length=1,
+        suffix=".fragments.merged.bed",
+        tmpdir=tmpdir,
+        debug_workspace_dir=debug_workspace_dir,
+    )
+
+    assert out_bed == bed_dir / "loci.bed"
+    assert debug_workspace_dir.exists()
+    assert (debug_workspace_dir / "REF_info.lex.txt").exists()
+    assert (debug_workspace_dir / "s1.fragments.merged.bed").exists()
+    assert (debug_workspace_dir / "s2.fragments.merged.bed").exists()
+    expected_ref = tmp_path / "expected.ref.lex.txt"
+    expected_bed = tmp_path / "expected.s1.lex.bed"
+    run_pipeline(
+        [assemble_sort_with_args(["-k1,1", "-T", str(tmpdir), str(tmpdir / "REF_info.txt")])],
+        expected_ref,
+    )
+    run_pipeline(
+        [
+            assemble_sort_with_args(
+                [
+                    "-k1,1",
+                    "-k2,2n",
+                    "-T",
+                    str(tmpdir),
+                    str(bed_dir / "s1.fragments.merged.bed"),
+                ]
+            )
+        ],
+        expected_bed,
+    )
+    assert (debug_workspace_dir / "REF_info.lex.txt").read_text(encoding="utf-8") == (
+        expected_ref.read_text(encoding="utf-8")
+    )
+    assert (debug_workspace_dir / "s1.fragments.merged.bed").read_text(
+        encoding="utf-8"
+    ) == expected_bed.read_text(encoding="utf-8")
 
 
 def test_make_paralog_mask_accepts_subset_of_denovo_contigs(tmp_path: Path) -> None:
@@ -2189,6 +2319,14 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
                 sname: tmp_path / "OUT" / "assembly_tmpdir" / "beds" / f"{sname}.final.vcf.mask.bed"
                 for sname in jobs
             }
+        if msg == "Building per-sample coverage BEDs":
+            bed_dir = tmp_path / "OUT" / "assembly_tmpdir" / "beds"
+            bed_dir.mkdir(parents=True, exist_ok=True)
+            for sname in jobs:
+                (bed_dir / f"{sname}.fragments.merged.bed").write_text(
+                    "chr1\t0\t10\n",
+                    encoding="utf-8",
+                )
         return {sname: None for sname in jobs}
 
     startup_probe: dict[str, object] = {}
@@ -2856,12 +2994,32 @@ def test_run_assembler_rename_bams_overrides_header_names_for_populations_and_ou
         "ipyrad2.assembler.assemble._validate_bam_header_records_match_reference",
         lambda *args, **kwargs: None,
     )
+    def _fake_run_with_pool(jobs, log_level, max_workers=None, msg="Processing"):
+        del log_level, max_workers
+        if msg == "Building per-sample coverage BEDs":
+            bed_dir = tmp_path / "OUT" / "assembly_tmpdir" / "beds"
+            bed_dir.mkdir(parents=True, exist_ok=True)
+            for sname in jobs:
+                (bed_dir / f"{sname}.fragments.merged.bed").write_text(
+                    "chr1\t0\t4\n",
+                    encoding="utf-8",
+                )
+        return {sname: None for sname in jobs}
+
     monkeypatch.setattr(
         "ipyrad2.assembler.assemble.run_with_pool",
-        lambda jobs, log_level, max_workers=None, msg="Processing": {sname: None for sname in jobs},
+        _fake_run_with_pool,
     )
 
-    def _fake_get_across_sample_loci_bed(_snames, _mincov, _merge, _minlen, _suffix, tmpdir):
+    def _fake_get_across_sample_loci_bed(
+        _snames,
+        _mincov,
+        _merge,
+        _minlen,
+        _suffix,
+        tmpdir,
+        **_kwargs,
+    ):
         loci_bed = tmpdir / "beds" / "rad.raw.bed"
         loci_bed.write_text("chr1\t0\t4\n", encoding="utf-8")
         return loci_bed
@@ -2943,6 +3101,8 @@ def test_run_assembler_rename_bams_overrides_header_names_for_populations_and_ou
     assert group_samples_file.read_text(encoding="utf-8") == "renamed_rad\tpop1\n"
     assert observed["variant_bams"] == ["renamed_rad"]
     assert observed["snames"] == ["renamed_rad"]
+    assert not (tmp_path / "OUT" / "assembly_tmpdir" / "assembly.shared_loci_debug.json").exists()
+    assert not (tmp_path / "OUT" / "assembly_tmpdir" / "beds" / "multiinter.debug").exists()
 
 
 def test_run_assembler_counts_mapper_collapsed_sample_once_in_shared_bed_stage(
@@ -2987,14 +3147,32 @@ def test_run_assembler_counts_mapper_collapsed_sample_once_in_shared_bed_stage(
         "ipyrad2.assembler.assemble._validate_bam_header_records_match_reference",
         lambda *args, **kwargs: None,
     )
+    def _fake_run_with_pool(jobs, log_level, max_workers=None, msg="Processing"):
+        del log_level, max_workers
+        if msg == "Building per-sample coverage BEDs":
+            bed_dir = tmp_path / "OUT" / "assembly_tmpdir" / "beds"
+            bed_dir.mkdir(parents=True, exist_ok=True)
+            for sname in jobs:
+                (bed_dir / f"{sname}.fragments.merged.bed").write_text(
+                    "chr1\t0\t4\n",
+                    encoding="utf-8",
+                )
+        return {sname: None for sname in jobs}
+
     monkeypatch.setattr(
         "ipyrad2.assembler.assemble.run_with_pool",
-        lambda jobs, log_level, max_workers=None, msg="Processing": {
-            sname: None for sname in jobs
-        },
+        _fake_run_with_pool,
     )
 
-    def _fake_get_across_sample_loci_bed(_snames, _mincov, _merge, _minlen, _suffix, tmpdir):
+    def _fake_get_across_sample_loci_bed(
+        _snames,
+        _mincov,
+        _merge,
+        _minlen,
+        _suffix,
+        tmpdir,
+        **_kwargs,
+    ):
         observed["shared_bed_snames"] = list(_snames)
         loci_bed = tmpdir / "beds" / "merged_rep.shared_input.bed"
         loci_bed.write_text("chr1\t0\t4\n", encoding="utf-8")
@@ -3092,6 +3270,258 @@ def test_run_assembler_counts_mapper_collapsed_sample_once_in_shared_bed_stage(
     group_samples_file = observed["group_samples_file"]
     assert group_samples_file == tmp_path / "OUT" / "assembly_tmpdir" / "populations.normalized.tsv"
     assert group_samples_file.read_text(encoding="utf-8") == "merged_rep\tpop1\n"
+    assert not (tmp_path / "OUT" / "assembly_tmpdir" / "assembly.shared_loci_debug.json").exists()
+    assert not (tmp_path / "OUT" / "assembly_tmpdir" / "beds" / "multiinter.debug").exists()
+
+
+def test_existing_results_force_or_raise_removes_tmpdir_and_outputs(tmp_path: Path) -> None:
+    outdir = tmp_path / "OUT"
+    tmpdir = outdir / "assembly_tmpdir"
+    outdir.mkdir()
+    tmpdir.mkdir()
+    (tmpdir / "beds").mkdir()
+    (tmpdir / "beds" / "stale.bed").write_text("chr1\t0\t1\n", encoding="utf-8")
+    (outdir / "assembly.loci.gz").write_text("stale\n", encoding="utf-8")
+    (outdir / "assembly.stats.json").write_text("{}", encoding="utf-8")
+    untouched = outdir / "keep.txt"
+    untouched.write_text("keep\n", encoding="utf-8")
+
+    assemble_module.existing_results_force_or_raise(
+        outdir=outdir,
+        tmpdir=tmpdir,
+        name="assembly",
+        force=True,
+    )
+
+    assert not tmpdir.exists()
+    assert not (outdir / "assembly.loci.gz").exists()
+    assert not (outdir / "assembly.stats.json").exists()
+    assert untouched.read_text(encoding="utf-8") == "keep\n"
+
+
+def test_run_assembler_raw_shared_bed_matches_direct_recomputation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("LANG", "en_US.UTF-8")
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("LC_COLLATE", raising=False)
+    monkeypatch.delenv("LC_CTYPE", raising=False)
+
+    reference = tmp_path / "ref.fa"
+    reference.write_text(
+        ">locus_987_1\n" + ("A" * 400) + "\n"
+        ">locus_971160_1\n" + ("A" * 400) + "\n"
+        ">locus_971269_1\n" + ("A" * 400) + "\n"
+        ">locus_982225_1\n" + ("A" * 400) + "\n",
+        encoding="utf-8",
+    )
+    bam_names = [
+        "brevilabris-DE353",
+        "brevilabris-DE624",
+        "densispica-DE2",
+        "densispica-DE588",
+    ]
+    rad_bams: list[Path] = []
+    for name in bam_names:
+        bam_file = tmp_path / f"{name}.filtered.bam"
+        bam_file.write_text("", encoding="utf-8")
+        rad_bams.append(bam_file)
+
+    ref_info_text = (
+        "locus_987_1\t400\n"
+        "locus_971160_1\t400\n"
+        "locus_971269_1\t400\n"
+        "locus_982225_1\t400\n"
+    )
+    fixture = {
+        "brevilabris-DE353": (
+            "locus_971160_1\t0\t100\n"
+            "locus_971269_1\t45\t104\n"
+            "locus_982225_1\t0\t132\n"
+        ),
+        "brevilabris-DE624": (
+            "locus_987_1\t0\t325\n"
+            "locus_971160_1\t0\t100\n"
+            "locus_971269_1\t45\t104\n"
+            "locus_982225_1\t0\t132\n"
+        ),
+        "densispica-DE2": (
+            "locus_971160_1\t0\t100\n"
+            "locus_971269_1\t45\t104\n"
+            "locus_982225_1\t0\t53\n"
+        ),
+        "densispica-DE588": (
+            "locus_987_1\t5\t325\n"
+            "locus_971160_1\t0\t100\n"
+            "locus_971269_1\t45\t104\n"
+            "locus_982225_1\t0\t136\n"
+            "locus_982225_1\t217\t323\n"
+        ),
+    }
+
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble.get_names_from_bams",
+        lambda bam_files: {
+            bam_file: bam_file.name.removesuffix(".filtered.bam")
+            for bam_file in bam_files
+        },
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._collect_bam_metadata",
+        lambda bam_dict, log_level, max_workers: {
+            sname: {
+                "layout": "paired",
+                "header_records": [
+                    ("locus_987_1", 400),
+                    ("locus_971160_1", 400),
+                    ("locus_971269_1", 400),
+                    ("locus_982225_1", 400),
+                ],
+            }
+            for sname in bam_dict
+        },
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble.get_reference_sort_order",
+        lambda _reference, tmpdir: (tmpdir / "REF_info.txt").write_text(
+            ref_info_text,
+            encoding="utf-8",
+        ),
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._prepare_analysis_bams",
+        lambda **kwargs: {
+            sname: kwargs["tmpdir"] / "analysis_bams" / f"{sname}.analysis.filtered.bam"
+            for sname in kwargs["bam_dict"]
+        },
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._validate_bam_header_records_match_reference",
+        lambda *args, **kwargs: None,
+    )
+
+    def _fake_get_coverage_bed_graphs(**kwargs):
+        sname = kwargs["sname"]
+        bed_dir = kwargs["tmpdir"] / "beds"
+        bed_dir.mkdir(parents=True, exist_ok=True)
+        fragments = bed_dir / f"{sname}.fragments.merged.bed"
+        fragments.write_text(fixture[sname], encoding="utf-8")
+        (bed_dir / f"{sname}.fragments.bedgraph").write_text("", encoding="utf-8")
+        return fragments
+
+    def _fake_run_with_pool(jobs, log_level, max_workers=None, msg="Processing"):
+        del log_level, max_workers, msg
+        return {sname: func(**kwargs) for sname, (func, kwargs) in jobs.items()}
+
+    class _StopAfterRaw(Exception):
+        pass
+
+    def _fake_run_paralog_stage(**kwargs):
+        observed["regions_bed"] = kwargs["regions_bed"]
+        observed["raw_bed"] = kwargs["bed_dir"] / "loci.raw.bed"
+        raise _StopAfterRaw()
+
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble.get_coverage_bed_graphs",
+        _fake_get_coverage_bed_graphs,
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble.run_with_pool",
+        _fake_run_with_pool,
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._run_paralog_stage",
+        _fake_run_paralog_stage,
+    )
+
+    with pytest.raises(_StopAfterRaw):
+        run_assembler(
+            rad_bams=rad_bams,
+            wgs_bams=None,
+            reference=reference,
+            outdir=tmp_path / "OUT",
+            name="assembly",
+            loci_bed=None,
+            min_map_q=25,
+            max_tlen=None,
+            max_softclip=None,
+            max_nm=None,
+            min_site_q=13,
+            min_geno_q=13,
+            min_base_q=13,
+            min_sample_depth=1,
+            min_locus_sample_coverage=4,
+            min_locus_trim_sample_coverage=4,
+            min_locus_length=50,
+            min_locus_merge_distance=300,
+            max_locus_hetero_frequency=0.3,
+            max_locus_variant_frequency=1.0,
+            max_sample_hetero_frequency=0.10,
+            softclip_len_threshold=50,
+            softclip_frac_max=0.5,
+            depth_z_max=50,
+            third_frac_cut=0.10,
+            min_3allele_sites=2,
+            maf_threshold=0.20,
+            max_sites_above_maf=8,
+            paralog_fail_frac_max=0.10,
+            populations=None,
+            rename_bams=None,
+            masks=None,
+            cores=2,
+            threads=1,
+            force=False,
+            log_level="DEBUG",
+            min_aligned_len=50,
+        )
+
+    raw_bed = observed["raw_bed"]
+    assert raw_bed == tmp_path / "OUT" / "assembly_tmpdir" / "beds" / "loci.raw.bed"
+    assert observed["regions_bed"] == tmp_path / "OUT" / "assembly_tmpdir" / "beds" / "loci.bed"
+
+    expected_tmpdir = tmp_path / "EXPECTED" / "assembly_tmpdir"
+    expected_bed_dir = expected_tmpdir / "beds"
+    expected_bed_dir.mkdir(parents=True)
+    (expected_tmpdir / "REF_info.txt").write_text(ref_info_text, encoding="utf-8")
+    for sname, text in fixture.items():
+        (expected_bed_dir / f"{sname}.fragments.merged.bed").write_text(
+            text,
+            encoding="utf-8",
+        )
+
+    expected_bed = get_across_sample_loci_bed(
+        bam_names,
+        min_sample_coverage=4,
+        min_merge_distance=300,
+        min_locus_length=50,
+        suffix=".fragments.merged.bed",
+        tmpdir=expected_tmpdir,
+    )
+
+    expected_text = expected_bed.read_text(encoding="utf-8")
+    assert raw_bed.read_text(encoding="utf-8") == expected_text
+    assert "locus_971269_1\t45\t104\t4\n" in expected_text
+
+    manifest_json = tmp_path / "OUT" / "assembly_tmpdir" / "assembly.shared_loci_debug.json"
+    assert manifest_json.exists()
+    build = json.loads(manifest_json.read_text(encoding="utf-8"))
+    assert build["sample_count"] == len(bam_names)
+    assert build["samples"] == bam_names
+    assert build["suffix"] == ".fragments.merged.bed"
+    assert build["min_locus_sample_coverage"] == 4
+    assert build["min_locus_merge_distance"] == 300
+    assert build["min_locus_length"] == 50
+    assert build["raw_shared_loci_count"] == len(expected_text.splitlines())
+    assert build["multiinter_debug_workspace"] is not None
+    assert len(build["sample_beds"]) == len(bam_names)
+    assert [entry["sample"] for entry in build["sample_beds"]] == bam_names
+    debug_workspace = Path(build["multiinter_debug_workspace"])
+    assert debug_workspace == tmp_path / "OUT" / "assembly_tmpdir" / "beds" / "multiinter.debug"
+    assert debug_workspace.exists()
+    assert (debug_workspace / "REF_info.lex.txt").exists()
 
 
 def test_run_assembler_requires_rad_bams_when_no_loci_bed(

@@ -4,12 +4,14 @@
 
 from __future__ import annotations
 
+from collections import Counter
 import sys
 import shutil
 import tempfile
 from pathlib import Path
 import numpy as np
 from loguru import logger
+from .sort_utils import assemble_sort_with_args
 from ..utils.exceptions import IPyradError
 from ..utils.parallel import run_pipeline
 from ..utils.parallel import PipelineTimeoutError
@@ -108,7 +110,7 @@ def _prepare_multiinter_inputs(
     workspace = Path(tempfile.mkdtemp(prefix="multiinter_", dir=tmpdir))
     lex_ref_info = workspace / "REF_info.lex.txt"
     run_pipeline(
-        [["sort", "-k1,1", "-T", str(tmpdir), str(ref_info)]],
+        [assemble_sort_with_args(["-k1,1", "-T", str(tmpdir), str(ref_info)])],
         lex_ref_info,
     )
 
@@ -116,12 +118,21 @@ def _prepare_multiinter_inputs(
     for bed_path in bed_paths:
         lex_path = workspace / bed_path.name
         run_pipeline(
-            [["sort", "-k1,1", "-k2,2n", "-T", str(tmpdir), str(bed_path)]],
+            [
+                assemble_sort_with_args(
+                    ["-k1,1", "-k2,2n", "-T", str(tmpdir), str(bed_path)]
+                )
+            ],
             lex_path,
         )
         lex_bed_paths.append(lex_path)
     return lex_ref_info, lex_bed_paths, workspace
 
+
+def _count_nonempty_lines(path: Path) -> int:
+    """Return the number of non-empty lines in a text file."""
+    with path.open("r", encoding="utf-8") as handle:
+        return sum(1 for line in handle if line.strip())
 
 def _iter_selected_fasta_records(
     reference_fasta: Path,
@@ -346,7 +357,7 @@ def get_coverage_bed_graphs(
         # stage now reads from that file rather than a live tee split.
         merge_cmds = [
             ["cut", "-f1-3", str(out_bed_count)],
-            ["sort", "-k1,1", "-k2,2n", "-T", str(tmpdir)],
+            assemble_sort_with_args(["-k1,1", "-k2,2n", "-T", str(tmpdir)]),
             [BIN_BED, "merge", "-d", str(min_merge_distance), "-i", "-"],
             [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)],
         ]
@@ -378,17 +389,50 @@ def get_across_sample_loci_bed(
     min_locus_length: int,
     suffix: str,
     tmpdir: Path,
+    debug_workspace_dir: Path | None = None,
 ) -> Path:
     """Merge per-sample BEDs into the shared loci BED used by assemble."""
     ref_info = tmpdir / "REF_info.txt"
     bed_dir = tmpdir / "beds"
+    duplicate_snames = [name for name, count in Counter(snames).items() if count > 1]
+    if duplicate_snames:
+        shown = ", ".join(sorted(duplicate_snames))
+        raise IPyradError(
+            f"Duplicate sample names were provided for shared locus delimiting: {shown}"
+        )
     bed_paths = [bed_dir / f"{sname}{suffix}" for sname in snames]
     if not bed_paths:
         raise IPyradError(
             "No sample BED files were provided for shared locus delimiting."
         )
+    missing_beds = [str(path) for path in bed_paths if not path.exists()]
+    if missing_beds:
+        shown = ", ".join(missing_beds[:5])
+        if len(missing_beds) > 5:
+            shown += f", ... ({len(missing_beds) - 5} more)"
+        raise IPyradError(
+            "Missing sample BED files for shared locus delimiting: "
+            f"{shown}"
+        )
+    duplicate_bed_paths = [
+        str(path) for path, count in Counter(bed_paths).items() if count > 1
+    ]
+    if duplicate_bed_paths:
+        shown = ", ".join(sorted(duplicate_bed_paths))
+        raise IPyradError(
+            f"Duplicate BED paths were provided for shared locus delimiting: {shown}"
+        )
     out_bed = bed_dir / "loci.bed"
-    logger.debug("preparing lex-sorted temporary BEDs for cross-sample locus delimiting")
+    logger.debug(
+        "preparing lex-sorted temporary BEDs for cross-sample locus delimiting: "
+        "nsamples={}, suffix={!r}, mincov={}, merge_distance={}, minlen={}, ref_info={}",
+        len(snames),
+        suffix,
+        min_sample_coverage,
+        min_merge_distance,
+        min_locus_length,
+        ref_info,
+    )
     lex_ref_info, lex_bed_paths, workspace = _prepare_multiinter_inputs(
         bed_paths=bed_paths,
         ref_info=ref_info,
@@ -425,7 +469,7 @@ def get_across_sample_loci_bed(
     # Chr1    2665674 2665760 3
     # Chr1    2824851 2824932 4
     # Chr1    3045768 3045944 3
-    cmd3 = ["sort", "-k1,1", "-k2,2n", "-T", str(tmpdir)]
+    cmd3 = assemble_sort_with_args(["-k1,1", "-k2,2n", "-T", str(tmpdir)])
 
     cmd4 = [
         BIN_BED,
@@ -451,7 +495,23 @@ def get_across_sample_loci_bed(
     try:
         run_pipeline([cmd1, cmd2, cmd3, cmd4, cmd5, cmd6], out_bed)
     finally:
-        shutil.rmtree(workspace, ignore_errors=True)
+        if debug_workspace_dir is not None and workspace.exists():
+            if debug_workspace_dir.exists():
+                shutil.rmtree(debug_workspace_dir, ignore_errors=True)
+            debug_workspace_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(workspace), str(debug_workspace_dir))
+            logger.debug(
+                "preserved multiinter debug workspace at {}",
+                debug_workspace_dir,
+            )
+        else:
+            shutil.rmtree(workspace, ignore_errors=True)
+    row_count = _count_nonempty_lines(out_bed)
+    logger.debug(
+        "wrote shared loci BED {} with {} rows",
+        out_bed,
+        row_count,
+    )
     return out_bed
 
 
