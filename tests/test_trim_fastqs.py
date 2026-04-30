@@ -159,6 +159,8 @@ def test_build_fastp_command_for_single_end_omits_paired_flags(
     assert "-O" not in cmd
     assert "--detect_adapter_for_pe" not in cmd
     assert "-U" not in cmd
+    assert "-o" in cmd
+    assert cmd[cmd.index("-o") + 1] == str(tmp_path / "sample.trimmed.fastq.gz")
     assert "--trim_front1" in cmd
     assert "--trim_front2" not in cmd
     assert "-6" not in cmd
@@ -312,7 +314,11 @@ def test_run_trimmer_uses_max_reads_kmer(
             key: None for key in jobs
         },
     )
-    monkeypatch.setattr(trim_fastqs, "write_stats_summary", lambda snames, outdir: None)
+    monkeypatch.setattr(
+        trim_fastqs,
+        "write_stats_summary",
+        lambda snames, outdir, logged_command=None: None,
+    )
 
     trim_fastqs.run_trimmer(
         fastqs=[Path("ignored.fastq.gz")],
@@ -396,7 +402,11 @@ def test_run_trimmer_logs_overhang_summary_once(
             key: None for key in jobs
         },
     )
-    monkeypatch.setattr(trim_fastqs, "write_stats_summary", lambda snames, outdir: None)
+    monkeypatch.setattr(
+        trim_fastqs,
+        "write_stats_summary",
+        lambda snames, outdir, logged_command=None: None,
+    )
     monkeypatch.setattr(
         trim_fastqs,
         "get_overhangs_from_kmers",
@@ -462,7 +472,11 @@ def test_run_trimmer_logs_preflight_summary(
             key: None for key in jobs
         },
     )
-    monkeypatch.setattr(trim_fastqs, "write_stats_summary", lambda snames, outdir: None)
+    monkeypatch.setattr(
+        trim_fastqs,
+        "write_stats_summary",
+        lambda snames, outdir, logged_command=None: None,
+    )
 
     trim_fastqs.run_trimmer(
         fastqs=[usable, empty],
@@ -536,7 +550,11 @@ def test_run_trimmer_logs_one_fastp_command_template(
             key: None for key in jobs
         },
     )
-    monkeypatch.setattr(trim_fastqs, "write_stats_summary", lambda snames, outdir: None)
+    monkeypatch.setattr(
+        trim_fastqs,
+        "write_stats_summary",
+        lambda snames, outdir, logged_command=None: None,
+    )
 
     trim_fastqs.run_trimmer(
         fastqs=[alpha_r1, alpha_r2, beta_r1, beta_r2],

@@ -52,8 +52,8 @@ def validate_denovo_args(args: Namespace, parser: ArgumentParser) -> None:
     _parser_error_if(parser, args.max_merge_diffs < 0, "--max-merge-diffs must be >= 0")
     _parser_error_if(
         parser,
-        args.delim_idx < 1,
-        "--delim-idx must be >= 1",
+        args.delim_idx == 0,
+        "--delim-idx cannot be 0",
     )
 
 
@@ -140,7 +140,7 @@ def _setup_denovo_subparser(subparsers: argparse._SubParsersAction, header: str 
     )
     naming.add_argument(
         "-di", "--delim-idx", metavar="int", type=int, default=1,
-        help="Keep text left of the Nth delimiter when parsing sample names. [default=%(default)s]",
+        help="Delimiter index: positive from left, negative from right. [default=%(default)s]",
     )
 
     runtime.add_argument(

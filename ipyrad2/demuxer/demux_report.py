@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import json
 from math import ceil
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -96,15 +97,16 @@ def format_preserved_file_preview(paths: List[Path]) -> str:
     return rendered
 
 
-def next_demux_stats_path(outdir: Path) -> Path:
-    """Return the next available numbered demux stats path in outdir."""
+def next_demux_stats_paths(outdir: Path) -> tuple[Path, Path]:
+    """Return the next available numbered demux stats text/JSON paths."""
     idx = 0
     while True:
-        outfile = outdir / f"{DEMUX_STATS_PREFIX}{idx}.txt"
-        if outfile.exists():
+        txt_path = outdir / f"{DEMUX_STATS_PREFIX}{idx}.txt"
+        json_path = outdir / f"{DEMUX_STATS_PREFIX}{idx}.json"
+        if txt_path.exists() or json_path.exists():
             idx += 1
             continue
-        return outfile
+        return txt_path, json_path
 
 
 def aggregate_file_stat_counter(
@@ -242,6 +244,7 @@ def _suspected_barcode_report_rows(
 def write_demux_stats(
     *,
     outdir: Path,
+    logged_command: str | None = None,
     file_stats: Dict[str, Tuple],
     sample_stats: Dict[str, int],
     names_to_barcodes: Dict[str, Tuple[str, str]],
@@ -258,8 +261,13 @@ def write_demux_stats(
     barcode_boundary_collisions: List[Dict[str, str]],
 ) -> Path:
     """Write the numbered demux stats report and return its path."""
-    stats_file = next_demux_stats_path(outdir)
+    stats_file, json_file = next_demux_stats_paths(outdir)
+    stats_json: dict[str, object] = {}
+    if logged_command:
+        stats_json["command"] = logged_command
     with stats_file.open("w", encoding="utf-8") as outfile:
+        if logged_command:
+            outfile.write(f"CMD: {logged_command}\n\n")
         outfile.write("# Raw file statistics\n######################\n")
         file_df = pd.DataFrame(
             index=sorted(file_stats),
@@ -273,6 +281,9 @@ def write_demux_stats(
             total = not_cut + matched + ambiguous
             file_df.loc[key, :] = total, matched + ambiguous, matched, ambiguous
         outfile.write(file_df.to_string() + "\n\n")
+        stats_json["raw_file_statistics"] = (
+            file_df.rename_axis("raw_file").reset_index().to_dict(orient="records")
+        )
 
         outfile.write("# Sample demux statistics\n######################\n")
         sample_df = pd.DataFrame(
@@ -281,6 +292,9 @@ def write_demux_stats(
             data=[sample_stats[i] for i in sorted(sample_stats)],
         )
         outfile.write(sample_df.to_string() + "\n\n")
+        stats_json["sample_demux_statistics"] = (
+            sample_df.rename_axis("sample").reset_index().to_dict(orient="records")
+        )
 
         if not i7:
             outfile.write("# Restriction motif inference\n######################\n")
@@ -339,21 +353,26 @@ def write_demux_stats(
                         float_format=lambda value: f"{value:.6f}",
                     ) + "\n\n"
                 )
+                stats_json["restriction_motif_inference"] = motif_df.to_dict(orient="records")
             else:
                 outfile.write("none\n\n")
+                stats_json["restriction_motif_inference"] = []
 
             outfile.write("# Barcode boundary collisions\n######################\n")
             if barcode_boundary_collisions:
                 collision_df = pd.DataFrame(barcode_boundary_collisions)
                 outfile.write(collision_df.to_string(index=False) + "\n\n")
+                stats_json["barcode_boundary_collisions"] = collision_df.to_dict(orient="records")
             else:
                 outfile.write("none\n\n")
+                stats_json["barcode_boundary_collisions"] = []
 
             outfile.write("# Barcode boundary ambiguity statistics\n######################\n")
-            outfile.write(
+            ambiguity_note = (
                 "Reads listed in this section matched multiple sample/barcode-boundary "
-                "candidates and were not assigned or written to any sample output file.\n"
+                "candidates and were not assigned or written to any sample output file."
             )
+            outfile.write(f"{ambiguity_note}\n")
             ambiguous_obs = aggregate_file_stat_counter(file_stats, 3)
             if ambiguous_obs:
                 ambiguity_df = pd.DataFrame(
@@ -365,14 +384,23 @@ def write_demux_stats(
                     }
                 )
                 outfile.write(ambiguity_df.to_string(index=False) + "\n\n")
+                stats_json["barcode_boundary_ambiguity_statistics"] = {
+                    "note": ambiguity_note,
+                    "rows": ambiguity_df.to_dict(orient="records"),
+                }
             else:
                 outfile.write("none\n\n")
+                stats_json["barcode_boundary_ambiguity_statistics"] = {
+                    "note": ambiguity_note,
+                    "rows": [],
+                }
 
         outfile.write("# Suspected missing barcode statistics\n######################\n")
-        outfile.write(
+        suspected_note = (
             "This section reports frequent unassigned barcode-like observations with "
-            "bounded-memory estimated counts. min_records is a conservative lower bound.\n"
+            "bounded-memory estimated counts. min_records is a conservative lower bound."
         )
+        outfile.write(f"{suspected_note}\n")
         suspected_rows = _suspected_barcode_report_rows(
             file_stats=file_stats,
             names_to_barcodes=names_to_barcodes,
@@ -398,8 +426,16 @@ def write_demux_stats(
                     float_format=lambda value: f"{value:.6f}",
                 ) + "\n\n"
             )
+            stats_json["suspected_missing_barcode_statistics"] = {
+                "note": suspected_note,
+                "rows": suspected_df.to_dict(orient="records"),
+            }
         else:
             outfile.write("none\n\n")
+            stats_json["suspected_missing_barcode_statistics"] = {
+                "note": suspected_note,
+                "rows": [],
+            }
 
         outfile.write("# Barcode detection statistics\n######################\n")
         data = []
@@ -426,6 +462,10 @@ def write_demux_stats(
             data=[i[1:] for i in data],
         )
         outfile.write(barcodes_df.to_string() + "\n")
+        stats_json["barcode_detection_statistics"] = (
+            barcodes_df.rename_axis("sample").reset_index().to_dict(orient="records")
+        )
 
-    logger.info(f"demultiplexing statistics written to {stats_file}")
+    json_file.write_text(json.dumps(stats_json, indent=2) + "\n", encoding="utf-8")
+    logger.info("demultiplexing statistics written to {} and {}", stats_file, json_file)
     return stats_file

@@ -158,7 +158,7 @@ def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = 
     )
     naming.add_argument(
         "-di", "--delim-idx", metavar="int", type=int, default=1,
-        help="Keep text left of the Nth delimiter when parsing sample names. [default=%(default)s]",
+        help="Delimiter index: positive from left, negative from right. [default=%(default)s]",
     )
     naming.add_argument(
         "-s", "--suffix", metavar="str", type=str,

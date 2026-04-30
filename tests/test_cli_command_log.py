@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from loguru import logger
+import pytest
 
 import ipyrad2.cli.cli_main as cli_main
 from ipyrad2.cli.command_log import MAX_LOGGED_MATCHED_PATH_CHARS
@@ -81,3 +82,36 @@ def test_run_subcommand_logs_truncated_command_for_trim(monkeypatch) -> None:
     cmd_message = next(str(msg).strip() for msg in messages if str(msg).startswith("CMD: "))
     assert f"[truncated; {len(fastqs)} total matched paths]" in cmd_message
     assert cmd_message.endswith("-o OUT")
+
+
+@pytest.mark.parametrize(
+    ("argv", "runner_name"),
+    [
+        (["demux", "-d", "lane.fastq.gz", "-b", "barcodes.tsv", "-e1", "TGCAG", "-o", "OUT"], "run_demuxer"),
+        (["trim", "-d", "a.fastq.gz", "-o", "OUT"], "run_trimmer"),
+        (["denovo", "-d", "a.fastq.gz", "-o", "OUT"], "run_denovo"),
+        (["map", "-d", "a_R1.fastq.gz", "a_R2.fastq.gz", "-r", "ref.fa", "-o", "OUT"], "run_mapper"),
+        (["assemble", "-d", "a.bam", "-r", "ref.fa", "-o", "OUT"], "run_assembler"),
+    ],
+)
+def test_run_subcommand_passes_logged_command_to_core_runner(
+    monkeypatch,
+    argv: list[str],
+    runner_name: str,
+) -> None:
+    args = cli_main.setup_parsers().parse_args(argv)
+    seen: dict[str, str] = {}
+
+    def _runner(**kwargs):
+        seen["logged_command"] = kwargs["logged_command"]
+
+    monkeypatch.setattr(
+        cli_main.importlib,
+        "import_module",
+        lambda name, package=None: SimpleNamespace(**{runner_name: _runner}),
+    )
+    monkeypatch.setattr(cli_main.sys, "argv", ["ipyrad2", *argv])
+
+    cli_main.run_subcommand(args, _exit=False)
+
+    assert seen["logged_command"] == format_logged_command(argv)

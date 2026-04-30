@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from ipyrad2.mapper.map_stats import MappingJobResult
@@ -88,6 +89,7 @@ def test_run_mapper_uses_paired_stats_and_writes_report(monkeypatch, tmp_path: P
         delim_str=None,
         delim_idx=1,
         log_level="WARNING",
+        logged_command="ipyrad2 map -d ignored.fastq.gz -r ref.fa -o mapped",
     )
 
     assert [msg for msg, _jobs in call_log] == ["Mapping", "Gathering mapping stats"]
@@ -101,12 +103,17 @@ def test_run_mapper_uses_paired_stats_and_writes_report(monkeypatch, tmp_path: P
     stats_files = sorted(outdir.glob("ipyrad_map_stats_*.txt"))
     assert len(stats_files) == 1
     report = stats_files[0].read_text(encoding="utf-8")
+    report_json = json.loads((outdir / "ipyrad_map_stats_0.json").read_text(encoding="utf-8"))
+    assert report.startswith("CMD: ipyrad2 map -d ignored.fastq.gz -r ref.fa -o mapped\n\n")
     assert "# Final BAMs are coordinate sorted and indexed." in report
     assert "# Paired-end final BAMs keep only mapped mates on the same scaffold." in report
     assert "## Applied mapping summary" in report
     assert "## Assemble read-filter preview (not applied during mapping)" in report
     assert "# MAPQ threshold: 20" in report
     assert "sample" in report
+    assert report_json["command"] == "ipyrad2 map -d ignored.fastq.gz -r ref.fa -o mapped"
+    assert report_json["applied_mapping_summary"][0]["sample"] == "sample"
+    assert report_json["assemble_read_filter_preview"]["filter_effects"][0]["sample"] == "sample"
 
 
 def test_run_mapper_unmate_uses_single_end_stats_and_threads_flag(monkeypatch, tmp_path: Path) -> None:
@@ -198,8 +205,10 @@ def test_run_mapper_unmate_uses_single_end_stats_and_threads_flag(monkeypatch, t
     stats_files = sorted(outdir.glob("ipyrad_map_stats_*.txt"))
     assert len(stats_files) == 1
     report = stats_files[0].read_text(encoding="utf-8")
+    report_json = json.loads((outdir / "ipyrad_map_stats_0.json").read_text(encoding="utf-8"))
     assert "# Paired-end final BAMs keep only mapped mates on the same scaffold." not in report
     assert "input_reads" in report
+    assert "command" not in report_json
 
 
 def test_index_ref_with_bwa_reuses_complete_existing_index(monkeypatch, tmp_path: Path) -> None:

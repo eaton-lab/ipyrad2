@@ -1,4 +1,5 @@
 import csv
+import json
 import re
 import random
 from pathlib import Path
@@ -489,9 +490,11 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
     assert (outdir / "denovo.loci.stats.tsv").exists()
     assert (outdir / "denovo.sample_graph_summary.tsv").exists()
     assert (outdir / "denovo.stats.txt").exists()
+    assert (outdir / "denovo.stats.json").exists()
     assert not (outdir / denovo_module.WORKDIR_NAME).exists()
 
     stats_text = (outdir / "denovo.stats.txt").read_text(encoding="utf-8")
+    stats_json = json.loads((outdir / "denovo.stats.json").read_text(encoding="utf-8"))
     assert "# Inputs" in stats_text
     assert "# Clustering Parameters" in stats_text
     assert "# Denovo Summary" in stats_text
@@ -516,6 +519,10 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
     assert _report_has_value_line(stats_text, "Single-sequence loci", "1")
     assert _report_has_value_line(stats_text, "Loci requiring MAFFT", "0")
     assert _report_has_value_line(stats_text, "Spacer-stripped output loci", "1")
+    assert stats_json["inputs"]["selected_sample_count"] == "1"
+    assert stats_json["clustering_parameters"]["query_cov"] == "0.750000"
+    assert stats_json["runtime"]["alignment_mode"] == "mafft"
+    assert "command" not in stats_json
     assert _report_has_value_line(
         stats_text,
         "Sample graph summary",
@@ -2213,6 +2220,7 @@ def test_write_denovo_stats_formats_assemble_style_sections(
 
     denovo_module._write_denovo_stats(
         outpath,
+        logged_command="ipyrad2 denovo -d sample_a.fastq.gz sample_b.fastq.gz -o OUT",
         all_fastq_dict={
             "sample_a": (tmp_path / "sample_a.fastq.gz", None),
             "sample_b": (tmp_path / "sample_b.fastq.gz", None),
@@ -2316,7 +2324,11 @@ def test_write_denovo_stats_formats_assemble_style_sections(
     )
 
     text = outpath.read_text(encoding="utf-8")
+    stats_json = json.loads(outpath.with_suffix(".json").read_text(encoding="utf-8"))
 
+    assert text.startswith(
+        "CMD: ipyrad2 denovo -d sample_a.fastq.gz sample_b.fastq.gz -o OUT\n\n"
+    )
     assert "# Selected Sample Summary" in text
     assert "# Locus Occupancy" in text
     assert "# Component Node Summary" in text
@@ -2350,6 +2362,9 @@ def test_write_denovo_stats_formats_assemble_style_sections(
     assert "vsearch_binary" not in text
     assert "mafft_binary" not in text
     assert "workdir" not in text
+    assert stats_json["command"] == "ipyrad2 denovo -d sample_a.fastq.gz sample_b.fastq.gz -o OUT"
+    assert stats_json["inputs"]["selected_sample_count"] == "2"
+    assert stats_json["outputs"]["run_stats_json"].endswith("denovo.stats.json")
 
 
 def test_collect_denovo_qc_summarizes_final_outputs(

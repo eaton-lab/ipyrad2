@@ -94,8 +94,8 @@ def _validate_delim_args(delim: str | None, delim_index: int | None) -> None:
         raise IPyradError("delim cannot be an empty string.")
     if not isinstance(delim_index, int):
         raise IPyradError("delim_index must be an integer when delim is set.")
-    if delim_index <= 0:
-        raise IPyradError("delim_index must be >= 1 when delim is set.")
+    if delim_index == 0:
+        raise IPyradError("delim_index cannot be 0 when delim is set.")
 
 
 def _normalize_paths(paths: List[Path | str]) -> List[Path]:
@@ -128,6 +128,11 @@ def _group_paths_by_delim(
 def _parse_mate_token(path: Path) -> tuple[str, int, str] | None:
     """Extract a sample name and mate orientation from common PE filenames."""
     stem = _strip_known_suffix(path.name)
+    return _parse_mate_token_from_stem(stem)
+
+
+def _parse_mate_token_from_stem(stem: str) -> tuple[str, int, str] | None:
+    """Extract a sample name and mate orientation from a filename stem."""
     for pattern in MATE_PATTERNS:
         match = pattern.match(stem)
         if not match:
@@ -139,6 +144,17 @@ def _parse_mate_token(path: Path) -> tuple[str, int, str] | None:
         trailing = match.group("trailing") or ""
         return sample_name, mate, trailing
     return None
+
+
+def _parse_mate_token_for_delim_pairing(path: Path) -> tuple[str, int, str] | None:
+    """Parse mate tokens for user-delimited grouping, tolerating trailing separators."""
+    parsed = _parse_mate_token(path)
+    if parsed is not None:
+        return parsed
+    stem = _strip_known_suffix(path.name).rstrip("._-")
+    if not stem:
+        return None
+    return _parse_mate_token_from_stem(stem)
 
 
 def _parse_literal_mate_token(path: Path) -> tuple[str, int] | None:
@@ -160,12 +176,16 @@ def _parse_literal_mate_token(path: Path) -> tuple[str, int] | None:
     return None
 
 
-def _pair_group(paths: List[Path], sample_name: str) -> tuple[Path, Path]:
+def _pair_group(
+    paths: List[Path],
+    sample_name: str,
+    parser=_parse_mate_token,
+) -> tuple[Path, Path]:
     """Return a deterministic (R1, R2) tuple for a paired-end sample."""
     ordered = {}
     trailing = None
     for path in sorted(paths, key=lambda item: str(item)):
-        parsed = _parse_mate_token(path)
+        parsed = parser(path)
         if parsed is None:
             names = ", ".join(sorted(item.name for item in paths))
             raise IPyradError(
@@ -509,7 +529,11 @@ def get_pairs_or_single_by_trim(
         if perfect_pairs(delim_groups, fastqs):
             try:
                 paired = {
-                    name: _pair_group(delim_groups[name], name)
+                    name: _pair_group(
+                        delim_groups[name],
+                        name,
+                        parser=_parse_mate_token_for_delim_pairing,
+                    )
                     for name in sorted(delim_groups)
                 }
             except IPyradError as err:

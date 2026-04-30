@@ -60,6 +60,7 @@ def test_map_help_groups_and_examples_are_updated() -> None:
     assert "reuse existing indexes" in help_text
     assert "Output directory for coordinate-sorted BAMs and map stats." in help_text
     assert "Sample-to-group table for subsetting, renaming, or merging samples." in help_text
+    assert "positive from left, negative from right" in help_text
     assert "Does not re-index the reference." in help_text
     assert "Rebuild bwa-mem2 reference indexes" in help_text
     assert "ipyrad map" not in help_text
@@ -88,3 +89,11 @@ def test_map_parser_defaults_are_unchanged() -> None:
     assert args.delim_str is None
     assert args.delim_idx == 1
     assert args.log_level == "INFO"
+
+
+def test_map_parser_accepts_negative_delim_idx() -> None:
+    args = setup_parsers().parse_args(
+        ["map", "-d", "a.fastq.gz", "-r", "ref.fa", "-dx", "_R", "-di", "-1"]
+    )
+
+    assert args.delim_idx == -1

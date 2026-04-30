@@ -46,6 +46,7 @@ def test_denovo_help_uses_grouped_layout_and_updated_examples() -> None:
     assert "--allow-reverse-complement" not in naming_section
     assert "selecting denovo samples by `sample<TAB>group` or `glob<TAB>group`" in help_text
     assert "Minimum VSEARCH query coverage; lower for variable read lengths." in help_text
+    assert "positive from left, negative from right" in help_text
     assert "ipyrad denovo" not in help_text
 
 
@@ -75,11 +76,32 @@ def test_denovo_parser_defaults_are_updated() -> None:
     assert args.log_level == "INFO"
 
 
+def test_denovo_parser_accepts_negative_delim_idx() -> None:
+    args = setup_parsers().parse_args(
+        ["denovo", "-d", "a.fastq.gz", "-dx", "_R", "-di", "-1"]
+    )
+
+    assert args.delim_idx == -1
+
+
 def test_denovo_parser_rejects_removed_graph_splitter_flag() -> None:
     with pytest.raises(SystemExit):
         setup_parsers().parse_args(
             ["denovo", "-d", "a.fastq.gz", "--graph-splitter", "constrained"]
         )
+
+
+def test_denovo_validator_rejects_zero_delim_idx(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    parser = _get_denovo_parser()
+    args = parser.parse_args(["-d", "a.fastq.gz", "-di", "0"])
+
+    with pytest.raises(SystemExit):
+        validate_denovo_args(args, parser)
+
+    _, err = capsys.readouterr()
+    assert "--delim-idx cannot be 0" in err
 
 
 @pytest.mark.parametrize("value", ["0", "1.1"])

@@ -4103,6 +4103,7 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
     outpath = write_assemble_stats_report(
         name="assembly",
         outdir=tmp_path,
+        logged_command="ipyrad2 assemble -d a.bam -r ref.fa -o OUT",
         snames=["s1", "s2"],
         shared_loci_after_delimiting=10,
         shared_loci_after_paralog_filtering=8,
@@ -4162,6 +4163,7 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
     report_json = json.loads((tmp_path / "assembly.stats.json").read_text(encoding="utf-8"))
     assert outpath == tmp_path / "assembly.stats.txt"
     assert (tmp_path / "assembly.stats.json").exists()
+    assert report.startswith("CMD: ipyrad2 assemble -d a.bam -r ref.fa -o OUT\n\n")
     assert "# Assemble Summary" in report
     assert "# Locus Filtering" in report
     assert "# Sample Masking" in report
@@ -4182,6 +4184,7 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
     assert "assembly_reference_sequence" not in report
     assert report_json["summary"]["shared_loci_after_delimiting"] == 10
     assert report_json["summary"]["final_snp_sites_written"] == 5
+    assert report_json["command"] == "ipyrad2 assemble -d a.bam -r ref.fa -o OUT"
     assert report_json["sample_masking"]["loci_with_samples_masked_by_max_hetero_frequency"] == 2
     assert report_json["sample_summary"][0]["sample"] == "s1"
     assert report_json["sample_summary"][0]["masked_by_max_hetero_frequency"] == 2
