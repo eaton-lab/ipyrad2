@@ -243,9 +243,14 @@ def _sample_output_artifacts(
     outdir: Path,
 ) -> Tuple[Path, ...]:
     """Return all output artifacts generated for one sample."""
-    artifacts = [outdir / f"{sname}.R1.trimmed.fastq.gz"]
-    if fastq_tuple[1] is not None and fastq_tuple[1].name != "-null-":
-        artifacts.append(outdir / f"{sname}.R2.trimmed.fastq.gz")
+    is_paired = fastq_tuple[1] is not None and fastq_tuple[1].name != "-null-"
+    if is_paired:
+        artifacts = [
+            outdir / f"{sname}.R1.trimmed.fastq.gz",
+            outdir / f"{sname}.R2.trimmed.fastq.gz",
+        ]
+    else:
+        artifacts = [outdir / f"{sname}.trimmed.fastq.gz"]
     artifacts.extend([
         outdir / f"{sname}.stats.json",
     ])
@@ -284,11 +289,15 @@ def _build_fastp_command(
     threads: int,
 ) -> List[str]:
     """Build a fastp command for a single sample."""
-    out1 = outdir / f"{sname}.R1.trimmed.fastq.gz"
-    out2 = outdir / f"{sname}.R2.trimmed.fastq.gz"
     stats_json = outdir / f"{sname}.stats.json"
     stats_html = outdir / f"{sname}.stats.html"
     is_paired = fastqs[1] is not None and fastqs[1].name != "-null-"
+    out1 = (
+        outdir / f"{sname}.R1.trimmed.fastq.gz"
+        if is_paired
+        else outdir / f"{sname}.trimmed.fastq.gz"
+    )
+    out2 = outdir / f"{sname}.R2.trimmed.fastq.gz"
     trim_front_lengths = trim_front_lengths or (
         len(cutsite_motifs[0]),
         len(cutsite_motifs[1]),

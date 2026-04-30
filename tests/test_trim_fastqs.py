@@ -159,6 +159,8 @@ def test_build_fastp_command_for_single_end_omits_paired_flags(
     assert "-O" not in cmd
     assert "--detect_adapter_for_pe" not in cmd
     assert "-U" not in cmd
+    assert "-o" in cmd
+    assert cmd[cmd.index("-o") + 1] == str(tmp_path / "sample.trimmed.fastq.gz")
     assert "--trim_front1" in cmd
     assert "--trim_front2" not in cmd
     assert "-6" not in cmd

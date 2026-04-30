@@ -107,7 +107,9 @@ def _run_trim_sample(
     )
     defaults.update(kwargs)
     trim_fastqs.trim_sample_with_fastp(fastqs=fastqs, **defaults)
-    return tmp_path / "sample.R1.trimmed.fastq.gz"
+    is_paired = fastqs[1] is not None
+    suffix = "sample.R1.trimmed.fastq.gz" if is_paired else "sample.trimmed.fastq.gz"
+    return tmp_path / suffix
 
 
 def _inferred(
@@ -359,7 +361,7 @@ def test_run_trimmer_respects_max_reads_and_writes_single_end_summary(
         logged_command="ipyrad2 trim -d sample.fastq.gz -o out",
     )
 
-    records = _read_fastq(outdir / "sample.R1.trimmed.fastq.gz")
+    records = _read_fastq(outdir / "sample.trimmed.fastq.gz")
     stats_json = _read_json(outdir / "sample.stats.json")
     summary_text = (outdir / "ipyrad_trim_stats_0.txt").read_text(encoding="utf-8")
     summary_json = _read_json(outdir / "ipyrad_trim_stats_0.json")
@@ -542,7 +544,7 @@ def test_run_trimmer_force_allows_rewrite_when_stats_artifact_exists(
         log_level="ERROR",
     )
 
-    assert _read_fastq(outdir / "sample.R1.trimmed.fastq.gz") == [("r1", "ACGTACGTACGT", "I" * 12)]
+    assert _read_fastq(outdir / "sample.trimmed.fastq.gz") == [("r1", "ACGTACGTACGT", "I" * 12)]
     assert (outdir / "sample.stats.json").exists()
     assert not (outdir / "sample.stats.html").exists()
 
@@ -626,10 +628,53 @@ def test_run_trimmer_skips_empty_single_end_samples_in_mixed_batch(
 
     summary_text = (outdir / "ipyrad_trim_stats_0.txt").read_text(encoding="utf-8")
 
-    assert (outdir / "full.R1.trimmed.fastq.gz").exists()
-    assert not (outdir / "empty.R1.trimmed.fastq.gz").exists()
+    assert (outdir / "full.trimmed.fastq.gz").exists()
+    assert not (outdir / "empty.trimmed.fastq.gz").exists()
     assert "full" in summary_text
     assert "empty" not in summary_text
+
+
+def test_run_trimmer_ignores_legacy_single_end_r1_output_name(
+    tmp_path: Path,
+    sequential_pool,
+) -> None:
+    fastq = _write_fastq(
+        tmp_path / "sample.fastq.gz",
+        [("r1", "TGCAGACGTACGTACGT", "I" * 17)],
+    )
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    (outdir / "sample.R1.trimmed.fastq.gz").write_bytes(b"legacy")
+
+    trim_fastqs.run_trimmer(
+        fastqs=[fastq],
+        outdir=outdir,
+        cutsite_motifs=("TGCAG", ""),
+        max_reads=None,
+        min_trimmed_length=1,
+        max_unqualified_percent=15,
+        min_quality=20,
+        min_mean_window_quality=30,
+        cut_window_size=5,
+        phred64=False,
+        max_reads_kmer=100,
+        max_ns=5,
+        disable_infer_cutsite_motifs=True,
+        disable_adapter_trimming=True,
+        disable_quality_filtering=False,
+        cores=1,
+        threads=1,
+        delim_str=None,
+        delim_idx=1,
+        suffix=None,
+        umi_tag_in_i5=False,
+        force=False,
+        log_level="ERROR",
+    )
+
+    assert _read_fastq(outdir / "sample.trimmed.fastq.gz") == [("r1", "ACGTACGTACGT", "I" * 12)]
+    assert (outdir / "sample.R1.trimmed.fastq.gz").read_bytes() == b"legacy"
+    assert (outdir / "sample.stats.json").exists()
 
 
 def test_run_trimmer_skips_paired_sample_when_both_mates_are_empty(
@@ -871,7 +916,7 @@ def test_run_trimmer_uses_longest_inferred_multi_motif_trim_length(
         log_level="ERROR",
     )
 
-    assert _read_fastq(outdir / "sample.R1.trimmed.fastq.gz") == [("r1", "CGTACGT", "I" * 7)]
+    assert _read_fastq(outdir / "sample.trimmed.fastq.gz") == [("r1", "CGTACGT", "I" * 7)]
 
 
 def test_run_trimmer_inferred_single_end_trim_matches_detected_motif_length_exactly(
@@ -916,7 +961,7 @@ def test_run_trimmer_inferred_single_end_trim_matches_detected_motif_length_exac
         log_level="ERROR",
     )
 
-    trimmed = _read_fastq(outdir / "sample.R1.trimmed.fastq.gz")
+    trimmed = _read_fastq(outdir / "sample.trimmed.fastq.gz")
     assert trimmed == [("r1", insert, "I" * len(insert))]
     assert trimmed[0][1].startswith("GGA")
 
