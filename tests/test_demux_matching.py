@@ -1448,6 +1448,54 @@ def test_demux_pipeline_paired_end_writes_r1_and_r2_outputs(tmp_path: Path) -> N
     assert _read_fastq_sequences(tmp_path / "out" / "sample2_R2.fastq.gz") == ["CCCCGGGG"]
 
 
+def test_demux_pipeline_can_pair_r1_r2_with_manual_delim_args(tmp_path: Path) -> None:
+    r1 = _write_fastq(
+        tmp_path / "pairddrad_example_R1_.fastq.gz",
+        ["ACGTATCGGAAAA", "TGCAATCGGCCCC"],
+    )
+    r2 = _write_fastq(
+        tmp_path / "pairddrad_example_R2_.fastq.gz",
+        ["GGGGAAAA", "CCCCGGGG"],
+    )
+    barcodes = tmp_path / "barcodes.tsv"
+    barcodes.write_text("sample1 ACGT\nsample2 TGCA\n", encoding="utf-8")
+
+    tool = Demux(
+        fastqs=[r1, r2],
+        barcodes=barcodes,
+        delim_str="_R",
+        delim_idx=-1,
+        cutsite_1="ATCGG",
+        cutsite_2="CGATCC",
+        max_mismatch=0,
+        cores=2,
+        chunksize=1,
+        merge_technical_replicates=False,
+        outdir=tmp_path / "out",
+        i7=False,
+        disable_infer_cutsite_motifs=True,
+        max_reads=100,
+        max_reads_kmer=100,
+        log_level="WARNING",
+    )
+    tool.run()
+
+    assert tool._pe is True
+    assert list(tool._filenames_to_fastqs) == ["pairddrad_example"]
+    assert Counter(_read_fastq_sequences(tmp_path / "out" / "sample1_R1.fastq.gz")) == Counter(
+        ["ATCGGAAAA"]
+    )
+    assert Counter(_read_fastq_sequences(tmp_path / "out" / "sample1_R2.fastq.gz")) == Counter(
+        ["GGGGAAAA"]
+    )
+    assert Counter(_read_fastq_sequences(tmp_path / "out" / "sample2_R1.fastq.gz")) == Counter(
+        ["ATCGGCCCC"]
+    )
+    assert Counter(_read_fastq_sequences(tmp_path / "out" / "sample2_R2.fastq.gz")) == Counter(
+        ["CCCCGGGG"]
+    )
+
+
 def test_demux_combinatorial_records_suspected_unknown_r2_barcode(tmp_path: Path) -> None:
     r1 = _write_fastq(tmp_path / "lane_R1.fastq.gz", ["ACGTATCGGAAAA"])
     r2 = _write_fastq(tmp_path / "lane_R2.fastq.gz", ["CCCCCGATCCAAAA"])

@@ -286,12 +286,23 @@ def test_delim_parsing_raises_on_ambiguous_non_paired_groups(tmp_path: Path) -> 
         get_name_to_fastq_dict([fastq1, fastq2], "_lane", 1)
 
 
-def test_negative_delim_index_raises(tmp_path: Path) -> None:
+def test_negative_delim_index_groups_from_the_right(tmp_path: Path) -> None:
+    fastq1 = tmp_path / "sample_A_lane_R1_.fastq.gz"
+    fastq2 = tmp_path / "sample_A_lane_R2_.fastq.gz"
+    fastq1.touch()
+    fastq2.touch()
+
+    result = get_name_to_fastq_dict([fastq1, fastq2], "_R", -1)
+
+    assert result == {"sample_A_lane": (fastq1, fastq2)}
+
+
+def test_zero_delim_index_raises(tmp_path: Path) -> None:
     fastq = tmp_path / "sample.fastq.gz"
     fastq.touch()
 
-    with pytest.raises(IPyradError, match="delim_index must be >= 1"):
-        get_name_to_fastq_dict([fastq], "_", -1)
+    with pytest.raises(IPyradError, match="delim_index cannot be 0"):
+        get_name_to_fastq_dict([fastq], "_", 0)
 
 
 def test_empty_inputs_fail_fast() -> None:

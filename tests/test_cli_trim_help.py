@@ -69,6 +69,7 @@ def test_trim_help_groups_examples_and_phred64_are_updated() -> None:
     assert "$ ipyrad2 trim -d DATA/*.gz -o OUT --phred64 -U" in help_text
     assert "--phred64" in help_text
     assert "Use commas for multiple motifs" in help_text
+    assert "positive from left, negative from right" in help_text
     assert "ipyrad trim" not in help_text
     assert "--phred-qscore-offset" not in help_text
     assert "-nx" not in help_text
@@ -106,6 +107,14 @@ def test_trim_parser_defaults_are_updated() -> None:
     assert args.log_level == "INFO"
     assert not hasattr(args, "log_file")
     assert not hasattr(args, "phred_qscore_offset")
+
+
+def test_trim_parser_accepts_negative_delim_idx() -> None:
+    args = setup_parsers().parse_args(
+        ["trim", "-d", "a.fastq.gz", "-dx", "_R", "-di", "-1"]
+    )
+
+    assert args.delim_idx == -1
 
 
 def test_trim_parser_accepts_comma_separated_manual_overhangs() -> None:

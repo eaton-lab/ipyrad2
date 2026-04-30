@@ -276,6 +276,11 @@ class Demux:
     max_reads_kmer: int
     """: Total reads sampled across files for junction inference."""
     log_level: str
+    delim_str: str | None = None
+    """: Delimiter substring used to parse sample names from filenames."""
+    delim_idx: int = 1
+    """: Delimiter index; positive counts from left, negative from right."""
+    logged_command: str | None = None
     barcode_boundary_slack: int = 1
     """: Max 5-prime barcode-boundary offset allowed for inline barcode matching."""
     allow_leading_barcode_deletion: bool = False
@@ -390,7 +395,11 @@ class Demux:
         self._merge_cleanup()
 
     def _load_input_fastqs(self) -> None:
-        self._filenames_to_fastqs = get_name_to_fastq_dict(self.fastqs, None, None)
+        self._filenames_to_fastqs = get_name_to_fastq_dict(
+            self.fastqs,
+            self.delim_str,
+            self.delim_idx,
+        )
         paired_states = {
             fastq_tuple[1] is not None
             for fastq_tuple in self._filenames_to_fastqs.values()

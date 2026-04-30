@@ -49,6 +49,7 @@ def validate_demux_args(args: Namespace, parser: ArgumentParser) -> None:
         args.i7 and args.allow_leading_barcode_deletion,
         "--allow-leading-barcode-deletion applies only to inline barcode demux",
     )
+    _parser_error_if(parser, args.delim_idx == 0, "--delim-idx cannot be 0")
 
 
 def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str = None) -> None:
@@ -63,6 +64,7 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
     )
     core = tool.add_argument_group("Core inputs")
     mode = tool.add_argument_group("Demultiplexing mode")
+    naming = tool.add_argument_group("Sample naming and pairing")
     cutsites = tool.add_argument_group("Cutsite motifs")
     performance = tool.add_argument_group("Performance and sampling")
     logging = tool.add_argument_group("Logging")
@@ -106,6 +108,15 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
             "Recover inline barcode observations missing the first expected barcode base. "
             "Disabled by default."
         ),
+    )
+
+    naming.add_argument(
+        "-dx", "--delim-str", metavar="str", type=str, default=None,
+        help="Delimiter substring used to parse sample names from filenames.",
+    )
+    naming.add_argument(
+        "-di", "--delim-idx", metavar="int", type=int, default=1,
+        help="Delimiter index: positive from left, negative from right. [default=%(default)s]",
     )
 
     cutsites.add_argument(

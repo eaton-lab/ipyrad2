@@ -22,6 +22,7 @@ def test_demux_help_groups_and_examples_are_updated() -> None:
     expected_sections = [
         "Core inputs:",
         "Demultiplexing mode:",
+        "Sample naming and pairing:",
         "Cutsite motifs:",
         "Performance and sampling:",
         "Logging:",
@@ -39,6 +40,8 @@ def test_demux_help_groups_and_examples_are_updated() -> None:
         "-M, --merge-technical-replicates",
         "--barcode-boundary-slack",
         "--allow-leading-barcode-deletion",
+        "-dx, --delim-str",
+        "-di, --delim-idx",
         "-e1, --cutsite-1",
         "-e2, --cutsite-2",
         "-E, --disable-infer-cutsite-motifs",
@@ -61,6 +64,7 @@ def test_demux_help_groups_and_examples_are_updated() -> None:
     assert "ipyrad2 demux: demultiplex pooled reads to sample files by barcode or index" in help_text
     assert "$ ipyrad2 demux -d RAW/*.fastq.gz -b BARCODES.csv --log-level DEBUG" in help_text
     assert "Use commas for multiple motifs" in help_text
+    assert "positive from left, negative from right" in help_text
     assert "compared to inferred motifs unless -E is set" in help_text
     assert "overrides inference" not in help_text
     assert "ipyrad demux" not in help_text
@@ -84,6 +88,8 @@ def test_demux_parser_defaults_are_unchanged() -> None:
     assert args.max_reads_kmer == 100_000
     assert args.pigz is False
     assert args.chunksize == 10_000_000
+    assert args.delim_str is None
+    assert args.delim_idx == 1
     assert args.disable_infer_cutsite_motifs is False
     assert args.merge_technical_replicates is False
     assert args.barcode_boundary_slack == 1
@@ -92,6 +98,15 @@ def test_demux_parser_defaults_are_unchanged() -> None:
     assert args.cores == 4
     assert args.log_level == "INFO"
     assert not hasattr(args, "log_file")
+
+
+def test_demux_parser_accepts_negative_delim_idx() -> None:
+    args = setup_parsers().parse_args(
+        ["demux", "-d", "a.fastq.gz", "-b", "bars.tsv", "-dx", "_R", "-di", "-1"]
+    )
+
+    assert args.delim_str == "_R"
+    assert args.delim_idx == -1
 
 
 def test_demux_parser_accepts_comma_separated_manual_overhangs() -> None:
@@ -170,6 +185,7 @@ def test_demux_parser_rejects_invalid_barcode_boundary_slack() -> None:
         (["demux", "-d", "a.fastq.gz", "-b", "bars.tsv", "-m", "-1"], "--max-mismatch must be between 0 and 2"),
         (["demux", "-d", "a.fastq.gz", "-b", "bars.tsv", "-m", "3"], "--max-mismatch must be between 0 and 2"),
         (["demux", "-d", "a.fastq.gz", "-b", "bars.tsv", "--max-reads-kmer", "0"], "--max-reads-kmer must be >= 1"),
+        (["demux", "-d", "a.fastq.gz", "-b", "bars.tsv", "-di", "0"], "--delim-idx cannot be 0"),
         (
             [
                 "demux",
