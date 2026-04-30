@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import pty
 import shutil
@@ -116,6 +117,7 @@ def _iter_denovo_outputs(outdir: Path) -> list[Path]:
         outdir / DENOVO_STATS_FILENAME,
         outdir / DENOVO_SAMPLE_GRAPH_SUMMARY_FILENAME,
         outdir / "denovo.stats.txt",
+        outdir / "denovo.stats.json",
         outdir / "denovo.audit",
     ]
 
@@ -401,6 +403,7 @@ def _prepare_output_paths(
         "loci_stats": outdir / DENOVO_STATS_FILENAME,
         "sample_graph_summary": outdir / DENOVO_SAMPLE_GRAPH_SUMMARY_FILENAME,
         "run_stats": outdir / "denovo.stats.txt",
+        "run_stats_json": outdir / "denovo.stats.json",
         "audit_dir": outdir / "denovo.audit",
         "workdir": outdir / WORKDIR_NAME,
     }
@@ -1009,6 +1012,7 @@ def _human_denovo_report_label(key: str) -> str:
 def _write_denovo_stats(
     outpath: Path,
     *,
+    logged_command: str | None = None,
     all_fastq_dict: dict[str, tuple[Path, Path | None]],
     selected_fastq_dict: dict[str, tuple[Path, Path | None]],
     selection_mode: str,
@@ -1032,6 +1036,7 @@ def _write_denovo_stats(
     outputs: dict[str, Path],
 ) -> None:
     """Write a human-readable summary of the denovo run."""
+    run_stats_json = outputs.get("run_stats_json", outpath.with_suffix(".json"))
     occupancy_lookup = dict(qc_summary.occupancy_counts)
 
     inputs_rows = [
@@ -1196,6 +1201,7 @@ def _write_denovo_stats(
         ("loci_stats", str(outputs["loci_stats"])),
         ("sample_graph_summary", str(outputs["sample_graph_summary"])),
         ("run_stats", str(outputs["run_stats"])),
+        ("run_stats_json", str(run_stats_json)),
         ("audit_dir", str(outputs["audit_dir"])),
         (
             "intermediates",
@@ -1258,9 +1264,43 @@ def _write_denovo_stats(
         [(_human_denovo_report_label(key), value) for key, value in output_rows],
     )
 
-    outpath.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    report_text = "\n".join(lines).rstrip() + "\n"
+    if logged_command:
+        report_text = f"CMD: {logged_command}\n\n{report_text}"
+    outpath.write_text(report_text, encoding="utf-8")
+    stats_json: dict[str, object] = {
+        "inputs": {key: value for key, value in inputs_rows},
+        "clustering_parameters": {key: value for key, value in clustering_rows},
+        "denovo_summary": {key: value for key, value in summary_rows},
+        "locus_qc": {key: value for key, value in locus_qc_rows},
+        "component_qc": {key: value for key, value in component_qc_rows},
+        "component_node_summary": [
+            dict(zip(component_node_headers, row))
+            for row in component_node_rows
+        ],
+        "selected_sample_summary": [
+            dict(zip(selected_sample_headers, row))
+            for row in selected_sample_rows
+        ],
+        "locus_occupancy": [
+            dict(zip(occupancy_headers, row))
+            for row in occupancy_rows
+        ],
+        "runtime": {key: value for key, value in runtime_rows},
+        "outputs": {key: value for key, value in output_rows},
+    }
+    if logged_command:
+        stats_json["command"] = logged_command
+    run_stats_json.write_text(
+        json.dumps(stats_json, indent=2) + "\n",
+        encoding="utf-8",
+    )
     logger.info("wrote denovo summary report")
-    logger.debug("wrote denovo run stats to {}", outpath)
+    logger.debug(
+        "wrote denovo run stats to {} and {}",
+        outpath,
+        run_stats_json,
+    )
 
 
 def _write_stripped_clustering_fasta(
@@ -1495,6 +1535,7 @@ def run_denovo(
     use_all_samples: bool,
     keep_intermediates: bool,
     log_level: str,
+    logged_command: str | None = None,
 ) -> None:
     """Run the denovo reference construction workflow."""
     # check cli arg values
@@ -1623,6 +1664,7 @@ def run_denovo(
     logger.info("writing denovo summary report")
     _write_denovo_stats(
         outputs["run_stats"],
+        logged_command=logged_command,
         all_fastq_dict=full_fastq_dict,
         selected_fastq_dict=fastq_dict,
         selection_mode=selection_mode,

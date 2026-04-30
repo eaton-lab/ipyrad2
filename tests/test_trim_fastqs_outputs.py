@@ -356,16 +356,21 @@ def test_run_trimmer_respects_max_reads_and_writes_single_end_summary(
         umi_tag_in_i5=False,
         force=False,
         log_level="ERROR",
+        logged_command="ipyrad2 trim -d sample.fastq.gz -o out",
     )
 
     records = _read_fastq(outdir / "sample.R1.trimmed.fastq.gz")
     stats_json = _read_json(outdir / "sample.stats.json")
     summary_text = (outdir / "ipyrad_trim_stats_0.txt").read_text(encoding="utf-8")
+    summary_json = _read_json(outdir / "ipyrad_trim_stats_0.json")
 
     assert len(records) == 1
     assert stats_json["summary"]["before_filtering"]["total_reads"] == 1
+    assert summary_text.startswith("CMD: ipyrad2 trim -d sample.fastq.gz -o out\n\n")
     assert "sample" in summary_text
     assert "read2_mean_length_before" not in summary_text
+    assert summary_json["command"] == "ipyrad2 trim -d sample.fastq.gz -o out"
+    assert summary_json["sample_summary"][0]["sample"] == "sample"
 
 
 def test_run_trimmer_writes_paired_end_summary_columns(
@@ -405,11 +410,13 @@ def test_run_trimmer_writes_paired_end_summary_columns(
     )
 
     summary_text = (outdir / "ipyrad_trim_stats_0.txt").read_text(encoding="utf-8")
+    summary_json = _read_json(outdir / "ipyrad_trim_stats_0.json")
 
     assert (outdir / "sample.R1.trimmed.fastq.gz").exists()
     assert (outdir / "sample.R2.trimmed.fastq.gz").exists()
     assert "sample" in summary_text
     assert "read2_mean_length_before" in summary_text
+    assert "command" not in summary_json
 
 
 def test_run_trimmer_blocks_when_only_r2_output_exists_without_force(

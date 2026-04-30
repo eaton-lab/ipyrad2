@@ -18,6 +18,7 @@ from ..utils.parallel import run_pipeline
 from ..utils.parallel import run_with_pool
 from .map_samples_prep import prepare_map_samples
 from .map_stats import MappingJobResult
+from .map_stats import build_map_stats_payload
 from .map_stats import collect_paired_bam_stats
 from .map_stats import collect_single_end_bam_stats
 from .map_stats import parse_markdup_report
@@ -413,13 +414,14 @@ def _select_output_samples(
     return selected
 
 
-def _next_stats_path(outdir: Path) -> Path:
-    """Return the next free ipyrad_map_stats_N.txt path in the output directory."""
+def _next_stats_paths(outdir: Path) -> tuple[Path, Path]:
+    """Return the next free numbered mapper stats text/JSON paths."""
     idx = 0
     while True:
-        outstats = outdir / f"ipyrad_map_stats_{idx}.txt"
-        if not outstats.exists():
-            return outstats
+        outstats_txt = outdir / f"ipyrad_map_stats_{idx}.txt"
+        outstats_json = outdir / f"ipyrad_map_stats_{idx}.json"
+        if not outstats_txt.exists() and not outstats_json.exists():
+            return outstats_txt, outstats_json
         idx += 1
 
 
@@ -438,6 +440,7 @@ def run_mapper(
     delim_str: str | None,
     delim_idx: int,
     log_level: str,
+    logged_command: str | None = None,
 ):
     """Run the ipyrad2 map workflow."""
     reference = expand_path(reference)
@@ -531,12 +534,22 @@ def run_mapper(
         msg="Gathering mapping stats",
     )
 
-    outstats = _next_stats_path(outdir)
-    outstats.write_text(
-        render_map_stats_report(stats, is_paired),
+    stats_payload = build_map_stats_payload(
+        stats,
+        is_paired,
+        logged_command=logged_command,
+    )
+    outstats_txt, outstats_json = _next_stats_paths(outdir)
+    outstats_txt.write_text(
+        render_map_stats_report(
+            stats,
+            is_paired,
+            logged_command=logged_command,
+        ),
         encoding="utf-8",
     )
-    logger.info(f"mapping stats written to {outstats}")
+    outstats_json.write_text(json.dumps(stats_payload, indent=2) + "\n", encoding="utf-8")
+    logger.info("mapping stats written to {} and {}", outstats_txt, outstats_json)
 
 
 if __name__ == "__main__":

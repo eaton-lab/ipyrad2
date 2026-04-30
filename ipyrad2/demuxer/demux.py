@@ -1114,6 +1114,7 @@ class Demux:
         """Write the numbered demux stats report."""
         write_demux_stats(
             outdir=self.outdir,
+            logged_command=self.logged_command,
             file_stats=self._file_stats,
             sample_stats=self._sample_stats,
             names_to_barcodes=self._names_to_barcodes,

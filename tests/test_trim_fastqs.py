@@ -312,7 +312,11 @@ def test_run_trimmer_uses_max_reads_kmer(
             key: None for key in jobs
         },
     )
-    monkeypatch.setattr(trim_fastqs, "write_stats_summary", lambda snames, outdir: None)
+    monkeypatch.setattr(
+        trim_fastqs,
+        "write_stats_summary",
+        lambda snames, outdir, logged_command=None: None,
+    )
 
     trim_fastqs.run_trimmer(
         fastqs=[Path("ignored.fastq.gz")],
@@ -396,7 +400,11 @@ def test_run_trimmer_logs_overhang_summary_once(
             key: None for key in jobs
         },
     )
-    monkeypatch.setattr(trim_fastqs, "write_stats_summary", lambda snames, outdir: None)
+    monkeypatch.setattr(
+        trim_fastqs,
+        "write_stats_summary",
+        lambda snames, outdir, logged_command=None: None,
+    )
     monkeypatch.setattr(
         trim_fastqs,
         "get_overhangs_from_kmers",
@@ -462,7 +470,11 @@ def test_run_trimmer_logs_preflight_summary(
             key: None for key in jobs
         },
     )
-    monkeypatch.setattr(trim_fastqs, "write_stats_summary", lambda snames, outdir: None)
+    monkeypatch.setattr(
+        trim_fastqs,
+        "write_stats_summary",
+        lambda snames, outdir, logged_command=None: None,
+    )
 
     trim_fastqs.run_trimmer(
         fastqs=[usable, empty],
@@ -536,7 +548,11 @@ def test_run_trimmer_logs_one_fastp_command_template(
             key: None for key in jobs
         },
     )
-    monkeypatch.setattr(trim_fastqs, "write_stats_summary", lambda snames, outdir: None)
+    monkeypatch.setattr(
+        trim_fastqs,
+        "write_stats_summary",
+        lambda snames, outdir, logged_command=None: None,
+    )
 
     trim_fastqs.run_trimmer(
         fastqs=[alpha_r1, alpha_r2, beta_r1, beta_r2],

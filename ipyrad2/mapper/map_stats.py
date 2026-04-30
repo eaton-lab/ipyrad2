@@ -444,8 +444,12 @@ def _section_frame(
     return pd.DataFrame.from_dict(rows, orient="index", columns=columns)
 
 
-def render_map_stats_report(stats: dict[str, dict], is_paired: bool) -> str:
-    """Render the final mapper stats report."""
+def build_map_stats_payload(
+    stats: dict[str, dict],
+    is_paired: bool,
+    logged_command: str | None = None,
+) -> dict[str, object]:
+    """Build the structured run-level mapper stats payload."""
     if is_paired:
         applied_columns = [
             "input_templates",
@@ -515,19 +519,70 @@ def render_map_stats_report(stats: dict[str, dict], is_paired: bool) -> str:
     })
     preview_summary_frame = _section_frame(stats, preview_summary_columns, float_defaults=set(preview_summary_columns))
 
+    payload: dict[str, object] = {
+        "is_paired": is_paired,
+        "applied_mapping_summary": (
+            applied_frame.rename_axis("sample").reset_index().to_dict(orient="records")
+        ),
+        "assemble_read_filter_preview": {
+            "description": "These preview thresholds were not applied during mapping.",
+            "flags": preview_flags,
+            "mode_note": preview_mode_note.strip(),
+            "mapq_threshold": MAPQ_REPORT_THRESHOLD,
+            "soft_clipped_bases_threshold": SOFT_CLIP_REPORT_THRESHOLD,
+            "nm_threshold": NM_REPORT_THRESHOLD,
+            "absolute_tlen_threshold": ABS_TLEN_REPORT_THRESHOLD if is_paired else None,
+            "filter_effects": (
+                preview_effect_frame.rename_axis("sample").reset_index().to_dict(orient="records")
+            ),
+            "metric_summaries": (
+                preview_summary_frame.rename_axis("sample").reset_index().to_dict(orient="records")
+            ),
+        },
+    }
+    if logged_command:
+        payload["command"] = logged_command
+    return payload
+
+
+def render_map_stats_report(
+    stats: dict[str, dict],
+    is_paired: bool,
+    logged_command: str | None = None,
+) -> str:
+    """Render the final mapper stats report."""
+    payload = build_map_stats_payload(
+        stats,
+        is_paired,
+        logged_command=logged_command,
+    )
+    applied_frame = pd.DataFrame.from_records(payload["applied_mapping_summary"]).set_index("sample")
+    preview = payload["assemble_read_filter_preview"]
+    preview_effect_frame = pd.DataFrame.from_records(preview["filter_effects"]).set_index("sample")
+    preview_summary_frame = pd.DataFrame.from_records(preview["metric_summaries"]).set_index("sample")
+
+    command_header = ""
+    if payload.get("command"):
+        command_header = f"CMD: {payload['command']}\n\n"
+
     return (
-        _report_header(is_paired)
+        command_header
+        + _report_header(is_paired)
         + "## Applied mapping summary\n"
         + "# These counts describe filters already applied during ipyrad2 map.\n\n"
         + _format_frame(applied_frame)
         + "\n## Assemble read-filter preview (not applied during mapping)\n"
-        + "# These preview thresholds were not applied during mapping.\n"
-        + f"# Use them to guide ipyrad2 assemble read filters: {preview_flags}.\n"
-        + preview_mode_note
-        + f"# MAPQ threshold: {MAPQ_REPORT_THRESHOLD}\n"
-        + f"# Soft-clipped bases threshold: {SOFT_CLIP_REPORT_THRESHOLD}\n"
-        + f"# NM threshold: {NM_REPORT_THRESHOLD}\n"
-        + (f"# Absolute TLEN threshold: {ABS_TLEN_REPORT_THRESHOLD}\n" if is_paired else "")
+        + f"# {preview['description']}\n"
+        + f"# Use them to guide ipyrad2 assemble read filters: {preview['flags']}.\n"
+        + f"{preview['mode_note']}\n"
+        + f"# MAPQ threshold: {preview['mapq_threshold']}\n"
+        + f"# Soft-clipped bases threshold: {preview['soft_clipped_bases_threshold']}\n"
+        + f"# NM threshold: {preview['nm_threshold']}\n"
+        + (
+            f"# Absolute TLEN threshold: {preview['absolute_tlen_threshold']}\n"
+            if preview["absolute_tlen_threshold"] is not None
+            else ""
+        )
         + "\n### Preview filter effects\n"
         + _format_frame(preview_effect_frame)
         + "\n### Preview metric summaries\n"

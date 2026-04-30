@@ -1275,6 +1275,7 @@ def _write_consensus_and_outputs(
     threads: int,
     log_level: str,
     cores: int | None = None,
+    logged_command: str | None = None,
     rad_samples: list[str] | None = None,
     wgs_samples: list[str] | None = None,
 ) -> None:
@@ -1494,6 +1495,7 @@ def _write_consensus_and_outputs(
     write_assemble_stats_report(
         name=name,
         outdir=outdir,
+        logged_command=logged_command,
         snames=snames,
         shared_loci_after_delimiting=shared_loci_after_delimiting,
         shared_loci_after_paralog_filtering=shared_loci_after_paralog_filtering,
@@ -1543,6 +1545,7 @@ def run_assembler(
     force: bool,
     log_level: str,
     min_aligned_len: int | None = None,
+    logged_command: str | None = None,
 ):
     # Normalize the top-level input/output paths first so later stages can
     # treat everything as concrete local files.
@@ -1888,6 +1891,7 @@ def run_assembler(
         threads=threads,
         log_level=log_level,
         cores=cores,
+        logged_command=logged_command,
         rad_samples=sorted(bam_dict),
         wgs_samples=sorted(wgs_dict),
     )

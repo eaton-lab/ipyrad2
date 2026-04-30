@@ -476,7 +476,22 @@ def trim_sample_with_fastp(
     logger.debug(f"finished trimming {sname}")
 
 
-def write_stats_summary(snames: List[str], outdir: Path):
+def _next_trim_stats_paths(outdir: Path) -> tuple[Path, Path]:
+    """Return the next free trim run-summary text/JSON paths."""
+    idx = 0
+    while True:
+        txt_path = outdir / f"ipyrad_trim_stats_{idx}.txt"
+        json_path = outdir / f"ipyrad_trim_stats_{idx}.json"
+        if not txt_path.exists() and not json_path.exists():
+            return txt_path, json_path
+        idx += 1
+
+
+def write_stats_summary(
+    snames: List[str],
+    outdir: Path,
+    logged_command: str | None = None,
+):
     """Collect fastp stats from all samples in outdir and write summary.
 
     If user runs multiple ipyrad trim multiple times with the same
@@ -484,13 +499,7 @@ def write_stats_summary(snames: List[str], outdir: Path):
     write a new stats file.
     """
     # get a new stats outfile path in outdir
-    idx = 0
-    while 1:
-        outfile = outdir / f"ipyrad_trim_stats_{idx}.txt"
-        if outfile.exists():
-            idx += 1
-        else:
-            break
+    outfile, json_outfile = _next_trim_stats_paths(outdir)
 
     # load all stats dicts from jsons
     jdata = {}
@@ -547,8 +556,19 @@ def write_stats_summary(snames: List[str], outdir: Path):
     df = df.dropna(axis=1)
 
     # write human readable whitespace delimited.
-    df.to_string(outfile, float_format=lambda x: f"{x:.6f}")
-    logger.info(f"trimming stats written to {outfile}")
+    report_text = df.to_string(float_format=lambda x: f"{x:.6f}") + "\n"
+    if logged_command:
+        report_text = f"CMD: {logged_command}\n\n{report_text}"
+    outfile.write_text(report_text, encoding="utf-8")
+    stats_json: dict[str, object] = {
+        "sample_summary": json.loads(
+            df.rename_axis("sample").reset_index().to_json(orient="records")
+        )
+    }
+    if logged_command:
+        stats_json["command"] = logged_command
+    json_outfile.write_text(json.dumps(stats_json, indent=2) + "\n", encoding="utf-8")
+    logger.info("trimming stats written to {} and {}", outfile, json_outfile)
 
 
 def run_trimmer(
@@ -575,6 +595,7 @@ def run_trimmer(
     umi_tag_in_i5: bool,
     force: bool,
     log_level: str,
+    logged_command: str | None = None,
 ):
     cutsite_motifs = tuple(cutsite_motifs) if cutsite_motifs else None
     cutsite_motifs = _validate_user_cutsite_motifs(
@@ -668,7 +689,7 @@ def run_trimmer(
             logged_fastp_command = True
         jobs[sname] = (trim_sample_with_fastp, kwargs)
     results = run_with_pool(jobs, log_level, workers, msg="Trimming")
-    write_stats_summary(sorted(results), outdir)
+    write_stats_summary(sorted(results), outdir, logged_command=logged_command)
 
 
 # if __name__ == "__main__":

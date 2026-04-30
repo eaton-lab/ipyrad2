@@ -1,4 +1,5 @@
 import gzip
+import json
 import queue
 import shutil
 from collections import Counter
@@ -379,12 +380,20 @@ def test_demux_creates_missing_outdir_parents(tmp_path: Path) -> None:
         max_reads=100,
         max_reads_kmer=100,
         log_level="WARNING",
+        logged_command="ipyrad2 demux -d lane.fastq.gz -b barcodes.tsv -o out",
     )
     tool.run()
 
     assert outdir.is_dir()
     assert _read_fastq_sequences(outdir / "sample1_R1.fastq.gz") == ["ATCGGAAAA"]
     assert (outdir / "ipyrad_demux_stats_0.txt").exists()
+    stats_text = (outdir / "ipyrad_demux_stats_0.txt").read_text(encoding="utf-8")
+    stats_json = json.loads((outdir / "ipyrad_demux_stats_0.json").read_text(encoding="utf-8"))
+    assert stats_text.startswith(
+        "CMD: ipyrad2 demux -d lane.fastq.gz -b barcodes.tsv -o out\n\n"
+    )
+    assert stats_json["command"] == "ipyrad2 demux -d lane.fastq.gz -b barcodes.tsv -o out"
+    assert stats_json["sample_demux_statistics"][0]["sample"] == "sample1"
 
 
 def test_demux_rejects_outdir_when_path_is_existing_file(tmp_path: Path) -> None:

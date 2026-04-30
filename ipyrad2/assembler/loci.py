@@ -744,6 +744,7 @@ def write_assemble_stats_report(
     *,
     name: str,
     outdir: Path,
+    logged_command: str | None = None,
     snames: list[str],
     shared_loci_after_delimiting: int,
     shared_loci_after_paralog_filtering: int,
@@ -929,6 +930,8 @@ def write_assemble_stats_report(
         "sample_summary": sample_summary_data,
         "locus_occupancy": locus_occupancy_data,
     }
+    if logged_command:
+        stats_json["command"] = logged_command
     if mixed_data is not None:
         stats_json["mixed_rad_wgs_diagnostics"] = mixed_data
 
@@ -1054,7 +1057,10 @@ def write_assemble_stats_report(
         [_human_stats_label(header) for header in occupancy_headers],
         occupancy_rows,
     )
-    outpath.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    report_text = "\n".join(lines).rstrip() + "\n"
+    if logged_command:
+        report_text = f"CMD: {logged_command}\n\n{report_text}"
+    outpath.write_text(report_text, encoding="utf-8")
     json_path.write_text(json.dumps(stats_json, indent=2) + "\n", encoding="utf-8")
     logger.info("wrote assemble summary report")
     logger.debug("assemble stats written to {} and {}", outpath, json_path)

@@ -139,6 +139,10 @@ def test_parse_markdup_report_and_render_stats_report(tmp_path: Path) -> None:
             }
         },
         is_paired=True,
+        logged_command="ipyrad2 map -d a_R1.fastq.gz a_R2.fastq.gz -r ref.fa -o OUT",
+    )
+    assert rendered.startswith(
+        "CMD: ipyrad2 map -d a_R1.fastq.gz a_R2.fastq.gz -r ref.fa -o OUT\n\n"
     )
     assert "## Applied mapping summary" in rendered
     assert "## Assemble read-filter preview (not applied during mapping)" in rendered

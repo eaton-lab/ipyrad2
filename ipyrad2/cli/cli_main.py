@@ -271,6 +271,7 @@ def command_line(argv: Optional[Sequence[str]] = None):
 def run_subcommand(args, _exit=True):
     # DEMUX: -------------------------------------------------------
     if args.subcommand == "demux":
+        logged_command = format_logged_command(sys.argv[1:])
 
         module = importlib.import_module("..demuxer", package=__package__)
         run_demuxer = getattr(module, "run_demuxer")
@@ -278,7 +279,7 @@ def run_subcommand(args, _exit=True):
         logger.info("---------------------------------------------------------")
         logger.info("----- ipyrad2 demux: demultiplexing reads to samples -----")
         logger.info("---------------------------------------------------------")
-        logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
+        logger.info(f"CMD: {logged_command}")
         run_demuxer(
             fastqs=args.fastqs,
             outdir=args.out,
@@ -300,11 +301,13 @@ def run_subcommand(args, _exit=True):
             log_level=args.log_level,
             pigz=args.pigz,
             force=args.force,
+            logged_command=logged_command,
         )
         if _exit: sys.exit(0)  # noqa: E701
 
     # TRIM: -------------------------------------------------------
     if args.subcommand == "trim":
+        logged_command = format_logged_command(sys.argv[1:])
 
         module = importlib.import_module("..trimmer", package=__package__)
         run_trimmer = getattr(module, "run_trimmer")
@@ -312,7 +315,7 @@ def run_subcommand(args, _exit=True):
         logger.info("----------------------------------------------------------")
         logger.info("----- ipyrad2 trim: quality, adapter, and cutsite motif trimming -----")
         logger.info("----------------------------------------------------------")
-        logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
+        logger.info(f"CMD: {logged_command}")
         run_trimmer(
             fastqs=args.fastqs,
             outdir=args.out,
@@ -337,11 +340,13 @@ def run_subcommand(args, _exit=True):
             umi_tag_in_i5=args.umi_tag_in_i5,
             force=args.force,
             log_level=args.log_level,
+            logged_command=logged_command,
         )
         if _exit: sys.exit(0)  # noqa: E701
 
     # DENOVO: --------------------------------------------------------
     if args.subcommand == "denovo":
+        logged_command = format_logged_command(sys.argv[1:])
 
         module = importlib.import_module("..denovo", package=__package__)
         run_denovo = getattr(module, "run_denovo")
@@ -349,7 +354,7 @@ def run_subcommand(args, _exit=True):
         logger.info("------------------------------------------------------------")
         logger.info("----- ipyrad2 denovo: construct locus reference library -----")
         logger.info("------------------------------------------------------------")
-        logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
+        logger.info(f"CMD: {logged_command}")
         run_denovo(
             fastqs=args.fastqs,
             outdir=args.out,
@@ -371,11 +376,13 @@ def run_subcommand(args, _exit=True):
             delim_idx=args.delim_idx,
             keep_intermediates=args.keep_intermediates,
             log_level=args.log_level,
+            logged_command=logged_command,
         )
         if _exit: sys.exit(0)  # noqa: E701
 
     # MAP: --------------------------------------------------------
     if args.subcommand == "map":
+        logged_command = format_logged_command(sys.argv[1:])
 
         module = importlib.import_module("..mapper", package=__package__)
         run_mapper = getattr(module, "run_mapper")
@@ -383,7 +390,7 @@ def run_subcommand(args, _exit=True):
         logger.info("--------------------------------------------------------------")
         logger.info("----- ipyrad2 map: map reads and write coordinate-sorted BAMs -----")
         logger.info("--------------------------------------------------------------")
-        logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
+        logger.info(f"CMD: {logged_command}")
         run_mapper(
             fastqs=args.fastqs,
             reference=args.reference,
@@ -399,11 +406,13 @@ def run_subcommand(args, _exit=True):
             delim_str=args.delim_str,
             delim_idx=args.delim_idx,
             log_level=args.log_level,
+            logged_command=logged_command,
         )
         if _exit: sys.exit(0)  # noqa: E701
 
     # ASSEMBLE: ---------------------------------------------------
     if args.subcommand == "assemble":
+        logged_command = format_logged_command(sys.argv[1:])
 
         module = importlib.import_module("..assembler", package=__package__)
         run_assembler = getattr(module, "run_assembler")
@@ -411,7 +420,7 @@ def run_subcommand(args, _exit=True):
         logger.info("-----------------------------------------------------------")
         logger.info("----- ipyrad2 assemble: delimit loci and call variants -----")
         logger.info("-----------------------------------------------------------")
-        logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
+        logger.info(f"CMD: {logged_command}")
         run_assembler(
             rad_bams=args.rad_bams,
             wgs_bams=args.wgs_bams,
@@ -450,6 +459,7 @@ def run_subcommand(args, _exit=True):
             threads=args.threads,
             force=args.force,
             log_level=args.log_level,
+            logged_command=logged_command,
         )
         if _exit: sys.exit(0)  # noqa: E701
 
