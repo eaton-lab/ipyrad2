@@ -288,6 +288,7 @@ def _rewrite_bam_rg_tags(migration: LegacyBamMigration, threads: int) -> None:
             "addreplacerg",
             "-m",
             "overwrite_all",
+            "-w",
             "-r",
             _build_canonical_rg_line(migration.canonical_sample),
             "-o",
