@@ -545,21 +545,20 @@ def build_map_stats_payload(
     return payload
 
 
-def render_map_stats_report(
-    stats: dict[str, dict],
-    is_paired: bool,
-    logged_command: str | None = None,
-) -> str:
-    """Render the final mapper stats report."""
-    payload = build_map_stats_payload(
-        stats,
-        is_paired,
-        logged_command=logged_command,
-    )
-    applied_frame = pd.DataFrame.from_records(payload["applied_mapping_summary"]).set_index("sample")
+def _frame_from_payload_records(records: list[dict]) -> pd.DataFrame:
+    """Build one report frame from payload records with a stable sample index."""
+    if not records:
+        return pd.DataFrame(index=pd.Index([], name="sample"))
+    return pd.DataFrame.from_records(records).set_index("sample")
+
+
+def render_map_stats_payload_report(payload: dict[str, object]) -> str:
+    """Render the final mapper stats report from a structured payload."""
+    is_paired = bool(payload["is_paired"])
+    applied_frame = _frame_from_payload_records(payload["applied_mapping_summary"])
     preview = payload["assemble_read_filter_preview"]
-    preview_effect_frame = pd.DataFrame.from_records(preview["filter_effects"]).set_index("sample")
-    preview_summary_frame = pd.DataFrame.from_records(preview["metric_summaries"]).set_index("sample")
+    preview_effect_frame = _frame_from_payload_records(preview["filter_effects"])
+    preview_summary_frame = _frame_from_payload_records(preview["metric_summaries"])
 
     command_header = ""
     if payload.get("command"):
@@ -589,3 +588,17 @@ def render_map_stats_report(
         + _format_frame(preview_summary_frame)
         + "\n"
     )
+
+
+def render_map_stats_report(
+    stats: dict[str, dict],
+    is_paired: bool,
+    logged_command: str | None = None,
+) -> str:
+    """Render the final mapper stats report."""
+    payload = build_map_stats_payload(
+        stats,
+        is_paired,
+        logged_command=logged_command,
+    )
+    return render_map_stats_payload_report(payload)
