@@ -70,6 +70,7 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
         "--max-sites-above-maf",
         "--paralog-fail-frac-max",
         "--max-sample-hetero-frequency",
+        "--subsample",
         "-p, --populations",
         "--rename-bams",
         "-x, --masks",
@@ -89,6 +90,7 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
 
     assert "ipyrad2 assemble: delimit loci, call variants, and write outputs" in help_text
     assert "$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -o OUT -m 4 -qm 20" in help_text
+    assert "$ ipyrad2 assemble -d BAMS/RAD/*.bam -w BAMS/WGS/*.bam -r REF.fa --subsample keep.tsv -o OUT" in help_text
     assert "$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -p pops.tsv -o OUT" in help_text
     assert "$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa --rename-bams rename.tsv -o OUT" in help_text
     assert "RAD BAM inputs that delimit loci unless --loci-bed is provided" in help_text
@@ -97,8 +99,10 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
     assert "Min third-allele fraction at a SNP site" in help_text
     assert "heterozygous/IUPAC plus masked-N-at-variable-site" in help_text
     assert "BED of loci to assemble instead of delimiting shared loci from RAD samples." in help_text
-    assert "Population file for grouped calling; sample/group, glob/group, or classic pop_assign format." in help_text
-    assert "mapping BAM basenames to final sample names" in help_text
+    assert "File of BAM basenames to select a subsample of BAMs from the -d and -w paths" in help_text
+    assert "File mapping BAM basenames to group names for population-level variant calls" in help_text
+    assert "File mapping BAM basenames to new names for outputs; overrides BAM headers" in help_text
+    assert "Optional site patterns to mask in final assembled sequences. [default=None]" in help_text
     assert "--reindex-reference" not in help_text
     assert "ipyrad assemble -d" not in help_text
     assert "--ref REF" not in help_text
@@ -134,6 +138,7 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
         "--maf-threshold",
         "--max-sites-above-maf",
         "--paralog-fail-frac-max",
+        "--subsample",
         "-x, --masks",
         "-t, --threads",
     ]
@@ -176,6 +181,7 @@ def test_assemble_parser_defaults_match_current_cli() -> None:
     assert args.max_sites_above_maf == 8
     assert args.paralog_fail_frac_max == 0.10
     assert args.max_sample_hetero_frequency == 0.10
+    assert args.subsample is None
     assert args.populations is None
     assert args.rename_bams is None
     assert args.masks is None

@@ -13,6 +13,7 @@ Examples
 $ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -o OUT -m 4 -qm 20
 $ ipyrad2 assemble -d BAMS/RAD/*.bam -w BAMS/WGS/*.bam -r REF.fa -o OUT -m 4 -qm 20
 $ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -b loci.bed -o OUT --max-tlen 2000
+$ ipyrad2 assemble -d BAMS/RAD/*.bam -w BAMS/WGS/*.bam -r REF.fa --subsample keep.tsv -o OUT
 $ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -p pops.tsv -o OUT
 $ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa --rename-bams rename.tsv -o OUT
 """
@@ -168,16 +169,20 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
     )
 
     naming.add_argument(
+        "--subsample", metavar="Path", type=Path,
+        help="File of BAM basenames to select a subsample of BAMs from the -d and -w paths",
+    )
+    naming.add_argument(
         "-p", "--populations", metavar="Path", type=Path,
-        help="Population file for grouped calling; sample/group, glob/group, or classic pop_assign format.",
+        help="File mapping BAM basenames to group names for population-level variant calls",
     )
     naming.add_argument(
         "--rename-bams", metavar="Path", type=Path,
-        help="Two-column table mapping BAM basenames to final sample names; overrides BAM-header names for listed inputs.",
+        help="File mapping BAM basenames to new names for outputs; overrides BAM headers",
     )
     naming.add_argument(
         "-x", "--masks", metavar="str", nargs="*", type=str,
-        help="Optional site patterns to mask in final assembled sequences. [default=%(default)s]",
+        help="Optional site patterns to mask in final assembled sequences. [default=None]",
     )
 
     performance.add_argument(

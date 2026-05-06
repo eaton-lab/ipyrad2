@@ -121,10 +121,10 @@ ANALYSIS_TOOL_NAMES = (
     "dapc",
     "admixture",
     "popgen",
+    "baba",
     "bpp",
 )
 RESERVED_TOOL_NAMES = (
-    "baba",
     "treeslider",
 )
 ALL_TOP_LEVEL_COMMANDS = _CORE_TOOL_NAMES + ANALYSIS_TOOL_NAMES + RESERVED_TOOL_NAMES
@@ -452,6 +452,7 @@ def run_subcommand(args, _exit=True):
             maf_threshold=args.maf_threshold,
             max_sites_above_maf=args.max_sites_above_maf,
             paralog_fail_frac_max=args.paralog_fail_frac_max,
+            subsample=args.subsample,
             populations=args.populations,
             rename_bams=args.rename_bams,
             masks=args.masks,

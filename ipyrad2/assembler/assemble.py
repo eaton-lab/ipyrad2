@@ -752,6 +752,60 @@ def _normalize_bam_rename_file(
     return rename_map
 
 
+def _normalize_bam_subsample_file(
+    subsample: Path,
+    bam_paths: list[Path],
+) -> set[str]:
+    """Parse and validate one BAM-basename subsample selection file."""
+    subsample = subsample.expanduser().absolute()
+    if not subsample.exists():
+        raise IPyradError(f"--subsample file not found: {subsample}")
+    if not subsample.is_file():
+        raise IPyradError(f"--subsample must point to a file: {subsample}")
+
+    basenames = [path.name for path in bam_paths]
+    basename_counts: dict[str, int] = {}
+    for name in basenames:
+        basename_counts[name] = basename_counts.get(name, 0) + 1
+    duplicate_inputs = sorted(
+        name for name, count in basename_counts.items() if count > 1
+    )
+    if duplicate_inputs:
+        raise IPyradError(
+            "--subsample cannot be used when input BAM basenames are duplicated: "
+            + ", ".join(duplicate_inputs)
+        )
+
+    selected: set[str] = set()
+    with subsample.open("r", encoding="utf-8") as handle:
+        for lineno, raw_line in enumerate(handle, start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) != 1:
+                raise IPyradError(
+                    f"--subsample line {lineno} must contain exactly 1 BAM basename."
+                )
+            bam_name = parts[0]
+            if bam_name in selected:
+                raise IPyradError(
+                    f"--subsample assigns BAM basename multiple times: {bam_name}"
+                )
+            selected.add(bam_name)
+
+    if not selected:
+        raise IPyradError(f"--subsample contains no BAM basenames: {subsample}")
+
+    extra = sorted(selected.difference(basenames))
+    if extra:
+        raise IPyradError(
+            "--subsample contains BAM basenames not present in this assemble run: "
+            + ", ".join(extra)
+        )
+    return selected
+
+
 def _collect_named_bams(
     bam_paths: list[Path],
     rename_map: dict[str, str],
@@ -1545,6 +1599,7 @@ def run_assembler(
     force: bool,
     log_level: str,
     min_aligned_len: int | None = None,
+    subsample: Path | None = None,
     logged_command: str | None = None,
 ):
     # Normalize the top-level input/output paths first so later stages can
@@ -1590,6 +1645,24 @@ def run_assembler(
     expanded_wgs_bams = (
         [bam_file.expanduser().absolute() for bam_file in wgs_bams] if wgs_bams else []
     )
+
+    if subsample is not None:
+        selected_basenames = _normalize_bam_subsample_file(
+            subsample,
+            expanded_rad_bams + expanded_wgs_bams,
+        )
+        expanded_rad_bams = [
+            bam_file for bam_file in expanded_rad_bams if bam_file.name in selected_basenames
+        ]
+        expanded_wgs_bams = [
+            bam_file for bam_file in expanded_wgs_bams if bam_file.name in selected_basenames
+        ]
+        logger.info(
+            "selected {} BAMs from --subsample (RAD={}, WGS={})",
+            len(selected_basenames),
+            len(expanded_rad_bams),
+            len(expanded_wgs_bams),
+        )
 
     # Validate that some BAM inputs exist before parsing optional rename maps.
     # This keeps the main missing-input errors stable instead of surfacing
