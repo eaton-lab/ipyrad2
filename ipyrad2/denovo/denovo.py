@@ -35,6 +35,7 @@ from .common import (
 )
 from ..utils.exceptions import IPyradError
 from ..utils.names import get_name_to_fastq_dict
+from ..utils.names import normalize_parsed_fastq_sample_names
 from ..utils.parallel import run_pipeline, run_with_pool
 from ..utils.pops import expand_imap_patterns, parse_imap
 from ..utils.progress import ProgressBar
@@ -1559,6 +1560,7 @@ def run_denovo(
     # parse input fastqs/pairs, subselect, and report
     logger.info("loading FASTQ inputs")
     full_fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx)
+    full_fastq_dict = normalize_parsed_fastq_sample_names(full_fastq_dict)
     logger.info("loaded {} denovo input samples", len(full_fastq_dict))
     _validate_fastq_layout(full_fastq_dict)
     logger.info("selecting denovo samples")

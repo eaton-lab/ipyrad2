@@ -6,6 +6,7 @@ import ipyrad2.utils.names as names_module
 from ipyrad2.utils.exceptions import IPyradError
 from ipyrad2.utils.names import get_name_to_fastq_dict
 from ipyrad2.utils.names import get_paths_list_from_fastq_str
+from ipyrad2.utils.names import normalize_parsed_fastq_sample_names
 
 
 class _StubLogger:
@@ -40,6 +41,43 @@ def test_common_paired_end_names_are_grouped_by_mate_token(tmp_path: Path) -> No
     result = get_name_to_fastq_dict([fastq2, fastq1], None, None)
 
     assert result == {"sample": (fastq1, fastq2)}
+
+
+def test_normalize_parsed_fastq_sample_names_strips_terminal_trimmed_suffix(
+    tmp_path: Path,
+) -> None:
+    fastq = tmp_path / "sample.trimmed.fastq.gz"
+    fastq.touch()
+
+    result = normalize_parsed_fastq_sample_names({"sample.trimmed": (fastq, None)})
+
+    assert result == {"sample": (fastq, None)}
+
+
+def test_normalize_parsed_fastq_sample_names_preserves_unrecognized_suffixes(
+    tmp_path: Path,
+) -> None:
+    fastq = tmp_path / "sample.external.fastq.gz"
+    fastq.touch()
+
+    result = normalize_parsed_fastq_sample_names({"sample.external": (fastq, None)})
+
+    assert result == {"sample.external": (fastq, None)}
+
+
+def test_normalize_parsed_fastq_sample_names_rejects_collisions(tmp_path: Path) -> None:
+    fastq_a = tmp_path / "sample.fastq.gz"
+    fastq_b = tmp_path / "sample.trimmed.fastq.gz"
+    fastq_a.touch()
+    fastq_b.touch()
+
+    with pytest.raises(IPyradError, match="collide after internal workflow-suffix normalization"):
+        normalize_parsed_fastq_sample_names(
+            {
+                "sample": (fastq_a, None),
+                "sample.trimmed": (fastq_b, None),
+            }
+        )
 
 
 def test_shared_trailing_suffix_after_mate_token_is_still_paired(tmp_path: Path) -> None:

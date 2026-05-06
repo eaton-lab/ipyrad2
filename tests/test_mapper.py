@@ -26,7 +26,7 @@ def test_run_mapper_uses_paired_stats_and_writes_report(monkeypatch, tmp_path: P
             return {
                 "sample": MappingJobResult(
                     sname="sample",
-                    bam_path=outdir / "sample.filtered.bam",
+                    bam_path=outdir / "sample.trimmed.sorted.bam",
                     is_paired=True,
                     nreads_processed=10,
                     nreads_filtered_before_bam_by_unmapped_or_nonprimary=2,
@@ -136,7 +136,7 @@ def test_run_mapper_unmate_uses_single_end_stats_and_threads_flag(monkeypatch, t
             return {
                 "sample": MappingJobResult(
                     sname="sample",
-                    bam_path=outdir / "sample.filtered.bam",
+                    bam_path=outdir / "sample.trimmed.sorted.bam",
                     is_paired=False,
                     nreads_processed=10,
                     nreads_filtered_before_bam_by_unmapped_or_nonprimary=2,
@@ -269,7 +269,7 @@ def test_run_mapper_force_does_not_trigger_reference_reindex(monkeypatch, tmp_pa
             return {
                 "sample": MappingJobResult(
                     sname="sample",
-                    bam_path=outdir / "sample.filtered.bam",
+                    bam_path=outdir / "sample.trimmed.sorted.bam",
                     is_paired=True,
                     nreads_processed=10,
                     nreads_filtered_before_bam_by_unmapped_or_nonprimary=2,

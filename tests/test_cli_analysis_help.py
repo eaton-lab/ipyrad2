@@ -416,6 +416,40 @@ def test_popgen_help_groups_examples_and_backend_controls_are_present() -> None:
     assert help_text.index("-h, --help") > help_text.index("Logging:")
 
 
+def test_baba_help_groups_examples_and_tree_controls_are_present() -> None:
+    help_text = _get_tool_parser("baba").format_help()
+
+    expected_sections = [
+        "Core inputs:",
+        "Filtering and samples:",
+        "Statistics and resampling:",
+        "Optional outputs:",
+        "Performance and overwrite:",
+        "Logging:",
+    ]
+    positions = [help_text.index(section) for section in expected_sections]
+    assert positions == sorted(positions)
+
+    assert "ipyrad2 baba: compute ABBA/BABA admixture metrics from SNP HDF5 data" in help_text
+    assert "--tests" in help_text
+    assert "--tree" in help_text
+    assert "--resampling" in help_text
+    assert "--bootstrap-replicates" in help_text
+    assert "--jackknife-block-bp" in help_text
+    assert "--f-branch" in help_text
+    assert "--f-branch-p-threshold" in help_text
+    assert "--write-block-table" in help_text
+    assert "--clustering-stats" in help_text
+    assert "requires `--imap`" in help_text
+    assert "Input SNP HDF5 file containing `genos` and `snpsmap`." in help_text
+    assert "Population-to-minimum-coverage file; applied per quartet and requires `--imap`." in help_text
+    assert "Significance method; `auto` prefers physical-block jackknife." in help_text
+    assert "P-value threshold for zeroing non-significant tree f_G values." in help_text
+    assert "$ ipyrad2 baba -d assembly.hdf5 -o OUT/ --tests quartets.tsv" in help_text
+    assert "$ ipyrad2 baba -d assembly.hdf5 -o OUT/ --tree species.nwk --f-branch" in help_text
+    assert help_text.index("-h, --help") > help_text.index("Logging:")
+
+
 def test_bpp_help_groups_examples_and_runtime_controls_are_present() -> None:
     help_text = _get_tool_parser("bpp").format_help()
 
@@ -667,6 +701,32 @@ def test_top_level_parser_accepts_flattened_export_and_analysis_subcommands() ->
     assert popgen_window_args.window_size == 1000
     assert popgen_window_args.step_size == 500
 
+    baba_args = parser.parse_args(
+        [
+            "baba",
+            "-d",
+            "snps.hdf5",
+            "-o",
+            "OUT",
+            "--tests",
+            "quartets.tsv",
+            "--resampling",
+            "bootstrap",
+            "--bootstrap-replicates",
+            "100",
+            "--f-branch-p-threshold",
+            "0.02",
+            "--seed",
+            "9",
+        ]
+    )
+    assert baba_args.subcommand == "baba"
+    assert str(baba_args.tests) == "quartets.tsv"
+    assert baba_args.resampling == "bootstrap"
+    assert baba_args.bootstrap_replicates == 100
+    assert baba_args.f_branch_p_threshold == 0.02
+    assert baba_args.seed == 9
+
     bpp_args = parser.parse_args(
         [
             "bpp",
@@ -706,16 +766,16 @@ def test_removed_nested_analysis_command_no_longer_parses() -> None:
         parser.parse_args(["analysis", "wex", "-d", "assembly.hdf5"])
 
 
-def test_reserved_placeholder_commands_have_help_and_raise_at_runtime() -> None:
+def test_treeslider_reserved_placeholder_has_help_and_raises_at_runtime() -> None:
     parser = setup_parsers()
 
-    for tool in ("baba", "treeslider"):
-        help_text = _get_tool_parser(tool).format_help()
-        assert f"ipyrad2 {tool}:" in help_text
-        assert "Reserved command placeholder." in help_text
-        assert "not implemented yet" in help_text
+    tool = "treeslider"
+    help_text = _get_tool_parser(tool).format_help()
+    assert f"ipyrad2 {tool}:" in help_text
+    assert "Reserved command placeholder." in help_text
+    assert "not implemented yet" in help_text
 
-        args = parser.parse_args([tool])
-        assert args.subcommand == tool
-        with pytest.raises(IPyradError, match=f"`ipyrad2 {tool}` is reserved but not implemented yet."):
-            run_subcommand(args, _exit=False)
+    args = parser.parse_args([tool])
+    assert args.subcommand == tool
+    with pytest.raises(IPyradError, match=f"`ipyrad2 {tool}` is reserved but not implemented yet."):
+        run_subcommand(args, _exit=False)

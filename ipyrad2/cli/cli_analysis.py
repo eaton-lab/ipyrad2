@@ -34,11 +34,11 @@ ANALYSIS_TOOL_NAMES = (
     "dapc",
     "admixture",
     "popgen",
+    "baba",
     "bpp",
 )
 
 RESERVED_TOOL_NAMES = (
-    "baba",
     "treeslider",
 )
 
@@ -53,6 +53,7 @@ _PARSER_SPECS = {
     "dapc": (".cli_dapc", "_setup_dapc_subparser", "ipyrad2 dapc: run DAPC-style clustering on SNP HDF5 data"),
     "admixture": (".cli_admixture", "_setup_admixture_subparser", "ipyrad2 admixture: run external ADMIXTURE on SNP HDF5 data"),
     "popgen": (".cli_popgen", "_setup_popgen_subparser", "ipyrad2 popgen: compute genome-wide population-genetic statistics"),
+    "baba": (".cli_baba", "_setup_baba_subparser", "ipyrad2 baba: compute ABBA/BABA admixture metrics from SNP HDF5 data"),
     "bpp": (".cli_bpp", "_setup_bpp_subparser", "ipyrad2 bpp: stage one BPP analysis from sequence HDF5 data"),
 }
 
@@ -67,6 +68,7 @@ _RUNTIME_RUNNERS = {
     "dapc": ("..analysis.methods.dapc", "run_dapc_method"),
     "admixture": ("..analysis.methods.admixture", "run_admixture_method"),
     "popgen": ("..analysis.methods.popgen.runner", "run_popgen_method"),
+    "baba": ("..analysis.methods.baba.runner", "run_baba_method"),
     "bpp": ("..analysis.methods.bpp", "run_bpp_method"),
 }
 
@@ -147,15 +149,10 @@ def _setup_analysis_tool_subparsers(
         _setup_tool_subparser(subparsers, "admixture", header)
     if "popgen" in selected:
         _setup_tool_subparser(subparsers, "popgen", header)
+    if "baba" in selected:
+        _setup_tool_subparser(subparsers, "baba", header)
     if "bpp" in selected:
         _setup_tool_subparser(subparsers, "bpp", header)
-    if "baba" in selected:
-        _setup_reserved_tool_subparser(
-            subparsers,
-            name="baba",
-            help_text="Reserved ABBA/BABA admixture metrics command.",
-            header=f"{header}\nipyrad2 baba: reserved ABBA/BABA admixture metrics command",
-        )
     if "treeslider" in selected:
         _setup_reserved_tool_subparser(
             subparsers,
@@ -442,6 +439,42 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
             cores=args.cores,
             force=args.force,
             log_level=args.log_level,
+        )
+        if _exit:
+            sys.exit(0)
+        return
+
+    if tool == "baba":
+        run_baba_method = _load_runner(tool)
+        logged_command = format_logged_command(sys.argv[1:])
+        logger.info("-------------------------------------------------------")
+        logger.info("---- ipyrad2 baba: ABBA/BABA admixture statistics ----")
+        logger.info("-------------------------------------------------------")
+        logger.info(f"CMD: {logged_command}")
+        run_baba_method(
+            data=args.data,
+            name=args.name,
+            outdir=args.out,
+            tests=args.tests,
+            tree=args.tree,
+            imap=args.imap,
+            minmap=args.minmap,
+            min_sample_coverage=args.min_sample_coverage,
+            exclude=args.exclude,
+            include_reference=args.include_reference,
+            resampling=args.resampling,
+            bootstrap_replicates=args.bootstrap_replicates,
+            jackknife_block_bp=args.jackknife_block_bp,
+            jackknife_block_loci=args.jackknife_block_loci,
+            seed=args.seed,
+            f_branch=args.f_branch,
+            f_branch_p_threshold=args.f_branch_p_threshold,
+            write_block_table=args.write_block_table,
+            clustering_stats=args.clustering_stats,
+            cores=args.cores,
+            force=args.force,
+            log_level=args.log_level,
+            logged_command=logged_command,
         )
         if _exit:
             sys.exit(0)

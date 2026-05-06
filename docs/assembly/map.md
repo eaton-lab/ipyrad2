@@ -36,6 +36,8 @@ Sample names are parsed from FASTQ filenames. If the default parsing is not righ
 - `-dx, --delim-str`: delimiter substring used to split the filename
 - `-di, --delim-idx`: which side of the delimiter to keep, default `1`
 
+After parsing, `map` strips a terminal `.trimmed` from the sample key when present. This keeps names from the normal `trim -> map` workflow canonical internally while still allowing later pipeline entry from externally named FASTQs.
+
 You can also provide `-i/--imap` to subset, rename, or merge samples before mapping. The `imap` file is a whitespace-delimited two-column table:
 
 ```text
@@ -48,7 +50,7 @@ This table can do three things:
 - rename samples before BAM writing
 - merge multiple parsed samples into one mapping target by concatenating their FASTQs
 
-If some `imap` names do not match parsed sample names, ipyrad2 warns and skips them. If none match, the run stops.
+If some `imap` names do not match the canonical parsed sample names, ipyrad2 warns and skips them. If none match, the run stops.
 
 For a worked example of explicit delimiter-based pairing and sample naming, see [Using -dx and -di to pair and name samples](../recipes/sample-name-parsing.md).
 
@@ -109,8 +111,8 @@ At normal verbosity, ipyrad2 reports parsed sample names, duplicate-removal warn
 
 For each sample, `map` writes:
 
-- `SAMPLE.filtered.bam`
-- `SAMPLE.filtered.bam.csi`
+- `SAMPLE.trimmed.sorted.bam`
+- `SAMPLE.trimmed.sorted.bam.csi`
 
 During the run it also uses `OUTDIR/tmpdir/` for temporary sort, fixmate, and stats files, but those temporary files are cleaned up when mapping finishes.
 
@@ -174,7 +176,7 @@ The two duplicate-removal modes cannot be selected together. Duplicate removal a
 
 ### `imap` names do not match parsed samples
 
-If some names in the `imap` file do not match parsed sample names, ipyrad2 warns and skips them. If no names match at all, the run stops and the `imap` file or parsing arguments need to be fixed.
+If some names in the `imap` file do not match canonical parsed sample names, ipyrad2 warns and skips them. If no names match at all, the run stops and the `imap` file or parsing arguments need to be fixed.
 
 ### Disk-space failures during sorting
 

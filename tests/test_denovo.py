@@ -1348,6 +1348,61 @@ def test_select_denovo_samples_imap_does_not_cap_or_warn_when_more_than_default_
     assert warnings == []
 
 
+def test_run_denovo_normalizes_trimmed_fastq_sample_names_before_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+    imap_path = tmp_path / "denovo.imap.tsv"
+    imap_path.write_text("sample pop_a\n", encoding="utf-8")
+    fastq = tmp_path / "sample.trimmed.fastq.gz"
+    fastq.write_bytes(b"A")
+
+    class _StopAfterSelection(Exception):
+        pass
+
+    def _fake_get_name_to_fastq_dict(*args, **kwargs):
+        del args, kwargs
+        return {"sample.trimmed": (fastq, None)}
+
+    def _fake_select_denovo_samples(fastq_dict, *, imap_path, use_all_samples):
+        observed["fastq_dict"] = fastq_dict
+        observed["imap_path"] = imap_path
+        observed["use_all_samples"] = use_all_samples
+        raise _StopAfterSelection
+
+    monkeypatch.setattr(denovo_module, "get_name_to_fastq_dict", _fake_get_name_to_fastq_dict)
+    monkeypatch.setattr(denovo_module, "_select_denovo_samples", _fake_select_denovo_samples)
+
+    with pytest.raises(_StopAfterSelection):
+        denovo_module.run_denovo(
+            fastqs=[fastq],
+            outdir=tmp_path / "out",
+            within_similarity=0.95,
+            across_similarity=0.85,
+            query_cov=0.75,
+            min_derep_size=2,
+            min_length=35,
+            min_merge_overlap=20,
+            max_merge_diffs=4,
+            delim_str=None,
+            delim_idx=1,
+            allow_reverse_complement=False,
+            cores=6,
+            threads=3,
+            no_alignment=False,
+            force=False,
+            imap=imap_path,
+            use_all_samples=False,
+            keep_intermediates=False,
+            log_level="INFO",
+        )
+
+    assert observed["fastq_dict"] == {"sample": (fastq, None)}
+    assert observed["imap_path"] == imap_path
+    assert observed["use_all_samples"] is False
+
+
 def test_write_ordered_consensus_stream_to_file_flushes_in_mapping_order(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

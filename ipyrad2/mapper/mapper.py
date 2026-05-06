@@ -38,7 +38,7 @@ def _require(condition: bool, message: str) -> None:
 
 def _output_bam_path(sname: str, outdir: Path) -> Path:
     """Return the final BAM output path for one sample."""
-    return outdir / f"{sname}.filtered.bam"
+    return outdir / f"{sname}.trimmed.sorted.bam"
 
 
 def _output_index_path(bam_path: Path) -> Path:
@@ -290,7 +290,7 @@ def _map_sample(
 ) -> MappingJobResult:
     """Map one sample and return summary metadata for final-BAM stats."""
     out_bam = _output_bam_path(sname, outdir)
-    out_bam_tmp = outdir / f"{sname}.filtered.tmp.bam"
+    out_bam_tmp = outdir / f"{sname}.trimmed.sorted.tmp.bam"
     tmpdir = outdir / "tmpdir"
     tmp_prefix = tmpdir / f"{sname}.tmp.pre"
     structural_counts_path = tmpdir / f"{sname}.tmp.structural_counts.json"

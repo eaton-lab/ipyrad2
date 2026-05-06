@@ -13,6 +13,7 @@ import ipyrad2.cli.cli_main as cli_main
 ROOT = Path(__file__).resolve().parents[1]
 HEAVY_MODULES = (
     "ipyrad2.analysis.extracters.window_extracter",
+    "ipyrad2.analysis.methods.baba.runner",
     "ipyrad2.analysis.methods.bpp",
     "ipyrad2.analysis.methods.popgen.runner",
     "requests",
@@ -91,6 +92,21 @@ def test_wex_help_imports_only_the_requested_analysis_parser_path() -> None:
     assert loaded == set()
 
 
+def test_baba_help_keeps_runtime_and_toytree_unloaded() -> None:
+    loaded = _loaded_heavy_modules(
+        "import contextlib\n"
+        "import io\n"
+        "from ipyrad2.cli.cli_main import command_line\n"
+        "buf = io.StringIO()\n"
+        "try:\n"
+        "    with contextlib.redirect_stdout(buf):\n"
+        "        command_line(['baba', '-h'])\n"
+        "except SystemExit:\n"
+        "    pass"
+    )
+    assert loaded == set()
+
+
 def test_run_subcommand_lazily_imports_analysis_runner(monkeypatch) -> None:
     args = cli_main.setup_parsers().parse_args(["wex", "-d", "assembly.hdf5"])
     calls: list[dict] = []
@@ -110,3 +126,23 @@ def test_run_subcommand_lazily_imports_analysis_runner(monkeypatch) -> None:
 
     assert len(calls) == 1
     assert calls[0]["data"] == Path("assembly.hdf5")
+
+
+def test_run_subcommand_passes_logged_command_to_baba_runner(monkeypatch) -> None:
+    argv = ["baba", "-d", "snps.hdf5", "-o", "OUT", "--tests", "quartets.tsv"]
+    args = cli_main.setup_parsers().parse_args(argv)
+    calls: list[dict] = []
+    real_import_module = cli_analysis.importlib.import_module
+
+    def fake_import_module(name, package=None):
+        if name == "..analysis.methods.baba.runner":
+            return SimpleNamespace(run_baba_method=lambda **kwargs: calls.append(kwargs))
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(cli_analysis.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(cli_main.sys, "argv", ["ipyrad2", *argv])
+
+    cli_main.run_subcommand(args, _exit=False)
+
+    assert len(calls) == 1
+    assert calls[0]["logged_command"] == "ipyrad2 baba -d snps.hdf5 -o OUT --tests quartets.tsv"

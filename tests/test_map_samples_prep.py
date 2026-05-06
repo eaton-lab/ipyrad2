@@ -220,3 +220,56 @@ def test_prepare_map_samples_rejects_unmate_on_single_end_inputs(tmp_path: Path)
             tmpdir=tmp_path / "tmpdir",
             unmate=True,
         )
+
+
+def test_prepare_map_samples_normalizes_trimmed_single_end_name(tmp_path: Path) -> None:
+    fastq = tmp_path / "sample.trimmed.fastq.gz"
+    _write_fastq(fastq)
+
+    fastq_dict, is_paired = prepare_map_samples(
+        fastqs=[fastq],
+        delim_str=None,
+        delim_idx=1,
+        imap=None,
+        tmpdir=tmp_path / "tmpdir",
+        unmate=False,
+    )
+
+    assert is_paired is False
+    assert fastq_dict == {"sample": (fastq, None)}
+
+
+def test_prepare_map_samples_matches_imap_against_normalized_trimmed_name(tmp_path: Path) -> None:
+    fastq = tmp_path / "sample.trimmed.fastq.gz"
+    _write_fastq(fastq)
+    imap = tmp_path / "imap.tsv"
+    imap.write_text("sample\n", encoding="utf-8")
+
+    fastq_dict, is_paired = prepare_map_samples(
+        fastqs=[fastq],
+        delim_str=None,
+        delim_idx=1,
+        imap=imap,
+        tmpdir=tmp_path / "tmpdir",
+        unmate=False,
+    )
+
+    assert is_paired is False
+    assert fastq_dict == {"sample": (fastq, None)}
+
+
+def test_prepare_map_samples_rejects_trimmed_name_collision(tmp_path: Path) -> None:
+    fastq_a = tmp_path / "sample.fastq.gz"
+    fastq_b = tmp_path / "sample.trimmed.fastq.gz"
+    _write_fastq(fastq_a)
+    _write_fastq(fastq_b)
+
+    with pytest.raises(IPyradError, match="collide after internal workflow-suffix normalization"):
+        prepare_map_samples(
+            fastqs=[fastq_a, fastq_b],
+            delim_str=None,
+            delim_idx=1,
+            imap=None,
+            tmpdir=tmp_path / "tmpdir",
+            unmate=False,
+        )
