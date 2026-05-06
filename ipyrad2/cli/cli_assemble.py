@@ -64,7 +64,7 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
     )
 
     mapped.add_argument(
-        "-qm", "--min-map-q", metavar="int", type=int, default=10,
+        "-qm", "--min-map-q", metavar="int", type=int, default=30,
         help="Discard mapped reads with MAPQ below this threshold. [default=%(default)s]",
     )
     mapped.add_argument(
@@ -80,7 +80,7 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="Discard mapped reads with NM above this threshold. [default=%(default)s]",
     )
     mapped.add_argument(
-        "-mt", "--max-tlen", metavar="int", type=int, default=None,
+        "-mt", "--max-tlen", metavar="int", type=int, default=1000,
         help="Discard pairs with absolute TLEN above this threshold (PE data only). [default=%(default)s]",
     )
     # mapped.add_argument(
@@ -115,7 +115,7 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="Min per-sample genotype quality retained in the filtered VCF. [default=%(default)s]",
     )
     locus.add_argument(
-        "-s", "--min-sample-depth", metavar="int", type=int, default=1,
+        "-s", "--min-sample-depth", metavar="int", type=int, default=5,
         help="Min within-sample read depth to keep a genotype call instead of masking it. [default=%(default)s]",
     )
     locus.add_argument(
@@ -170,7 +170,7 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
 
     naming.add_argument(
         "--subsample", metavar="Path", type=Path,
-        help="File of BAM basenames to select a subsample of BAMs from the -d and -w paths",
+        help="File whose first column selects BAM basenames from the -d and -w paths; extra columns ignored",
     )
     naming.add_argument(
         "-p", "--populations", metavar="Path", type=Path,

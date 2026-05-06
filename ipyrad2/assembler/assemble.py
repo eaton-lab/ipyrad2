@@ -783,9 +783,9 @@ def _normalize_bam_subsample_file(
             if not line or line.startswith("#"):
                 continue
             parts = line.split()
-            if len(parts) != 1:
+            if not parts:
                 raise IPyradError(
-                    f"--subsample line {lineno} must contain exactly 1 BAM basename."
+                    f"--subsample line {lineno} must contain at least 1 BAM basename."
                 )
             bam_name = parts[0]
             if bam_name in selected:

@@ -2240,6 +2240,24 @@ def test_normalize_bam_subsample_file_parses_selected_basenames(tmp_path: Path) 
     assert selected == {"rad.bam", "wgs.bam"}
 
 
+def test_normalize_bam_subsample_file_ignores_additional_columns(tmp_path: Path) -> None:
+    bam1 = tmp_path / "rad.bam"
+    bam2 = tmp_path / "wgs.bam"
+    bam1.write_text("", encoding="utf-8")
+    bam2.write_text("", encoding="utf-8")
+    subsample = tmp_path / "keep.tsv"
+    subsample.write_text(
+        "# BAM basenames with extra columns\n"
+        "rad.bam\tpop1\n"
+        "wgs.bam\tpop2\textra\n",
+        encoding="utf-8",
+    )
+
+    selected = _normalize_bam_subsample_file(subsample, [bam1, bam2])
+
+    assert selected == {"rad.bam", "wgs.bam"}
+
+
 def test_normalize_bam_subsample_file_rejects_unknown_and_duplicate_inputs(tmp_path: Path) -> None:
     bam1 = tmp_path / "rad.bam"
     bam2 = tmp_path / "wgs.bam"

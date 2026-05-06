@@ -99,7 +99,7 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
     assert "Min third-allele fraction at a SNP site" in help_text
     assert "heterozygous/IUPAC plus masked-N-at-variable-site" in help_text
     assert "BED of loci to assemble instead of delimiting shared loci from RAD samples." in help_text
-    assert "File of BAM basenames to select a subsample of BAMs from the -d and -w paths" in help_text
+    assert "File whose first column selects BAM basenames from the -d and -w paths; extra columns ignored" in help_text
     assert "File mapping BAM basenames to group names for population-level variant calls" in help_text
     assert "File mapping BAM basenames to new names for outputs; overrides BAM headers" in help_text
     assert "Optional site patterns to mask in final assembled sequences. [default=None]" in help_text
