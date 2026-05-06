@@ -21,6 +21,7 @@ from .map_stats import render_map_stats_payload_report
 
 BIN = Path(sys.prefix) / "bin"
 BIN_SAMTOOLS = str(BIN / "samtools")
+LEGACY_PLAIN_BAM_SUFFIX = ".filtered.bam"
 LEGACY_BAM_SUFFIX = ".trimmed.filtered.bam"
 CURRENT_BAM_SUFFIX = ".trimmed.sorted.bam"
 MAP_STATS_JSON_GLOB = "ipyrad_map_stats_*.json"
@@ -64,18 +65,27 @@ def _resolve_dir(path: str | Path) -> Path:
 
 def is_legacy_map_bam(path: Path) -> bool:
     """Return True when a BAM name matches the legacy/current map patterns."""
-    return path.name.endswith((LEGACY_BAM_SUFFIX, CURRENT_BAM_SUFFIX))
+    return path.name.endswith(
+        (
+            LEGACY_PLAIN_BAM_SUFFIX,
+            LEGACY_BAM_SUFFIX,
+            CURRENT_BAM_SUFFIX,
+        )
+    )
 
 
 def migrated_bam_name(name: str) -> str:
     """Return the current BAM basename for one legacy/current BAM filename."""
     if name.endswith(LEGACY_BAM_SUFFIX):
         return name[:-len(LEGACY_BAM_SUFFIX)] + CURRENT_BAM_SUFFIX
+    if name.endswith(LEGACY_PLAIN_BAM_SUFFIX):
+        return name[:-len(LEGACY_PLAIN_BAM_SUFFIX)] + CURRENT_BAM_SUFFIX
     if name.endswith(CURRENT_BAM_SUFFIX):
         return name
     raise IPyradError(
         "Expected a legacy/current ipyrad2 map BAM ending in "
-        f"'{LEGACY_BAM_SUFFIX}' or '{CURRENT_BAM_SUFFIX}', not '{name}'."
+        f"'{LEGACY_PLAIN_BAM_SUFFIX}', '{LEGACY_BAM_SUFFIX}', "
+        f"or '{CURRENT_BAM_SUFFIX}', not '{name}'."
     )
 
 

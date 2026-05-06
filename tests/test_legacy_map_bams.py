@@ -8,6 +8,7 @@ import pytest
 
 from ipyrad2.mapper.legacy_map_bams import BIN_SAMTOOLS
 from ipyrad2.mapper.legacy_map_bams import CURRENT_BAM_SUFFIX
+from ipyrad2.mapper.legacy_map_bams import LEGACY_PLAIN_BAM_SUFFIX
 from ipyrad2.mapper.legacy_map_bams import LegacyBamMigration
 from ipyrad2.mapper.legacy_map_bams import MapStatsMigration
 from ipyrad2.mapper.legacy_map_bams import _rewrite_bam_rg_tags
@@ -29,6 +30,7 @@ def _load_script_module():
 
 
 def test_migrated_bam_name_updates_legacy_suffix_only() -> None:
+    assert migrated_bam_name("sample.filtered.bam") == "sample.trimmed.sorted.bam"
     assert migrated_bam_name("sample.trimmed.filtered.bam") == "sample.trimmed.sorted.bam"
     assert migrated_bam_name("sample.trimmed.sorted.bam") == "sample.trimmed.sorted.bam"
     with pytest.raises(IPyradError):
@@ -90,6 +92,35 @@ def test_plan_legacy_map_migration_discovers_bams_stats_and_skips(monkeypatch, t
         "ipyrad_map_stats_run.txt",
     ]
     assert [path.name for path in plan.orphan_stats_txt] == ["ipyrad_map_stats_orphan.txt"]
+
+
+def test_plan_legacy_map_migration_accepts_plain_filtered_bams_without_stats(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    indir = tmp_path / "indir"
+    outdir = tmp_path / "outdir"
+    indir.mkdir()
+    (indir / f"alpha{LEGACY_PLAIN_BAM_SUFFIX}").write_text("", encoding="utf-8")
+    (indir / "notes.bam").write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "ipyrad2.mapper.legacy_map_bams.read_bam_sample_name",
+        lambda _path: "alpha.trimmed",
+    )
+
+    plan = plan_legacy_map_migration(indir, outdir)
+
+    assert [item.source_bam.name for item in plan.bam_migrations] == [
+        "alpha.filtered.bam",
+    ]
+    assert [item.output_bam.name for item in plan.bam_migrations] == [
+        "alpha.trimmed.sorted.bam",
+    ]
+    assert [item.canonical_sample for item in plan.bam_migrations] == ["alpha"]
+    assert plan.stats_migrations == []
+    assert plan.orphan_stats_txt == []
+    assert [path.name for path in plan.skipped_bams] == ["notes.bam"]
 
 
 def test_plan_legacy_map_migration_errors_on_canonical_collision(
@@ -261,6 +292,32 @@ def test_migrate_legacy_map_outputs_dry_run_does_not_write(monkeypatch, tmp_path
 
     assert len(plan.bam_migrations) == 1
     assert not outdir.exists()
+
+
+def test_migrate_legacy_map_outputs_dry_run_accepts_plain_filtered_bams_without_stats(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    indir = tmp_path / "indir"
+    outdir = tmp_path / "outdir"
+    indir.mkdir()
+    (indir / "sample.filtered.bam").write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "ipyrad2.mapper.legacy_map_bams.read_bam_sample_name",
+        lambda _path: "sample.trimmed",
+    )
+
+    plan = migrate_legacy_map_outputs(
+        indir=indir,
+        outdir=outdir,
+        dry_run=True,
+    )
+
+    assert [item.output_bam.name for item in plan.bam_migrations] == [
+        "sample.trimmed.sorted.bam",
+    ]
+    assert plan.stats_migrations == []
 
 
 def test_migration_script_main_parses_dry_run(monkeypatch, tmp_path: Path) -> None:
