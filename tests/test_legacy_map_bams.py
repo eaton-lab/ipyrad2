@@ -179,11 +179,12 @@ def test_rewrite_bam_rg_tags_runs_addreplacerg_reheader_and_index(
     _rewrite_bam_rg_tags(migration, threads=3)
 
     add_rg_cmd = calls[0][0][0]
-    assert add_rg_cmd[:6] == [
+    assert add_rg_cmd[:7] == [
         add_rg_cmd[0],
         "addreplacerg",
         "-m",
         "overwrite_all",
+        "-w",
         "-r",
         "@RG\tID:sample\tSM:sample",
     ]
