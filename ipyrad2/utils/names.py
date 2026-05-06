@@ -33,6 +33,10 @@ KNOWN_FILE_SUFFIXES = (
     ".fq",
 )
 
+WORKFLOW_SAMPLE_SUFFIXES = (
+    ".trimmed",
+)
+
 MATE_PATTERNS = (
     re.compile(
         r"^(?P<sample>.+?)[._-](?P<mate>r[12]|read[12])"
@@ -84,6 +88,22 @@ def _strip_known_suffix(name: str) -> str:
         if lower.endswith(suffix):
             return name[:-len(suffix)]
     return name
+
+
+def _strip_workflow_sample_suffix(name: str) -> str:
+    """Remove one recognized workflow suffix from a parsed FASTQ sample name."""
+    for suffix in WORKFLOW_SAMPLE_SUFFIXES:
+        if not name.endswith(suffix):
+            continue
+        trimmed = name[:-len(suffix)]
+        if trimmed:
+            return trimmed
+    return name
+
+
+def normalize_workflow_sample_name(name: str) -> str:
+    """Return one canonical sample name after internal workflow normalization."""
+    return _strip_workflow_sample_suffix(name)
 
 
 def _validate_delim_args(delim: str | None, delim_index: int | None) -> None:
@@ -493,6 +513,51 @@ def get_name_to_fastq_dict(
             if fidx < fmax:
                 logger.info(f"{key_padded} <- {paths[0].name}")
     return fastq_dict
+
+
+def normalize_parsed_fastq_sample_names(
+    fastq_dict: Dict[str, Tuple[Path, Path | None]],
+) -> Dict[str, Tuple[Path, Path | None]]:
+    """Normalize parsed FASTQ names to canonical workflow sample names."""
+    normalized: Dict[str, Tuple[Path, Path | None]] = {}
+    sources: dict[str, list[str]] = defaultdict(list)
+
+    for parsed_name, fastq_tuple in fastq_dict.items():
+        canonical_name = normalize_workflow_sample_name(parsed_name)
+        sources[canonical_name].append(parsed_name)
+        if canonical_name not in normalized:
+            normalized[canonical_name] = fastq_tuple
+
+    collisions = {
+        canonical_name: sorted(set(parsed_names))
+        for canonical_name, parsed_names in sources.items()
+        if len(set(parsed_names)) > 1
+    }
+    if collisions:
+        detail = "; ".join(
+            f"{canonical_name} <- {', '.join(parsed_names)}"
+            for canonical_name, parsed_names in sorted(collisions.items())
+        )
+        raise IPyradError(
+            "Parsed FASTQ sample names collide after internal workflow-suffix normalization. "
+            f"Revise input filenames or parsing args so canonical sample names stay unique: {detail}"
+        )
+
+    renamed = {
+        parsed_name: canonical_name
+        for canonical_name, parsed_names in sources.items()
+        for parsed_name in parsed_names
+        if parsed_name != canonical_name
+    }
+    if renamed:
+        logger.info(
+            "normalized {} parsed FASTQ sample name(s) by stripping recognized workflow suffixes",
+            len(renamed),
+        )
+        for parsed_name, canonical_name in sorted(renamed.items()):
+            logger.info("{} -> {}", parsed_name, canonical_name)
+
+    return normalized
 
 
 def perfect_pairs(ndict: Dict[str, List[Path]], paths: List[Path]) -> bool:

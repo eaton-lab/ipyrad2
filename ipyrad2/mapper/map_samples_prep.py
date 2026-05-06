@@ -14,6 +14,7 @@ from loguru import logger
 
 from ..utils.exceptions import IPyradError
 from ..utils.names import get_name_to_fastq_dict
+from ..utils.names import normalize_parsed_fastq_sample_names
 from ..utils.pops import expand_imap_patterns
 
 
@@ -203,6 +204,7 @@ def prepare_map_samples(
 ) -> Tuple[Dict[str, Tuple[Path, Path | None]], bool]:
     """Parse, optionally materialize, and validate mapper samples."""
     fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx)
+    fastq_dict = normalize_parsed_fastq_sample_names(fastq_dict)
     if imap is not None:
         fastq_dict = apply_imap_to_samples(imap, tmpdir, fastq_dict)
     validate_fastq_inputs(fastq_dict)

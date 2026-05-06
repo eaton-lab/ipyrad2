@@ -93,6 +93,8 @@ For the current implementation, preflight still resolves both `vsearch` and `maf
 
 Use `-d/--fastqs` with one or more FASTQ paths or glob patterns. You can pass explicit paths, shell-expanded globs such as `TRIMMED/*.fastq.gz`, or quoted glob patterns that `ipyrad2` expands internally.
 
+Sample names are parsed from FASTQ filenames before denovo sample selection. After parsing, `denovo` strips a terminal `.trimmed` from the sample key when present so the normal `trim -> denovo` workflow keeps canonical sample names internally while still tolerating later pipeline entry from externally named FASTQs.
+
 Sample names are parsed from FASTQ filenames. In many datasets the default parser is enough, but if filenames contain extra provider, lane, or run tokens you can control parsing with:
 
 - `-dx, --delim-str`: delimiter substring used to split the filename

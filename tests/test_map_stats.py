@@ -39,7 +39,7 @@ def test_collect_single_end_bam_stats(monkeypatch, tmp_path: Path) -> None:
     stats = collect_single_end_bam_stats(
         MappingJobResult(
             sname="sample",
-            bam_path=tmp_path / "sample.filtered.bam",
+            bam_path=tmp_path / "sample.trimmed.sorted.bam",
             is_paired=False,
             nreads_processed=4,
             nreads_filtered_before_bam_by_unmapped_or_nonprimary=2,
@@ -73,7 +73,7 @@ def test_collect_paired_bam_stats(monkeypatch, tmp_path: Path) -> None:
     stats = collect_paired_bam_stats(
         MappingJobResult(
             sname="sample",
-            bam_path=tmp_path / "sample.filtered.bam",
+            bam_path=tmp_path / "sample.trimmed.sorted.bam",
             is_paired=True,
             nreads_processed=6,
             nreads_filtered_before_bam_by_unmapped_or_nonprimary=0,
