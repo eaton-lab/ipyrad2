@@ -53,11 +53,14 @@ That last point matters. The WGS addition is powerful because it lets whole-geno
 
 ### Sample naming and grouping
 
+- `--subsample`: first-column table selecting BAM filenames or sample names
 - `-p, --populations`: grouped-calling populations file
-- `--rename-bams`: two-column table mapping BAM basenames to final sample names
+- `--rename`: two-column table mapping BAM basenames to final sample names
 - `-x, --masks`: optional sequence patterns to mask in the final assembled sequences
 
-`--rename-bams` overrides BAM-header names for listed inputs. This is the clean way to normalize names before grouped calling, final outputs, and downstream analysis.
+`--subsample` reads only the first column and ignores additional columns. It can match literal BAM filenames or resolved sample names, so the same sample-mapping table can often be reused across selection and grouping steps.
+
+`--rename` overrides BAM-header names for listed inputs. This is the clean way to normalize names before grouped calling, final outputs, and downstream analysis.
 
 `--populations` is used for grouped calling only. If the file also includes classic per-population minmap thresholds, `assemble` currently ignores those thresholds and uses the file only to define grouped-calling sample groups.
 
@@ -144,8 +147,9 @@ The user-facing idea is simple: loci can be flagged as paralog-like by unusually
 
 ### Sample Naming, Grouping, and Masks
 
+- `--subsample`: select a subset of BAMs by filename or sample name
 - `-p, --populations`: grouped-calling populations file
-- `--rename-bams`: rename final sample names from BAM basenames
+- `--rename`: rename final sample names from BAM basenames
 - `-x, --masks`: site-pattern masks applied in the final assembled sequences
 
 Use these when you need grouped calling, stable sample names that differ from BAM headers, or post-consensus masking of known sequence patterns.
@@ -212,7 +216,7 @@ Even with `--loci-bed`, `assemble` still needs at least one BAM file. The BED de
 
 ### Duplicate sample names across RAD and WGS inputs
 
-RAD and WGS inputs must resolve to distinct final sample names. If they collide after header parsing or `--rename-bams`, the run stops.
+RAD and WGS inputs must resolve to distinct final sample names. If they collide after header parsing or `--rename`, the run stops.
 
 ### Invalid `--loci-bed`
 
@@ -233,7 +237,7 @@ Grouped-calling files are rejected if they:
 - omit assembled samples
 - include names that are not part of this assemble run
 
-### Invalid `--rename-bams`
+### Invalid `--rename`
 
 Rename tables are rejected if they:
 
@@ -283,7 +287,7 @@ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -p pops.tsv -o OUT
 ### Rename BAM-derived sample names before writing outputs
 
 ```bash
-ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa --rename-bams rename.tsv -o OUT
+ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa --rename rename.tsv -o OUT
 ```
 
 ### WGS-only assembly inside a supplied loci BED

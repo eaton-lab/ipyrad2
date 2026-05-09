@@ -1,6 +1,8 @@
 import argparse
 from pathlib import Path
 
+import pytest
+
 from ipyrad2.cli.cli_main import setup_parsers
 
 
@@ -72,7 +74,7 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
         "--max-sample-hetero-frequency",
         "--subsample",
         "-p, --populations",
-        "--rename-bams",
+        "--rename",
         "-x, --masks",
         "-c, --cores",
         "-t, --threads",
@@ -92,14 +94,14 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
     assert "$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -o OUT -m 4 -qm 20" in help_text
     assert "$ ipyrad2 assemble -d BAMS/RAD/*.bam -w BAMS/WGS/*.bam -r REF.fa --subsample keep.tsv -o OUT" in help_text
     assert "$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -p pops.tsv -o OUT" in help_text
-    assert "$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa --rename-bams rename.tsv -o OUT" in help_text
+    assert "$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa --rename rename.tsv -o OUT" in help_text
     assert "RAD BAM inputs that delimit loci unless --loci-bed is provided" in help_text
     assert "Discard mapped reads with MAPQ below this threshold." in help_text
     assert "Locus BED delimiting:" in help_text
     assert "Min third-allele fraction at a SNP site" in help_text
     assert "heterozygous/IUPAC plus masked-N-at-variable-site" in help_text
     assert "BED of loci to assemble instead of delimiting shared loci from RAD samples." in help_text
-    assert "File whose first column selects BAM basenames from the -d and -w paths; extra columns ignored" in help_text
+    assert "File whose first column selects BAM filenames or sample names; extra columns ignored" in help_text
     assert "File mapping BAM basenames to group names for population-level variant calls" in help_text
     assert "File mapping BAM basenames to new names for outputs; overrides BAM headers" in help_text
     assert "Optional site patterns to mask in final assembled sequences. [default=None]" in help_text
@@ -183,7 +185,7 @@ def test_assemble_parser_defaults_match_current_cli() -> None:
     assert args.max_sample_hetero_frequency == 0.10
     assert args.subsample is None
     assert args.populations is None
-    assert args.rename_bams is None
+    assert args.rename is None
     assert args.masks is None
     assert args.cores == 6
     assert args.threads == 3
@@ -201,3 +203,10 @@ def test_assemble_parser_accepts_loci_bed_with_only_wgs_bams() -> None:
     assert args.wgs_bams == [Path("wgs.bam")]
     assert args.loci_bed == Path("loci.bed")
     assert args.reference == Path("ref.fa")
+
+
+def test_assemble_parser_rejects_removed_rename_bams_flag() -> None:
+    with pytest.raises(SystemExit):
+        setup_parsers().parse_args(
+            ["assemble", "-d", "rad.bam", "-r", "ref.fa", "--rename-bams", "rename.tsv"]
+        )

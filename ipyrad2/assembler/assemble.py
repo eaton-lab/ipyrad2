@@ -700,14 +700,14 @@ def _normalize_user_loci_bed(loci_bed: Path, tmpdir: Path) -> tuple[Path, int]:
 
 
 def _normalize_bam_rename_file(
-    rename_bams: Path, bam_paths: list[Path]
+    rename: Path, bam_paths: list[Path]
 ) -> dict[str, str]:
     """Parse and validate explicit BAM-basename sample-name overrides."""
-    rename_bams = rename_bams.expanduser().absolute()
-    if not rename_bams.exists():
-        raise IPyradError(f"--rename-bams file not found: {rename_bams}")
-    if not rename_bams.is_file():
-        raise IPyradError(f"--rename-bams must point to a file: {rename_bams}")
+    rename = rename.expanduser().absolute()
+    if not rename.exists():
+        raise IPyradError(f"--rename file not found: {rename}")
+    if not rename.is_file():
+        raise IPyradError(f"--rename must point to a file: {rename}")
 
     basenames = [path.name for path in bam_paths]
     basename_counts: dict[str, int] = {}
@@ -718,12 +718,12 @@ def _normalize_bam_rename_file(
     )
     if duplicate_inputs:
         raise IPyradError(
-            "--rename-bams cannot be used when input BAM basenames are duplicated: "
+            "--rename cannot be used when input BAM basenames are duplicated: "
             + ", ".join(duplicate_inputs)
         )
 
     rename_map: dict[str, str] = {}
-    with rename_bams.open("r", encoding="utf-8") as handle:
+    with rename.open("r", encoding="utf-8") as handle:
         for lineno, raw_line in enumerate(handle, start=1):
             line = raw_line.strip()
             if not line or line.startswith("#"):
@@ -731,32 +731,99 @@ def _normalize_bam_rename_file(
             parts = line.split()
             if len(parts) != 2:
                 raise IPyradError(
-                    f"--rename-bams line {lineno} must contain exactly 2 columns."
+                    f"--rename line {lineno} must contain exactly 2 columns."
                 )
             bam_name, sample_name = parts
             if bam_name in rename_map:
                 raise IPyradError(
-                    f"--rename-bams assigns BAM basename multiple times: {bam_name}"
+                    f"--rename assigns BAM basename multiple times: {bam_name}"
                 )
             rename_map[bam_name] = sample_name
 
     if not rename_map:
-        raise IPyradError(f"--rename-bams contains no rename mappings: {rename_bams}")
+        raise IPyradError(f"--rename contains no rename mappings: {rename}")
 
     extra = sorted(set(rename_map).difference(basenames))
     if extra:
         raise IPyradError(
-            "--rename-bams contains BAM basenames not present in this assemble run: "
+            "--rename contains BAM basenames not present in this assemble run: "
             + ", ".join(extra)
         )
     return rename_map
 
 
+_KNOWN_SUBSAMPLE_BAM_SUFFIXES = (
+    ".trimmed.sorted.bam",
+    ".trimmed.filtered.bam",
+    ".filtered.bam",
+)
+
+
+def _strip_subsample_bam_suffix(name: str) -> str | None:
+    """Return one canonical sample alias from a recognized ipyrad map BAM name."""
+    for suffix in _KNOWN_SUBSAMPLE_BAM_SUFFIXES:
+        if not name.endswith(suffix):
+            continue
+        stripped = name[:-len(suffix)]
+        if stripped:
+            return stripped
+    return None
+
+
+def _resolve_unrenamed_bam_names(
+    bam_paths: list[Path],
+    rename_map: dict[str, str],
+) -> dict[Path, str]:
+    """Resolve BAM header sample names for inputs not overridden by --rename."""
+    unresolved = [bam_file for bam_file in bam_paths if bam_file.name not in rename_map]
+    if len(unresolved) == 1:
+        return {unresolved[0]: get_name_from_bam(unresolved[0])}
+    return get_names_from_bams(unresolved)
+
+
+def _resolve_final_bam_names(
+    bam_paths: list[Path],
+    rename_map: dict[str, str],
+) -> tuple[dict[Path, str], list[tuple[str, str]]]:
+    """Resolve final sample names for one BAM list after optional rename overrides."""
+    unresolved_names = _resolve_unrenamed_bam_names(bam_paths, rename_map)
+    resolved_names: dict[Path, str] = {}
+    renamed: list[tuple[str, str]] = []
+    for bam_file in bam_paths:
+        sname = rename_map.get(bam_file.name)
+        if sname is None:
+            sname = unresolved_names[bam_file]
+        else:
+            renamed.append((sname, bam_file.name))
+        resolved_names[bam_file] = sname
+    return resolved_names, renamed
+
+
+def _build_bam_subsample_alias_map(
+    bam_paths: list[Path],
+    final_names: dict[Path, str],
+) -> dict[str, set[Path]]:
+    """Return all supported --subsample aliases mapped to their BAM files."""
+    alias_map: dict[str, set[Path]] = {}
+    for bam_file in bam_paths:
+        aliases = {
+            bam_file.name,
+            final_names[bam_file],
+        }
+        stripped = _strip_subsample_bam_suffix(bam_file.name)
+        if stripped is not None:
+            aliases.add(stripped)
+        for alias in aliases:
+            alias_map.setdefault(alias, set()).add(bam_file)
+    return alias_map
+
+
 def _normalize_bam_subsample_file(
     subsample: Path,
     bam_paths: list[Path],
-) -> set[str]:
-    """Parse and validate one BAM-basename subsample selection file."""
+    rename_map: dict[str, str],
+) -> set[Path]:
+    """Parse and validate one BAM/sample subsample-selection file."""
     subsample = subsample.expanduser().absolute()
     if not subsample.exists():
         raise IPyradError(f"--subsample file not found: {subsample}")
@@ -776,7 +843,13 @@ def _normalize_bam_subsample_file(
             + ", ".join(duplicate_inputs)
         )
 
-    selected: set[str] = set()
+    final_names, _renamed = _resolve_final_bam_names(bam_paths, rename_map)
+    alias_map = _build_bam_subsample_alias_map(bam_paths, final_names)
+
+    selected_tokens: set[str] = set()
+    selected_paths: set[Path] = set()
+    ambiguous: dict[str, list[str]] = {}
+    unknown: list[str] = []
     with subsample.open("r", encoding="utf-8") as handle:
         for lineno, raw_line in enumerate(handle, start=1):
             line = raw_line.strip()
@@ -785,25 +858,42 @@ def _normalize_bam_subsample_file(
             parts = line.split()
             if not parts:
                 raise IPyradError(
-                    f"--subsample line {lineno} must contain at least 1 BAM basename."
+                    f"--subsample line {lineno} must contain at least 1 sample identifier."
                 )
-            bam_name = parts[0]
-            if bam_name in selected:
+            token = parts[0]
+            if token in selected_tokens:
                 raise IPyradError(
-                    f"--subsample assigns BAM basename multiple times: {bam_name}"
+                    f"--subsample assigns identifier multiple times: {token}"
                 )
-            selected.add(bam_name)
+            selected_tokens.add(token)
+            matches = alias_map.get(token)
+            if not matches:
+                unknown.append(token)
+                continue
+            if len(matches) > 1:
+                ambiguous[token] = sorted(path.name for path in matches)
+                continue
+            selected_paths.add(next(iter(matches)))
 
-    if not selected:
-        raise IPyradError(f"--subsample contains no BAM basenames: {subsample}")
+    if not selected_tokens:
+        raise IPyradError(f"--subsample contains no sample identifiers: {subsample}")
 
-    extra = sorted(selected.difference(basenames))
-    if extra:
-        raise IPyradError(
-            "--subsample contains BAM basenames not present in this assemble run: "
-            + ", ".join(extra)
+    if ambiguous:
+        detail = "; ".join(
+            f"{token} -> {', '.join(matches)}"
+            for token, matches in sorted(ambiguous.items())
         )
-    return selected
+        raise IPyradError(
+            "--subsample contains ambiguous identifiers that match multiple input BAMs: "
+            + detail
+        )
+
+    if unknown:
+        raise IPyradError(
+            "--subsample contains identifiers not present in this assemble run: "
+            + ", ".join(sorted(unknown))
+        )
+    return selected_paths
 
 
 def _collect_named_bams(
@@ -812,18 +902,9 @@ def _collect_named_bams(
 ) -> tuple[dict[str, Path], list[tuple[str, str]]]:
     """Resolve final sample names for BAM inputs from header names plus overrides."""
     bam_dict: dict[str, Path] = {}
-    renamed: list[tuple[str, str]] = []
-    unresolved = [bam_file for bam_file in bam_paths if bam_file.name not in rename_map]
-    if len(unresolved) == 1:
-        unresolved_names = {unresolved[0]: get_name_from_bam(unresolved[0])}
-    else:
-        unresolved_names = get_names_from_bams(unresolved)
+    resolved_names, renamed = _resolve_final_bam_names(bam_paths, rename_map)
     for bam_file in bam_paths:
-        sname = rename_map.get(bam_file.name)
-        if sname is None:
-            sname = unresolved_names[bam_file]
-        else:
-            renamed.append((sname, bam_file.name))
+        sname = resolved_names[bam_file]
         if sname in bam_dict:
             raise IPyradError(f"Multiple input files of sample name {sname}")
         bam_dict[sname] = bam_file
@@ -1592,7 +1673,7 @@ def run_assembler(
     max_sites_above_maf: int,
     paralog_fail_frac_max: float,
     populations: Path | None,
-    rename_bams: Path | None,
+    rename: Path | None,
     masks: List[str] | None,
     cores: int,
     threads: int,
@@ -1646,24 +1727,6 @@ def run_assembler(
         [bam_file.expanduser().absolute() for bam_file in wgs_bams] if wgs_bams else []
     )
 
-    if subsample is not None:
-        selected_basenames = _normalize_bam_subsample_file(
-            subsample,
-            expanded_rad_bams + expanded_wgs_bams,
-        )
-        expanded_rad_bams = [
-            bam_file for bam_file in expanded_rad_bams if bam_file.name in selected_basenames
-        ]
-        expanded_wgs_bams = [
-            bam_file for bam_file in expanded_wgs_bams if bam_file.name in selected_basenames
-        ]
-        logger.info(
-            "selected {} BAMs from --subsample (RAD={}, WGS={})",
-            len(selected_basenames),
-            len(expanded_rad_bams),
-            len(expanded_wgs_bams),
-        )
-
     # Validate that some BAM inputs exist before parsing optional rename maps.
     # This keeps the main missing-input errors stable instead of surfacing
     # rename-file validation noise first.
@@ -1679,10 +1742,29 @@ def run_assembler(
         )
 
     rename_map: dict[str, str] = {}
-    if rename_bams is not None:
+    if rename is not None:
         rename_map = _normalize_bam_rename_file(
-            rename_bams,
+            rename,
             expanded_rad_bams + expanded_wgs_bams,
+        )
+
+    if subsample is not None:
+        selected_bams = _normalize_bam_subsample_file(
+            subsample,
+            expanded_rad_bams + expanded_wgs_bams,
+            rename_map,
+        )
+        expanded_rad_bams = [
+            bam_file for bam_file in expanded_rad_bams if bam_file in selected_bams
+        ]
+        expanded_wgs_bams = [
+            bam_file for bam_file in expanded_wgs_bams if bam_file in selected_bams
+        ]
+        logger.info(
+            "selected {} BAMs from --subsample (RAD={}, WGS={})",
+            len(selected_bams),
+            len(expanded_rad_bams),
+            len(expanded_wgs_bams),
         )
 
     # Load the RAD BAMs that define loci when no explicit loci BED is supplied.
@@ -1701,7 +1783,7 @@ def run_assembler(
     if renamed_pairs:
         shown = min(10, len(renamed_pairs))
         logger.info(
-            "renamed {} BAM sample name(s) from --rename-bams", len(renamed_pairs)
+            "renamed {} BAM sample name(s) from --rename", len(renamed_pairs)
         )
         logger.debug(
             "showing first {}/{} BAM rename mappings", shown, len(renamed_pairs)
