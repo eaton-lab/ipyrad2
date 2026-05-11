@@ -26,6 +26,7 @@ from ipyrad2.assembler.assemble import run_assembler
 from ipyrad2.assembler.hdf5_utils import choose_hdf5_cache_settings
 from ipyrad2.assembler.hdf5_utils import choose_unsigned_int_dtype
 from ipyrad2.assembler.hdf5_utils import get_fai_values
+from ipyrad2.assembler.read_filters import FilteredAnalysisBamResult
 from ipyrad2.assembler.beds import BIN_BED
 from ipyrad2.assembler.beds import clip_depth_bedgraph_to_retained_loci
 from ipyrad2.assembler.beds import get_retained_depth_bedgraph_path
@@ -36,6 +37,7 @@ from ipyrad2.assembler.beds import get_sample_depth_stats_in_final_loci
 from ipyrad2.assembler.read_filters import BIN_SAM
 from ipyrad2.assembler.read_filters import bam_appears_paired
 from ipyrad2.assembler.read_filters import classify_bam_layout
+from ipyrad2.assembler.read_filters import prepare_filtered_analysis_bam
 from ipyrad2.assembler.loci import filter_trim_locus
 from ipyrad2.assembler.loci import build_locus_fasta_database
 from ipyrad2.assembler.loci import get_consensus
@@ -208,6 +210,54 @@ def test_prepare_variant_call_bam_filters_to_retained_sample_loci(
         ]],
         [[BIN_SAM, "index", "-c", "-@", "2", str(out_bam)]],
     ]
+
+
+def test_prepare_filtered_analysis_bam_returns_filter_counts(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    bam_file = tmp_path / "sample.bam"
+    bam_file.write_text("", encoding="utf-8")
+    observed_cmds: list[list[list[str]]] = []
+
+    def _fake_run_pipeline(cmds, outfile=None, **kwargs):
+        del kwargs
+        observed_cmds.append(cmds)
+        cmd = cmds[0]
+        if outfile is not None:
+            outfile.parent.mkdir(parents=True, exist_ok=True)
+            outfile.write_text("", encoding="utf-8")
+            return 0, b"", b""
+        if cmd[:3] == [BIN_SAM, "view", "-c"] and str(bam_file) in cmd:
+            return 0, b"12\n", b""
+        if cmd[:3] == [BIN_SAM, "view", "-c"] and "sample.analysis.filtered.bam" in cmd[-1]:
+            return 0, b"7\n", b""
+        return 0, b"", b""
+
+    monkeypatch.setattr("ipyrad2.assembler.read_filters.run_pipeline", _fake_run_pipeline)
+
+    result = prepare_filtered_analysis_bam(
+        sname="sample",
+        bam_file=bam_file,
+        is_paired=False,
+        tmpdir=tmp_path / "TMP",
+        min_map_q=20,
+        max_tlen=None,
+        max_softclip=25,
+        max_nm=12,
+        min_aligned_len=50,
+        threads=2,
+    )
+
+    assert result == FilteredAnalysisBamResult(
+        bam_path=tmp_path / "TMP" / "analysis_bams" / "sample.analysis.filtered.bam",
+        reads_before_filtering=12,
+        reads_after_filtering=7,
+    )
+    assert observed_cmds[0][0][:3] == [BIN_SAM, "view", "-c"]
+    assert observed_cmds[1][0][:3] == [BIN_SAM, "view", "-b"]
+    assert observed_cmds[2][0][:2] == [BIN_SAM, "index"]
+    assert observed_cmds[3][0][:3] == [BIN_SAM, "view", "-c"]
 
 
 def test_prepare_variant_call_bam_writes_header_only_bam_when_keep_bed_is_empty(
@@ -4569,6 +4619,12 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
         outdir=tmp_path,
         logged_command="ipyrad2 assemble -d a.bam -r ref.fa -o OUT",
         snames=["s1", "s2"],
+        sample_types={"s1": "RAD", "s2": "WGS"},
+        sample_layouts={"s1": "PE", "s2": "SE"},
+        sample_filter_stats={
+            "s1": {"reads_before_filtering": 20, "reads_after_filtering": 12},
+            "s2": {"reads_before_filtering": 15, "reads_after_filtering": 9},
+        },
         shared_loci_after_delimiting=10,
         shared_loci_after_paralog_filtering=8,
         loci_summary={
@@ -4636,6 +4692,10 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
     assert "# Locus Occupancy" in report
     assert "Shared loci after delimiting" in report
     assert "Final SNP sites written" in report
+    assert "Sample type" in report
+    assert "Read layout" in report
+    assert "Reads before filtering" in report
+    assert "Reads after filtering" in report
     assert "Masked by sample heterozygosity threshold" in report
     assert "Loci with samples masked by sample heterozygosity threshold" in report
     assert "Sample masks triggered by sample heterozygosity threshold" in report
@@ -4651,6 +4711,10 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
     assert report_json["command"] == "ipyrad2 assemble -d a.bam -r ref.fa -o OUT"
     assert report_json["sample_masking"]["loci_with_samples_masked_by_max_hetero_frequency"] == 2
     assert report_json["sample_summary"][0]["sample"] == "s1"
+    assert report_json["sample_summary"][0]["sample_type"] == "RAD"
+    assert report_json["sample_summary"][0]["read_layout"] == "PE"
+    assert report_json["sample_summary"][0]["reads_before_filtering"] == 20
+    assert report_json["sample_summary"][0]["reads_after_filtering"] == 12
     assert report_json["sample_summary"][0]["masked_by_max_hetero_frequency"] == 2
     assert "mixed_rad_wgs_diagnostics" not in report_json
 
@@ -4660,6 +4724,12 @@ def test_write_assemble_stats_report_includes_mixed_run_summary(tmp_path: Path) 
         name="assembly",
         outdir=tmp_path,
         snames=["rad", "wgs"],
+        sample_types={"rad": "RAD", "wgs": "WGS"},
+        sample_layouts={"rad": "PE", "wgs": "SE"},
+        sample_filter_stats={
+            "rad": {"reads_before_filtering": 10, "reads_after_filtering": 8},
+            "wgs": {"reads_before_filtering": 9, "reads_after_filtering": 6},
+        },
         shared_loci_after_delimiting=10,
         shared_loci_after_paralog_filtering=8,
         loci_summary={

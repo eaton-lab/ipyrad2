@@ -713,6 +713,10 @@ def _human_stats_label(key: str) -> str:
         "sites_with_sample_coverage_ge_4": "Sites with sample coverage >= 4",
         "sites_with_sample_coverage_ge_trim_min": "Sites with sample coverage >= trim minimum",
         "sample": "Sample",
+        "sample_type": "Sample type",
+        "read_layout": "Read layout",
+        "reads_before_filtering": "Reads before filtering",
+        "reads_after_filtering": "Reads after filtering",
         "loci_in_alignment": "Loci in alignment",
         "loci_in_alignment_fraction": "Loci fraction in alignment",
         "shared_loci_with_nonzero_depth": "Shared loci with nonzero depth",
@@ -746,6 +750,9 @@ def write_assemble_stats_report(
     outdir: Path,
     logged_command: str | None = None,
     snames: list[str],
+    sample_types: dict[str, str],
+    sample_layouts: dict[str, str],
+    sample_filter_stats: dict[str, dict[str, int]],
     shared_loci_after_delimiting: int,
     shared_loci_after_paralog_filtering: int,
     loci_summary: dict[str, object],
@@ -840,6 +847,10 @@ def write_assemble_stats_report(
 
     sample_headers = [
         "sample",
+        "sample_type",
+        "read_layout",
+        "reads_before_filtering",
+        "reads_after_filtering",
         "loci_in_alignment",
         "loci_in_alignment_fraction",
         "shared_loci_with_nonzero_depth",
@@ -858,6 +869,14 @@ def write_assemble_stats_report(
         nonzero_loci = int(depth_stats["shared_loci_with_nonzero_depth"])
         sample_record = {
             "sample": sname,
+            "sample_type": sample_types.get(sname, ""),
+            "read_layout": sample_layouts.get(sname, ""),
+            "reads_before_filtering": int(
+                sample_filter_stats.get(sname, {}).get("reads_before_filtering", 0)
+            ),
+            "reads_after_filtering": int(
+                sample_filter_stats.get(sname, {}).get("reads_after_filtering", 0)
+            ),
             "loci_in_alignment": loci_in_alignment,
             "loci_in_alignment_fraction": _safe_fraction(
                 loci_in_alignment, final_loci_written
@@ -883,6 +902,10 @@ def write_assemble_stats_report(
         sample_summary_data.append(sample_record)
         sample_rows.append([
             sample_record["sample"],
+            sample_record["sample_type"],
+            sample_record["read_layout"],
+            _format_count(sample_record["reads_before_filtering"]),
+            _format_count(sample_record["reads_after_filtering"]),
             _format_count(sample_record["loci_in_alignment"]),
             _format_fraction(sample_record["loci_in_alignment_fraction"]),
             _format_count(sample_record["shared_loci_with_nonzero_depth"]),

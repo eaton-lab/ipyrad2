@@ -47,6 +47,7 @@ from .paralogs import (
 )
 from .read_filters import (
     BIN_SAM,
+    FilteredAnalysisBamResult,
     classify_bam_layout,
     get_analysis_bam_path,
     get_calling_bam_path,
@@ -1011,8 +1012,8 @@ def _prepare_analysis_bams(
     threads: int,
     workers: int,
     log_level: str,
-) -> dict[str, Path]:
-    """Write temp filtered BAMs for all assemble inputs and return their paths."""
+) -> dict[str, FilteredAnalysisBamResult]:
+    """Write temp filtered BAMs for all assemble inputs and return their stats."""
     _log_mapped_read_filter_settings(
         min_map_q=min_map_q,
         max_tlen=max_tlen,
@@ -1041,6 +1042,23 @@ def _prepare_analysis_bams(
             },
         )
     return run_with_pool(jobs, log_level, workers, msg="Filtering mapped reads")
+
+
+def _coerce_filtered_analysis_results(
+    results: dict[str, Path | FilteredAnalysisBamResult],
+) -> dict[str, FilteredAnalysisBamResult]:
+    """Normalize analysis-BAM prep results to the structured return type."""
+    normalized: dict[str, FilteredAnalysisBamResult] = {}
+    for sname, result in results.items():
+        if isinstance(result, FilteredAnalysisBamResult):
+            normalized[sname] = result
+            continue
+        normalized[sname] = FilteredAnalysisBamResult(
+            bam_path=result,
+            reads_before_filtering=0,
+            reads_after_filtering=0,
+        )
+    return normalized
 
 
 def _prepare_variant_call_bams(
@@ -1413,6 +1431,9 @@ def _write_consensus_and_outputs(
     logged_command: str | None = None,
     rad_samples: list[str] | None = None,
     wgs_samples: list[str] | None = None,
+    sample_type_labels: dict[str, str] | None = None,
+    sample_layout_labels: dict[str, str] | None = None,
+    sample_filter_stats: dict[str, dict[str, int]] | None = None,
 ) -> None:
     """Write consensus sequences, final locus outputs, and the SNP database."""
     output_artifacts = _build_consensus_output_artifacts(name, tmpdir)
@@ -1632,6 +1653,9 @@ def _write_consensus_and_outputs(
         outdir=outdir,
         logged_command=logged_command,
         snames=snames,
+        sample_types=sample_type_labels or {},
+        sample_layouts=sample_layout_labels or {},
+        sample_filter_stats=sample_filter_stats or {},
         shared_loci_after_delimiting=shared_loci_after_delimiting,
         shared_loci_after_paralog_filtering=shared_loci_after_paralog_filtering,
         loci_summary=loci_summary,
@@ -1858,7 +1882,8 @@ def run_assembler(
         reference,
     )
 
-    all_dict = _prepare_analysis_bams(
+    filtered_analysis_results = _coerce_filtered_analysis_results(
+        _prepare_analysis_bams(
         bam_dict=all_dict,
         sample_layouts=sample_layouts,
         tmpdir=tmpdir,
@@ -1870,8 +1895,12 @@ def run_assembler(
         threads=threads,
         workers=workers,
         log_level=log_level,
+        )
     )
-    all_dict = {sname: all_dict[sname] for sname in snames}
+    all_dict = {
+        sname: filtered_analysis_results[sname].bam_path
+        for sname in snames
+    }
     bam_dict = {sname: all_dict[sname] for sname in sorted(bam_dict)}
     wgs_dict = {sname: all_dict[sname] for sname in sorted(wgs_dict)}
     logger.info("filtered analysis BAMs ready for {} samples", len(all_dict))
@@ -2049,6 +2078,25 @@ def run_assembler(
         logged_command=logged_command,
         rad_samples=sorted(bam_dict),
         wgs_samples=sorted(wgs_dict),
+        sample_type_labels={
+            sname: ("RAD" if sname in bam_dict else "WGS")
+            for sname in snames
+        },
+        sample_layout_labels={
+            sname: ("PE" if sample_layouts[sname] else "SE")
+            for sname in snames
+        },
+        sample_filter_stats={
+            sname: {
+                "reads_before_filtering": int(
+                    filtered_analysis_results[sname].reads_before_filtering
+                ),
+                "reads_after_filtering": int(
+                    filtered_analysis_results[sname].reads_after_filtering
+                ),
+            }
+            for sname in snames
+        },
     )
     logger.info("assemble complete; outputs written to {}", outdir)
     return

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 import sys
 
@@ -19,6 +20,15 @@ BIN_SAM = str(BIN / "samtools")
 
 _PRIMARY_MAPPED_EXCLUDE_FLAGS = 0x904
 _LAYOUT_PROBE_READ_LIMIT = 1000
+
+
+@dataclass(frozen=True)
+class FilteredAnalysisBamResult:
+    """Filtered assemble BAM plus per-sample read-count diagnostics."""
+
+    bam_path: Path
+    reads_before_filtering: int
+    reads_after_filtering: int
 
 
 def _iter_bam_view_lines(
@@ -149,6 +159,20 @@ def get_calling_bam_path(tmpdir: Path, sname: str) -> Path:
     return tmpdir / "calling_bams" / f"{sname}.variant.filtered.bam"
 
 
+def _count_bam_records(bam_file: Path, threads: int) -> int:
+    """Return the number of alignment records in one BAM."""
+    cmd = [
+        BIN_SAM,
+        "view",
+        "-c",
+        "-@",
+        str(max(1, threads)),
+        str(bam_file),
+    ]
+    _, out, _ = run_pipeline([cmd])
+    return int(out.decode().strip() or "0")
+
+
 def prepare_filtered_analysis_bam(
     *,
     sname: str,
@@ -161,10 +185,11 @@ def prepare_filtered_analysis_bam(
     max_nm: int | None,
     min_aligned_len: int | None,
     threads: int,
-) -> Path:
-    """Write and index one pre-paralog assemble BAM, then return its path."""
+) -> FilteredAnalysisBamResult:
+    """Write and index one pre-paralog assemble BAM plus its filter counts."""
     out_bam = get_analysis_bam_path(tmpdir, sname)
     out_bam.parent.mkdir(parents=True, exist_ok=True)
+    reads_before_filtering = _count_bam_records(bam_file, threads)
 
     if not is_paired and max_tlen is not None:
         logger.debug(
@@ -200,7 +225,12 @@ def prepare_filtered_analysis_bam(
         str(out_bam),
     ]
     run_pipeline([cmd])
-    return out_bam
+    reads_after_filtering = _count_bam_records(out_bam, threads)
+    return FilteredAnalysisBamResult(
+        bam_path=out_bam,
+        reads_before_filtering=reads_before_filtering,
+        reads_after_filtering=reads_after_filtering,
+    )
 
 
 def prepare_variant_call_bam(
