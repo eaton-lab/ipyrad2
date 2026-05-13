@@ -645,6 +645,13 @@ def _format_count(value: int) -> str:
     return f"{int(value):,}"
 
 
+def _format_optional_count(value: int | None) -> str:
+    """Format optional integer counts consistently for text reports."""
+    if value is None:
+        return "N/A"
+    return _format_count(value)
+
+
 def _format_float(value: float, digits: int = 3) -> str:
     """Format floating-point values for text reports."""
     return f"{float(value):.{digits}f}"
@@ -682,6 +689,7 @@ def _human_stats_label(key: str) -> str:
     """Return the human-readable label for one stats key."""
     labels = {
         "samples": "Samples",
+        "shared_loci_before_min_sample_coverage_filter": "Shared loci before minimum sample coverage filter",
         "shared_loci_after_delimiting": "Shared loci after delimiting",
         "shared_loci_after_paralog_filtering": "Shared loci after paralog filtering",
         "final_loci_written": "Final loci written",
@@ -728,6 +736,7 @@ def _human_stats_label(key: str) -> str:
         "masked_by_max_hetero_frequency": "Masked by sample heterozygosity threshold",
         "samples_with_data": "Samples with data",
         "loci": "Loci",
+        "loci_before_min_sample_coverage_filter": "Loci before minimum sample coverage filter",
         "fraction_of_final_loci": "Fraction of final loci",
         "rad_samples": "RAD samples",
         "wgs_samples": "WGS samples",
@@ -753,8 +762,10 @@ def write_assemble_stats_report(
     sample_types: dict[str, str],
     sample_layouts: dict[str, str],
     sample_filter_stats: dict[str, dict[str, int]],
+    shared_loci_before_min_sample_coverage_filter: int | None,
     shared_loci_after_delimiting: int,
     shared_loci_after_paralog_filtering: int,
+    locus_occupancy_before_min_sample_coverage_filter: dict[int, int] | None,
     loci_summary: dict[str, object],
     sample_depth_stats: dict[str, dict[str, float]],
     nsnps_written: int,
@@ -776,6 +787,11 @@ def write_assemble_stats_report(
 
     summary_data = {
         "samples": len(snames),
+        "shared_loci_before_min_sample_coverage_filter": (
+            int(shared_loci_before_min_sample_coverage_filter)
+            if shared_loci_before_min_sample_coverage_filter is not None
+            else None
+        ),
         "shared_loci_after_delimiting": shared_loci_after_delimiting,
         "shared_loci_after_paralog_filtering": shared_loci_after_paralog_filtering,
         "final_loci_written": final_loci_written,
@@ -807,7 +823,15 @@ def write_assemble_stats_report(
     }
     filtering_data = {
         "loci_filtered_min_length": int(filter_counts["min_length"]),
-        "loci_filtered_min_samples": int(filter_counts["min_samples"]),
+        "loci_filtered_min_samples": (
+            max(
+                0,
+                int(shared_loci_before_min_sample_coverage_filter)
+                - int(shared_loci_after_delimiting),
+            )
+            if shared_loci_before_min_sample_coverage_filter is not None
+            else None
+        ),
         "loci_filtered_max_variant_rate": int(filter_counts["max_variant_frequency"]),
         "loci_filtered_max_shared_heterozygosity": int(
             filter_counts["max_shared_hetero_frequency"]
@@ -917,11 +941,25 @@ def write_assemble_stats_report(
             _format_count(sample_record["masked_by_max_hetero_frequency"]),
         ])
 
-    occupancy_headers = ["samples_with_data", "loci", "fraction_of_final_loci"]
+    occupancy_headers = [
+        "samples_with_data",
+        "loci",
+        "loci_before_min_sample_coverage_filter",
+        "fraction_of_final_loci",
+    ]
+    pre_min_occupancy_counts = {
+        int(key): int(value)
+        for key, value in (locus_occupancy_before_min_sample_coverage_filter or {}).items()
+    }
     locus_occupancy_data = [
         {
             "samples_with_data": int(sample_count),
             "loci": int(samples_per_locus_counts.get(sample_count, 0)),
+            "loci_before_min_sample_coverage_filter": (
+                int(pre_min_occupancy_counts.get(sample_count, 0))
+                if locus_occupancy_before_min_sample_coverage_filter is not None
+                else None
+            ),
             "fraction_of_final_loci": _safe_fraction(
                 int(samples_per_locus_counts.get(sample_count, 0)),
                 final_loci_written,
@@ -933,6 +971,7 @@ def write_assemble_stats_report(
         [
             _format_count(row["samples_with_data"]),
             _format_count(row["loci"]),
+            _format_optional_count(row["loci_before_min_sample_coverage_filter"]),
             _format_fraction(row["fraction_of_final_loci"]),
         ]
         for row in locus_occupancy_data
@@ -964,6 +1003,12 @@ def write_assemble_stats_report(
         "Assemble Summary",
         [
             (_human_stats_label("samples"), _format_count(summary_data["samples"])),
+            (
+                _human_stats_label("shared_loci_before_min_sample_coverage_filter"),
+                _format_optional_count(
+                    summary_data["shared_loci_before_min_sample_coverage_filter"]
+                ),
+            ),
             (
                 _human_stats_label("shared_loci_after_delimiting"),
                 _format_count(summary_data["shared_loci_after_delimiting"]),
@@ -1045,7 +1090,15 @@ def write_assemble_stats_report(
     _append_key_value_section(
         lines,
         "Locus Filtering",
-        [(_human_stats_label(key), _format_count(value)) for key, value in filtering_data.items()],
+        [
+            (
+                _human_stats_label(key),
+                _format_optional_count(value)
+                if key == "loci_filtered_min_samples"
+                else _format_count(value),
+            )
+            for key, value in filtering_data.items()
+        ],
     )
     _append_key_value_section(
         lines,

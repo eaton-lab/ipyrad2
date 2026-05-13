@@ -34,10 +34,13 @@ from ipyrad2.assembler.beds import get_across_sample_loci_bed
 from ipyrad2.assembler.beds import get_coverage_bed_graphs
 from ipyrad2.assembler.beds import get_names_from_bams
 from ipyrad2.assembler.beds import get_sample_depth_stats_in_final_loci
+from ipyrad2.assembler.beds import get_shared_locus_occupancy_counts
 from ipyrad2.assembler.read_filters import BIN_SAM
 from ipyrad2.assembler.read_filters import bam_appears_paired
 from ipyrad2.assembler.read_filters import classify_bam_layout
+from ipyrad2.assembler.read_filters import get_paralog_bam_path
 from ipyrad2.assembler.read_filters import prepare_filtered_analysis_bam
+from ipyrad2.assembler.read_filters import prepare_paralog_bam
 from ipyrad2.assembler.loci import filter_trim_locus
 from ipyrad2.assembler.loci import build_locus_fasta_database
 from ipyrad2.assembler.loci import get_consensus
@@ -287,6 +290,94 @@ def test_prepare_variant_call_bam_writes_header_only_bam_when_keep_bed_is_empty(
     )
 
     assert out_bam == tmp_path / "TMP" / "calling_bams" / "sample.variant.filtered.bam"
+    assert observed_cmds == [
+        [[
+            BIN_SAM,
+            "view",
+            "-b",
+            "-H",
+            "-@",
+            "3",
+            "-o",
+            str(out_bam),
+            str(bam_file),
+        ]],
+        [[BIN_SAM, "index", "-c", "-@", "3", str(out_bam)]],
+    ]
+
+
+def test_prepare_paralog_bam_filters_to_shared_loci(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    bam_file = tmp_path / "sample.analysis.filtered.bam"
+    bam_file.write_text("", encoding="utf-8")
+    regions_bed = tmp_path / "beds" / "loci.bed"
+    regions_bed.parent.mkdir(parents=True, exist_ok=True)
+    regions_bed.write_text("chr1\t0\t10\n", encoding="utf-8")
+    observed_cmds: list[list[list[str]]] = []
+
+    def _fake_run_pipeline(cmds, outfile=None, **kwargs):
+        del outfile, kwargs
+        observed_cmds.append(cmds)
+        return 0, b"", b""
+
+    monkeypatch.setattr("ipyrad2.assembler.read_filters.run_pipeline", _fake_run_pipeline)
+
+    out_bam = prepare_paralog_bam(
+        sname="sample",
+        bam_file=bam_file,
+        regions_bed=regions_bed,
+        tmpdir=tmp_path / "TMP",
+        threads=2,
+    )
+
+    assert out_bam == get_paralog_bam_path(tmp_path / "TMP", "sample")
+    assert observed_cmds == [
+        [[
+            BIN_SAM,
+            "view",
+            "-b",
+            "-h",
+            "-@",
+            "2",
+            "-L",
+            str(regions_bed),
+            "-o",
+            str(out_bam),
+            str(bam_file),
+        ]],
+        [[BIN_SAM, "index", "-c", "-@", "2", str(out_bam)]],
+    ]
+
+
+def test_prepare_paralog_bam_writes_header_only_bam_when_regions_bed_is_empty(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    bam_file = tmp_path / "sample.analysis.filtered.bam"
+    bam_file.write_text("", encoding="utf-8")
+    regions_bed = tmp_path / "beds" / "loci.bed"
+    regions_bed.parent.mkdir(parents=True, exist_ok=True)
+    regions_bed.write_text("", encoding="utf-8")
+    observed_cmds: list[list[list[str]]] = []
+
+    def _fake_run_pipeline(cmds, outfile=None, **kwargs):
+        del outfile, kwargs
+        observed_cmds.append(cmds)
+        return 0, b"", b""
+
+    monkeypatch.setattr("ipyrad2.assembler.read_filters.run_pipeline", _fake_run_pipeline)
+
+    out_bam = prepare_paralog_bam(
+        sname="sample",
+        bam_file=bam_file,
+        regions_bed=regions_bed,
+        tmpdir=tmp_path / "TMP",
+        threads=3,
+    )
+
+    assert out_bam == get_paralog_bam_path(tmp_path / "TMP", "sample")
     assert observed_cmds == [
         [[
             BIN_SAM,
@@ -971,8 +1062,10 @@ def test_write_consensus_and_outputs_uses_one_pool_with_stage_specific_consensus
             },
             reference=reference,
             masks=None,
+            shared_loci_before_min_sample_coverage_filter=5,
             shared_loci_after_delimiting=5,
             shared_loci_after_paralog_filtering=5,
+            pre_min_sample_coverage_occupancy_counts={5: 5},
             min_locus_sample_coverage=1,
             min_locus_trim_sample_coverage=1,
             min_locus_length=25,
@@ -1135,8 +1228,10 @@ def test_write_consensus_and_outputs_logs_locus_database_and_snp_database_summar
             sample_retained_beds={"s1": get_final_good_bed_path("s1", tmpdir)},
             reference=reference,
             masks=None,
+            shared_loci_before_min_sample_coverage_filter=1,
             shared_loci_after_delimiting=1,
             shared_loci_after_paralog_filtering=1,
+            pre_min_sample_coverage_occupancy_counts={1: 1},
             min_locus_sample_coverage=1,
             min_locus_trim_sample_coverage=1,
             min_locus_length=1,
@@ -1679,6 +1774,30 @@ def test_get_across_sample_loci_bed_recovers_shared_denovo_loci_from_ref_sorted_
     )
 
 
+def test_get_shared_locus_occupancy_counts_carries_sample_membership_through_merge(
+    tmp_path: Path,
+) -> None:
+    tmpdir = tmp_path / "assembly_tmpdir"
+    bed_dir = tmpdir / "beds"
+    bed_dir.mkdir(parents=True)
+    (tmpdir / "REF_info.txt").write_text("chr1\t100\n", encoding="utf-8")
+    (bed_dir / "s1.fragments.merged.bed").write_text("chr1\t0\t10\n", encoding="utf-8")
+    (bed_dir / "s2.fragments.merged.bed").write_text("chr1\t5\t15\n", encoding="utf-8")
+    (bed_dir / "s3.fragments.merged.bed").write_text("chr1\t30\t40\n", encoding="utf-8")
+
+    total, occupancy = get_shared_locus_occupancy_counts(
+        ["s1", "s2", "s3"],
+        min_sample_coverage=1,
+        min_merge_distance=0,
+        min_locus_length=1,
+        suffix=".fragments.merged.bed",
+        tmpdir=tmpdir,
+    )
+
+    assert total == 2
+    assert occupancy == {1: 1, 2: 1}
+
+
 def test_get_across_sample_loci_bed_rejects_duplicate_sample_names(
     tmp_path: Path,
 ) -> None:
@@ -1911,8 +2030,17 @@ def test_run_paralog_stage_normalizes_shared_bed_to_reference_order(
         encoding="utf-8",
     )
 
+    captured: dict[str, object] = {}
+
     def _fake_run_with_pool(jobs, log_level, workers, msg=None):
-        del jobs, log_level, workers, msg
+        del log_level, workers
+        if msg == "Preparing loci-restricted paralog BAMs":
+            return {
+                sname: tmpdir / "paralog_bams" / f"{sname}.paralog.filtered.bam"
+                for sname in jobs
+            }
+        if msg == "Scoring paralog evidence":
+            captured["jobs"] = jobs
         return {}
 
     def _fake_aggregate_across_samples(**kwargs):
@@ -1955,6 +2083,7 @@ def test_run_paralog_stage_normalizes_shared_bed_to_reference_order(
         maf_threshold=0.20,
         max_sites_above_maf=8,
         paralog_fail_frac_max=0.10,
+        threads=2,
         workers=1,
         log_level="INFO",
     )
@@ -1967,6 +2096,9 @@ def test_run_paralog_stage_normalizes_shared_bed_to_reference_order(
     assert outputs.sample_retained_beds == {
         "sample": bed_dir / "sample.final.good.bed",
     }
+    score_job = captured["jobs"]["sample"]
+    assert score_job[1]["bam"] == tmpdir / "paralog_bams" / "sample.paralog.filtered.bam"
+    assert score_job[1]["reference_sort_order"] == tmpdir / "REF_info.txt"
 
 
 def test_run_paralog_stage_uses_rad_aggregate_for_mixed_shared_bed(
@@ -1986,8 +2118,14 @@ def test_run_paralog_stage_uses_rad_aggregate_for_mixed_shared_bed(
     captured: dict[str, object] = {}
 
     def _fake_run_with_pool(jobs, log_level, workers, msg=None):
-        captured["jobs"] = jobs
-        del log_level, workers, msg
+        del log_level, workers
+        if msg == "Preparing loci-restricted paralog BAMs":
+            return {
+                sname: tmpdir / "paralog_bams" / f"{sname}.paralog.filtered.bam"
+                for sname in jobs
+            }
+        if msg == "Scoring paralog evidence":
+            captured["jobs"] = jobs
         return {}
 
     def _fake_aggregate_across_samples(*, sample_prefixes, out_prefix, **kwargs):
@@ -2053,6 +2191,7 @@ def test_run_paralog_stage_uses_rad_aggregate_for_mixed_shared_bed(
         maf_threshold=0.20,
         max_sites_above_maf=8,
         paralog_fail_frac_max=0.10,
+        threads=2,
         workers=1,
         log_level="INFO",
         rad_sample_names=["rad"],
@@ -2062,6 +2201,8 @@ def test_run_paralog_stage_uses_rad_aggregate_for_mixed_shared_bed(
     assert outputs.shared_loci_bed == bed_dir / "loci.bed"
     assert outputs.debug_shared_loci_bed == bed_dir / "loci.paralog_filtered.bed"
     assert outputs.shared_loci_bed.read_text(encoding="utf-8") == "chr1\t0\t10\n"
+    assert captured["jobs"]["rad"][1]["bam"] == tmpdir / "paralog_bams" / "rad.paralog.filtered.bam"
+    assert captured["jobs"]["wgs"][1]["bam"] == tmpdir / "paralog_bams" / "wgs.paralog.filtered.bam"
     assert outputs.sample_retained_beds == {
         "rad": bed_dir / "rad.final.good.bed",
         "wgs": bed_dir / "wgs.final.good.bed",
@@ -2503,6 +2644,11 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
                 sname: tmp_path / "OUT" / "assembly_tmpdir" / "calling_bams" / f"{sname}.variant.filtered.bam"
                 for sname in jobs
             }
+        if msg == "Preparing loci-restricted paralog BAMs":
+            return {
+                sname: tmp_path / "OUT" / "assembly_tmpdir" / "paralog_bams" / f"{sname}.paralog.filtered.bam"
+                for sname in jobs
+            }
         if msg == "Summarizing final sample depth":
             return {
                 sname: {
@@ -2842,6 +2988,7 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
         masks=None,
         cores=4,
         threads=3,
+        keep_tmpdir=True,
         force=False,
         log_level="WARNING",
     )
@@ -2849,6 +2996,7 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
     assert [msg for msg, _jobs, _max_workers in pool_calls] == [
         "Filtering mapped reads",
         "Building per-sample coverage BEDs",
+        "Preparing loci-restricted paralog BAMs",
         "Scoring paralog evidence",
         "Preparing cleaned calling BAMs",
         "Calling variants",
@@ -2865,10 +3013,11 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
     assert pool_calls[1][2] == 1
     assert pool_calls[2][2] == 1
     assert pool_calls[3][2] == 1
-    assert pool_calls[8][2] == 2
+    assert pool_calls[4][2] == 1
     assert pool_calls[9][2] == 2
-    assert pool_calls[10][2] == 1
+    assert pool_calls[10][2] == 2
     assert pool_calls[11][2] == 1
+    assert pool_calls[12][2] == 1
     assert startup_probe == {
         "snames": ["rad", "wgs"],
         "log_level": "WARNING",
@@ -2887,11 +3036,19 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
     assert coverage_jobs["rad"][1]["is_paired"] is True
     assert coverage_jobs["wgs"][1]["is_paired"] is False
 
-    paralog_jobs = pool_calls[2][1]
-    assert paralog_jobs["rad"][1]["bam"].name == "rad.analysis.filtered.bam"
-    assert paralog_jobs["wgs"][1]["bam"].name == "wgs.analysis.filtered.bam"
+    paralog_prep_jobs = pool_calls[2][1]
+    assert paralog_prep_jobs["rad"][0].__name__ == "prepare_paralog_bam"
+    assert paralog_prep_jobs["wgs"][0].__name__ == "prepare_paralog_bam"
+    assert paralog_prep_jobs["rad"][1]["bam_file"].name == "rad.analysis.filtered.bam"
+    assert paralog_prep_jobs["wgs"][1]["bam_file"].name == "wgs.analysis.filtered.bam"
+    assert paralog_prep_jobs["rad"][1]["regions_bed"].name == "loci.bed"
+    assert paralog_prep_jobs["wgs"][1]["regions_bed"].name == "loci.bed"
 
-    calling_bam_jobs = pool_calls[3][1]
+    paralog_jobs = pool_calls[3][1]
+    assert paralog_jobs["rad"][1]["bam"].name == "rad.paralog.filtered.bam"
+    assert paralog_jobs["wgs"][1]["bam"].name == "wgs.paralog.filtered.bam"
+
+    calling_bam_jobs = pool_calls[4][1]
     assert calling_bam_jobs["rad"][0].__name__ == "prepare_variant_call_bam"
     assert calling_bam_jobs["wgs"][0].__name__ == "prepare_variant_call_bam"
     assert calling_bam_jobs["rad"][1]["bam_file"].name == "rad.analysis.filtered.bam"
@@ -2899,7 +3056,7 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
     assert calling_bam_jobs["rad"][1]["keep_bed"].name == "rad.final.good.bed"
     assert calling_bam_jobs["wgs"][1]["keep_bed"].name == "wgs.final.good.bed"
 
-    variant_jobs = pool_calls[4][1]
+    variant_jobs = pool_calls[5][1]
     chunk_job = next(iter(variant_jobs.values()))
     assert [path.name for path in chunk_job[1]["bam_files"]] == [
         "rad.variant.filtered.bam",
@@ -2907,7 +3064,7 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
     ]
     assert variant_chunk_counts == [8]
 
-    lowdepth_jobs = pool_calls[5][1]
+    lowdepth_jobs = pool_calls[6][1]
     assert lowdepth_jobs["rad"][0].__name__ == "make_lowdepth_mask"
     assert lowdepth_jobs["wgs"][0].__name__ == "make_lowdepth_mask"
     assert lowdepth_jobs["rad"][1]["sample_bedgraph"].name == "rad.fragments.bedgraph"
@@ -2917,7 +3074,7 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
     assert lowdepth_jobs["rad"][1]["out_bed"].name == "rad.lowdepth.mask.bed"
     assert lowdepth_jobs["wgs"][1]["out_bed"].name == "wgs.lowdepth.mask.bed"
 
-    paralog_mask_jobs = pool_calls[6][1]
+    paralog_mask_jobs = pool_calls[7][1]
     assert paralog_mask_jobs["rad"][0].__name__ == "make_paralog_mask"
     assert paralog_mask_jobs["wgs"][0].__name__ == "make_paralog_mask"
     assert paralog_mask_jobs["rad"][1]["sample_good_bed"].name == "rad.final.good.bed"
@@ -2925,7 +3082,7 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
     assert paralog_mask_jobs["rad"][1]["out_bed"].name == "rad.paralog.mask.bed"
     assert paralog_mask_jobs["wgs"][1]["out_bed"].name == "wgs.paralog.mask.bed"
 
-    merged_mask_jobs = pool_calls[7][1]
+    merged_mask_jobs = pool_calls[8][1]
     assert merged_mask_jobs["rad"][0].__name__ == "merge_sample_mask_beds"
     assert merged_mask_jobs["wgs"][0].__name__ == "merge_sample_mask_beds"
     assert merged_mask_jobs["rad"][1]["lowdepth_bed"].name == "rad.lowdepth.mask.bed"
@@ -2935,7 +3092,7 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
     assert merged_mask_jobs["rad"][1]["out_bed"].name == "rad.mask.bed"
     assert merged_mask_jobs["wgs"][1]["out_bed"].name == "wgs.mask.bed"
 
-    consensus_jobs = pool_calls[8][1]
+    consensus_jobs = pool_calls[9][1]
     assert consensus_jobs["rad"][1]["reference_fasta"].name == "assembly_reference_sequence.consensus.fa"
     assert consensus_jobs["wgs"][1]["reference_fasta"].name == "assembly_reference_sequence.consensus.fa"
     assert consensus_jobs["rad"][1]["resolved_vcf"].name == "variants.resolved.vcf.gz"
@@ -2944,8 +3101,8 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
     assert consensus_jobs["wgs"][1]["sample_mask_bed"].name == "wgs.mask.bed"
     assert consensus_jobs["rad"][1]["out_fasta"].name == "rad.consensus.fa"
     assert consensus_jobs["wgs"][1]["out_fasta"].name == "wgs.consensus.fa"
-    assert pool_calls[9][0] == "Building final VCF masks"
-    final_vcf_mask_jobs = pool_calls[9][1]
+    assert pool_calls[10][0] == "Building final VCF masks"
+    final_vcf_mask_jobs = pool_calls[10][1]
     assert final_vcf_mask_jobs["rad"][0].__name__ == "merge_final_vcf_mask_beds"
     assert final_vcf_mask_jobs["wgs"][0].__name__ == "merge_final_vcf_mask_beds"
     assert final_vcf_mask_jobs["rad"][1]["lowdepth_bed"].name == "rad.lowdepth.mask.bed"
@@ -2956,7 +3113,7 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
     assert final_vcf_mask_jobs["wgs"][1]["consensus_hetero_bed"].name == "wgs.consensus_hetero.mask.bed"
     assert final_vcf_mask_jobs["rad"][1]["out_bed"].name == "rad.final.vcf.mask.bed"
     assert final_vcf_mask_jobs["wgs"][1]["out_bed"].name == "wgs.final.vcf.mask.bed"
-    final_depth_bedgraph_jobs = pool_calls[10][1]
+    final_depth_bedgraph_jobs = pool_calls[11][1]
     assert final_depth_bedgraph_jobs["rad"][0].__name__ == "clip_depth_bedgraph_to_retained_loci"
     assert final_depth_bedgraph_jobs["wgs"][0].__name__ == "clip_depth_bedgraph_to_retained_loci"
     assert final_depth_bedgraph_jobs["rad"][1]["cov_bed"].name == "rad.fragments.bedgraph"
@@ -2965,7 +3122,7 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
     assert final_depth_bedgraph_jobs["wgs"][1]["good_bed"].name == "wgs.final.good.bed"
     assert final_depth_bedgraph_jobs["rad"][1]["out_bed"].name == "rad.final_depth.fragments.bedgraph"
     assert final_depth_bedgraph_jobs["wgs"][1]["out_bed"].name == "wgs.final_depth.fragments.bedgraph"
-    final_depth_stats_jobs = pool_calls[11][1]
+    final_depth_stats_jobs = pool_calls[12][1]
     assert final_depth_stats_jobs["rad"][1]["cov_bed"].name == "rad.final_depth.fragments.bedgraph"
     assert final_depth_stats_jobs["wgs"][1]["cov_bed"].name == "wgs.final_depth.fragments.bedgraph"
     assert seqs_hdf5_call == {
@@ -3292,6 +3449,7 @@ def test_run_assembler_rename_overrides_header_names_for_populations_and_outputs
         masks=None,
         cores=2,
         threads=1,
+        keep_tmpdir=True,
         force=False,
         log_level="WARNING",
     )
@@ -3450,6 +3608,7 @@ def test_run_assembler_subsample_filters_rad_and_wgs_by_bam_basename(
         masks=None,
         cores=2,
         threads=1,
+        keep_tmpdir=True,
         force=False,
         log_level="WARNING",
         subsample=subsample,
@@ -3608,6 +3767,7 @@ def test_run_assembler_subsample_accepts_renamed_sample_name(
         masks=None,
         cores=2,
         threads=1,
+        keep_tmpdir=True,
         force=False,
         log_level="WARNING",
         subsample=subsample,
@@ -3773,6 +3933,7 @@ def test_run_assembler_counts_mapper_collapsed_sample_once_in_shared_bed_stage(
         masks=None,
         cores=2,
         threads=1,
+        keep_tmpdir=True,
         force=False,
         log_level="WARNING",
     )
@@ -3811,6 +3972,142 @@ def test_existing_results_force_or_raise_removes_tmpdir_and_outputs(tmp_path: Pa
     assert not (outdir / "assembly.loci.gz").exists()
     assert not (outdir / "assembly.stats.json").exists()
     assert untouched.read_text(encoding="utf-8") == "keep\n"
+
+
+@pytest.mark.parametrize(("keep_tmpdir", "expect_exists"), [(False, False), (True, True)])
+def test_run_assembler_cleans_up_tmpdir_only_when_requested(
+    monkeypatch,
+    tmp_path: Path,
+    keep_tmpdir: bool,
+    expect_exists: bool,
+) -> None:
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    rad_bam = tmp_path / "rad.bam"
+    rad_bam.write_text("", encoding="utf-8")
+    outdir = tmp_path / "OUT"
+    tmpdir = outdir / "assembly_tmpdir"
+
+    monkeypatch.setattr("ipyrad2.assembler.assemble.get_name_from_bam", lambda path: path.stem)
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._collect_bam_metadata",
+        lambda bam_dict, log_level, max_workers: {
+            sname: {"layout": "single", "header_records": [("chr1", 4)]}
+            for sname in bam_dict
+        },
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble.get_reference_sort_order",
+        lambda _reference, tmpdir: (tmpdir / "REF_info.txt").write_text("chr1\t4\n", encoding="utf-8"),
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._prepare_analysis_bams",
+        lambda **kwargs: {
+            sname: kwargs["tmpdir"] / "analysis_bams" / f"{sname}.analysis.filtered.bam"
+            for sname in kwargs["bam_dict"]
+        },
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._validate_bam_header_records_match_reference",
+        lambda *args, **kwargs: None,
+    )
+
+    def _fake_run_with_pool(jobs, log_level, max_workers=None, msg="Processing"):
+        del log_level, max_workers
+        if msg == "Building per-sample coverage BEDs":
+            bed_dir = tmpdir / "beds"
+            bed_dir.mkdir(parents=True, exist_ok=True)
+            for sname in jobs:
+                (bed_dir / f"{sname}.fragments.merged.bed").write_text(
+                    "chr1\t0\t4\n",
+                    encoding="utf-8",
+                )
+        return {sname: None for sname in jobs}
+
+    monkeypatch.setattr("ipyrad2.assembler.assemble.run_with_pool", _fake_run_with_pool)
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble.get_across_sample_loci_bed",
+        lambda _snames, _mincov, _merge, _minlen, _suffix, tmpdir, **_kwargs: (
+            (tmpdir / "beds" / "rad.raw.bed").write_text("chr1\t0\t4\n", encoding="utf-8"),
+            tmpdir / "beds" / "rad.raw.bed",
+        )[1],
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._run_paralog_stage",
+        lambda **kwargs: (
+            kwargs["bed_dir"].mkdir(parents=True, exist_ok=True),
+            (kwargs["bed_dir"] / "loci.bed").write_text("chr1\t0\t4\n", encoding="utf-8"),
+            ParalogStageOutputs(
+                shared_loci_bed=kwargs["bed_dir"] / "loci.bed",
+                debug_shared_loci_bed=kwargs["bed_dir"] / "loci.paralog_filtered.bed",
+                sample_retained_beds={"rad": kwargs["bed_dir"] / "rad.final.good.bed"},
+            ),
+        )[2],
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._prepare_variant_call_bams",
+        lambda **kwargs: {
+            sname: kwargs["tmpdir"] / "calling_bams" / f"{sname}.variant.filtered.bam"
+            for sname in kwargs["sample_bams"]
+        },
+    )
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._run_variant_stage",
+        lambda **kwargs: kwargs["tmpdir"] / "vcfs" / "variants.resolved.vcf.gz",
+    )
+    monkeypatch.setattr("ipyrad2.assembler.assemble._build_sample_masks", lambda **_kwargs: {})
+
+    def _fake_write_consensus_and_outputs(**kwargs):
+        kwargs["outdir"].mkdir(parents=True, exist_ok=True)
+        (kwargs["outdir"] / "assembly.stats.txt").write_text("ok\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble._write_consensus_and_outputs",
+        _fake_write_consensus_and_outputs,
+    )
+
+    run_assembler(
+        rad_bams=[rad_bam],
+        wgs_bams=None,
+        reference=reference,
+        outdir=outdir,
+        name="assembly",
+        loci_bed=None,
+        min_map_q=10,
+        max_tlen=None,
+        max_softclip=None,
+        max_nm=None,
+        min_site_q=13,
+        min_geno_q=13,
+        min_base_q=13,
+        min_sample_depth=1,
+        min_locus_sample_coverage=1,
+        min_locus_trim_sample_coverage=1,
+        min_locus_length=25,
+        min_locus_merge_distance=300,
+        max_locus_hetero_frequency=0.3,
+        max_locus_variant_frequency=1.0,
+        max_sample_hetero_frequency=0.10,
+        softclip_len_threshold=20,
+        softclip_frac_max=0.5,
+        depth_z_max=7.0,
+        third_frac_cut=0.10,
+        min_3allele_sites=2,
+        maf_threshold=0.20,
+        max_sites_above_maf=8,
+        paralog_fail_frac_max=0.10,
+        populations=None,
+        rename=None,
+        masks=None,
+        cores=2,
+        threads=1,
+        force=False,
+        log_level="WARNING",
+        keep_tmpdir=keep_tmpdir,
+    )
+
+    assert (outdir / "assembly.stats.txt").exists()
+    assert tmpdir.exists() is expect_exists
 
 
 def test_run_assembler_raw_shared_bed_matches_direct_recomputation(
@@ -4028,6 +4325,8 @@ def test_run_assembler_raw_shared_bed_matches_direct_recomputation(
     assert build["min_locus_sample_coverage"] == 4
     assert build["min_locus_merge_distance"] == 300
     assert build["min_locus_length"] == 50
+    assert build["shared_loci_before_min_sample_coverage_filter"] >= build["raw_shared_loci_count"]
+    assert build["locus_occupancy_before_min_sample_coverage_filter"]
     assert build["raw_shared_loci_count"] == len(expected_text.splitlines())
     assert build["multiinter_debug_workspace"] is not None
     assert len(build["sample_beds"]) == len(bam_names)
@@ -4249,8 +4548,14 @@ def test_run_assembler_accepts_loci_bed_without_rad_samples(
 
     def _fake_write_consensus_and_outputs(**kwargs):
         observed["snames"] = kwargs["snames"]
+        observed["shared_loci_before_min_sample_coverage_filter"] = kwargs[
+            "shared_loci_before_min_sample_coverage_filter"
+        ]
         observed["shared_loci_after_delimiting"] = kwargs["shared_loci_after_delimiting"]
         observed["shared_loci_after_paralog_filtering"] = kwargs["shared_loci_after_paralog_filtering"]
+        observed["pre_min_sample_coverage_occupancy_counts"] = kwargs[
+            "pre_min_sample_coverage_occupancy_counts"
+        ]
 
     monkeypatch.setattr("ipyrad2.assembler.assemble.run_with_pool", _fake_run_with_pool)
     monkeypatch.setattr("ipyrad2.assembler.assemble._run_paralog_stage", _fake_run_paralog_stage)
@@ -4300,6 +4605,7 @@ def test_run_assembler_accepts_loci_bed_without_rad_samples(
         masks=None,
         cores=2,
         threads=1,
+        keep_tmpdir=True,
         force=False,
         log_level="WARNING",
     )
@@ -4307,8 +4613,10 @@ def test_run_assembler_accepts_loci_bed_without_rad_samples(
     assert coverage_job_names == ["wgs"]
     assert observed["variant_bams"] == ["wgs"]
     assert observed["snames"] == ["wgs"]
+    assert observed["shared_loci_before_min_sample_coverage_filter"] is None
     assert observed["shared_loci_after_delimiting"] == 2
     assert observed["shared_loci_after_paralog_filtering"] == 2
+    assert observed["pre_min_sample_coverage_occupancy_counts"] is None
     assert observed["regions_bed"] == tmp_path / "OUT" / "assembly_tmpdir" / "beds" / "loci.raw.bed"
     assert observed["regions_bed"].read_text(encoding="utf-8") == "chr2\t0\t4\nchr1\t5\t10\n"
 
@@ -4625,8 +4933,10 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
             "s1": {"reads_before_filtering": 20, "reads_after_filtering": 12},
             "s2": {"reads_before_filtering": 15, "reads_after_filtering": 9},
         },
+        shared_loci_before_min_sample_coverage_filter=14,
         shared_loci_after_delimiting=10,
         shared_loci_after_paralog_filtering=8,
+        locus_occupancy_before_min_sample_coverage_filter={1: 6, 2: 8},
         loci_summary={
             "nloci_after_filtering": 6,
             "nsites_after_filtering": 24,
@@ -4690,7 +5000,9 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
     assert "# Alignment Summary" in report
     assert "# Sample Summary" in report
     assert "# Locus Occupancy" in report
+    assert "Shared loci before minimum sample coverage filter" in report
     assert "Shared loci after delimiting" in report
+    assert "Loci before minimum sample coverage filter" in report
     assert "Final SNP sites written" in report
     assert "Sample type" in report
     assert "Read layout" in report
@@ -4706,8 +5018,14 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
     assert "final_snp_sites_written" not in report
     assert "s1" in report
     assert "assembly_reference_sequence" not in report
+    assert report_json["summary"]["shared_loci_before_min_sample_coverage_filter"] == 14
     assert report_json["summary"]["shared_loci_after_delimiting"] == 10
     assert report_json["summary"]["final_snp_sites_written"] == 5
+    assert report_json["locus_filtering"]["loci_filtered_min_samples"] == 4
+    assert "Loci filtered by minimum sample coverage" in report
+    assert "  4" in report
+    assert report_json["locus_occupancy"][1]["loci_before_min_sample_coverage_filter"] == 6
+    assert report_json["locus_occupancy"][2]["loci_before_min_sample_coverage_filter"] == 8
     assert report_json["command"] == "ipyrad2 assemble -d a.bam -r ref.fa -o OUT"
     assert report_json["sample_masking"]["loci_with_samples_masked_by_max_hetero_frequency"] == 2
     assert report_json["sample_summary"][0]["sample"] == "s1"
@@ -4730,8 +5048,10 @@ def test_write_assemble_stats_report_includes_mixed_run_summary(tmp_path: Path) 
             "rad": {"reads_before_filtering": 10, "reads_after_filtering": 8},
             "wgs": {"reads_before_filtering": 9, "reads_after_filtering": 6},
         },
+        shared_loci_before_min_sample_coverage_filter=None,
         shared_loci_after_delimiting=10,
         shared_loci_after_paralog_filtering=8,
+        locus_occupancy_before_min_sample_coverage_filter=None,
         loci_summary={
             "nloci_after_filtering": 6,
             "nsites_after_filtering": 24,
@@ -4795,6 +5115,11 @@ def test_write_assemble_stats_report_includes_mixed_run_summary(tmp_path: Path) 
 
     report = outpath.read_text(encoding="utf-8")
     report_json = json.loads((tmp_path / "assembly.stats.json").read_text(encoding="utf-8"))
+    assert "Shared loci before minimum sample coverage filter" in report
+    assert "N/A" in report
+    assert report_json["summary"]["shared_loci_before_min_sample_coverage_filter"] is None
+    assert report_json["locus_filtering"]["loci_filtered_min_samples"] is None
+    assert report_json["locus_occupancy"][0]["loci_before_min_sample_coverage_filter"] is None
     assert "# Mixed RAD/WGS Diagnostics" in report
     assert "Sites supported by WGS only" in report
     assert "WGS heterozygous genotypes masked by allele balance" in report
@@ -4867,8 +5192,10 @@ def test_write_consensus_and_outputs_fails_cleanly_when_no_loci_survive(
             sample_retained_beds={"s1": get_final_good_bed_path("s1", tmpdir)},
             reference=reference,
             masks=None,
+            shared_loci_before_min_sample_coverage_filter=5,
             shared_loci_after_delimiting=5,
             shared_loci_after_paralog_filtering=5,
+            pre_min_sample_coverage_occupancy_counts={1: 5},
             min_locus_sample_coverage=1,
             min_locus_trim_sample_coverage=1,
             min_locus_length=25,

@@ -458,6 +458,7 @@ def run_subcommand(args, _exit=True):
             masks=args.masks,
             cores=args.cores,
             threads=args.threads,
+            keep_tmpdir=args.keep_tmpdir,
             force=args.force,
             log_level=args.log_level,
             logged_command=logged_command,

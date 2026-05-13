@@ -134,6 +134,156 @@ def _count_nonempty_lines(path: Path) -> int:
     with path.open("r", encoding="utf-8") as handle:
         return sum(1 for line in handle if line.strip())
 
+
+def _get_shared_locus_bed_paths(
+    snames: list[str],
+    suffix: str,
+    tmpdir: Path,
+) -> list[Path]:
+    """Validate and return the per-sample BED inputs for shared locus delimiting."""
+    bed_dir = tmpdir / "beds"
+    duplicate_snames = [name for name, count in Counter(snames).items() if count > 1]
+    if duplicate_snames:
+        shown = ", ".join(sorted(duplicate_snames))
+        raise IPyradError(
+            f"Duplicate sample names were provided for shared locus delimiting: {shown}"
+        )
+    bed_paths = [bed_dir / f"{sname}{suffix}" for sname in snames]
+    if not bed_paths:
+        raise IPyradError(
+            "No sample BED files were provided for shared locus delimiting."
+        )
+    missing_beds = [str(path) for path in bed_paths if not path.exists()]
+    if missing_beds:
+        shown = ", ".join(missing_beds[:5])
+        if len(missing_beds) > 5:
+            shown += f", ... ({len(missing_beds) - 5} more)"
+        raise IPyradError(
+            "Missing sample BED files for shared locus delimiting: "
+            f"{shown}"
+        )
+    duplicate_bed_paths = [
+        str(path) for path, count in Counter(bed_paths).items() if count > 1
+    ]
+    if duplicate_bed_paths:
+        shown = ", ".join(sorted(duplicate_bed_paths))
+        raise IPyradError(
+            f"Duplicate BED paths were provided for shared locus delimiting: {shown}"
+        )
+    return bed_paths
+
+
+def get_shared_locus_occupancy_counts(
+    snames: list[str],
+    min_sample_coverage: int,
+    min_merge_distance: int,
+    min_locus_length: int,
+    suffix: str,
+    tmpdir: Path,
+) -> tuple[int, dict[int, int]]:
+    """Return merged shared-locus counts plus occupancy counts for one BED set."""
+    ref_info = tmpdir / "REF_info.txt"
+    bed_paths = _get_shared_locus_bed_paths(snames, suffix, tmpdir)
+    if len(bed_paths) == 1:
+        total_loci = 0
+        current_chrom: str | None = None
+        current_start = 0
+        current_end = 0
+
+        def flush_single() -> None:
+            nonlocal total_loci, current_chrom, current_start, current_end
+            if current_chrom is None:
+                return
+            if (current_end - current_start) >= min_locus_length:
+                total_loci += 1
+            current_chrom = None
+            current_start = 0
+            current_end = 0
+
+        with bed_paths[0].open("r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                fields = line.split()
+                if len(fields) < 3:
+                    raise IPyradError(
+                        "Could not parse sample BED line during shared-locus occupancy counting."
+                    )
+                chrom = fields[0]
+                start = int(fields[1])
+                end = int(fields[2])
+                if current_chrom == chrom and start <= current_end + int(min_merge_distance):
+                    current_end = max(current_end, end)
+                    continue
+                flush_single()
+                current_chrom = chrom
+                current_start = start
+                current_end = end
+        flush_single()
+        return total_loci, ({1: total_loci} if total_loci else {})
+
+    lex_ref_info, lex_bed_paths, workspace = _prepare_multiinter_inputs(
+        bed_paths=bed_paths,
+        ref_info=ref_info,
+        tmpdir=tmpdir,
+    )
+    cmd = [BIN_BED, "multiinter", "-g", str(lex_ref_info)]
+    cmd += ["-i"] + [str(path) for path in lex_bed_paths]
+    cmd += ["-names"] + snames
+
+    total_loci = 0
+    occupancy_counts: Counter[int] = Counter()
+    current_chrom: str | None = None
+    current_start = 0
+    current_end = 0
+    current_members: set[str] = set()
+
+    def flush_current() -> None:
+        nonlocal total_loci, current_chrom, current_start, current_end, current_members
+        if current_chrom is None:
+            return
+        if (current_end - current_start) >= min_locus_length:
+            total_loci += 1
+            occupancy_counts[len(current_members)] += 1
+        current_chrom = None
+        current_start = 0
+        current_end = 0
+        current_members = set()
+
+    try:
+        for line in stream_pipeline_lines([cmd]):
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) < 5:
+                raise IPyradError(
+                    "Could not parse `bedtools multiinter` output during shared-locus occupancy counting."
+                )
+            chrom = fields[0]
+            start = int(fields[1])
+            end = int(fields[2])
+            sample_count = int(fields[3])
+            if sample_count < int(min_sample_coverage):
+                continue
+            members = {name for name in fields[4].split(",") if name and name != "."}
+            if len(members) < int(min_sample_coverage):
+                continue
+
+            if current_chrom == chrom and start <= current_end + int(min_merge_distance):
+                current_end = max(current_end, end)
+                current_members.update(members)
+                continue
+
+            flush_current()
+            current_chrom = chrom
+            current_start = start
+            current_end = end
+            current_members = set(members)
+        flush_current()
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+    return total_loci, dict(sorted(occupancy_counts.items()))
+
 def _iter_selected_fasta_records(
     reference_fasta: Path,
     contigs: set[str],
@@ -394,34 +544,7 @@ def get_across_sample_loci_bed(
     """Merge per-sample BEDs into the shared loci BED used by assemble."""
     ref_info = tmpdir / "REF_info.txt"
     bed_dir = tmpdir / "beds"
-    duplicate_snames = [name for name, count in Counter(snames).items() if count > 1]
-    if duplicate_snames:
-        shown = ", ".join(sorted(duplicate_snames))
-        raise IPyradError(
-            f"Duplicate sample names were provided for shared locus delimiting: {shown}"
-        )
-    bed_paths = [bed_dir / f"{sname}{suffix}" for sname in snames]
-    if not bed_paths:
-        raise IPyradError(
-            "No sample BED files were provided for shared locus delimiting."
-        )
-    missing_beds = [str(path) for path in bed_paths if not path.exists()]
-    if missing_beds:
-        shown = ", ".join(missing_beds[:5])
-        if len(missing_beds) > 5:
-            shown += f", ... ({len(missing_beds) - 5} more)"
-        raise IPyradError(
-            "Missing sample BED files for shared locus delimiting: "
-            f"{shown}"
-        )
-    duplicate_bed_paths = [
-        str(path) for path, count in Counter(bed_paths).items() if count > 1
-    ]
-    if duplicate_bed_paths:
-        shown = ", ".join(sorted(duplicate_bed_paths))
-        raise IPyradError(
-            f"Duplicate BED paths were provided for shared locus delimiting: {shown}"
-        )
+    bed_paths = _get_shared_locus_bed_paths(snames, suffix, tmpdir)
     out_bed = bed_dir / "loci.bed"
     logger.debug(
         "preparing lex-sorted temporary BEDs for cross-sample locus delimiting: "
