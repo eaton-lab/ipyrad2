@@ -159,6 +159,11 @@ def get_calling_bam_path(tmpdir: Path, sname: str) -> Path:
     return tmpdir / "calling_bams" / f"{sname}.variant.filtered.bam"
 
 
+def get_paralog_bam_path(tmpdir: Path, sname: str) -> Path:
+    """Return the temp loci-restricted BAM path used for paralog scoring."""
+    return tmpdir / "paralog_bams" / f"{sname}.paralog.filtered.bam"
+
+
 def _count_bam_records(bam_file: Path, threads: int) -> int:
     """Return the number of alignment records in one BAM."""
     cmd = [
@@ -272,6 +277,63 @@ def prepare_variant_call_bam(
             str(max(1, threads)),
             "-L",
             str(keep_bed),
+            "-o",
+            str(out_bam),
+            str(bam_file),
+        ]
+    run_pipeline([cmd])
+
+    cmd = [
+        BIN_SAM,
+        "index",
+        "-c",
+        "-@",
+        str(max(1, threads)),
+        str(out_bam),
+    ]
+    run_pipeline([cmd])
+    return out_bam
+
+
+def prepare_paralog_bam(
+    *,
+    sname: str,
+    bam_file: Path,
+    regions_bed: Path,
+    tmpdir: Path,
+    threads: int,
+) -> Path:
+    """Write and index one loci-restricted BAM used only for paralog scoring."""
+    if not regions_bed.exists():
+        raise IPyradError(
+            f"Shared loci BED not found for paralog BAM prep on {sname}: {regions_bed}"
+        )
+
+    out_bam = get_paralog_bam_path(tmpdir, sname)
+    out_bam.parent.mkdir(parents=True, exist_ok=True)
+
+    if regions_bed.stat().st_size == 0:
+        cmd = [
+            BIN_SAM,
+            "view",
+            "-b",
+            "-H",
+            "-@",
+            str(max(1, threads)),
+            "-o",
+            str(out_bam),
+            str(bam_file),
+        ]
+    else:
+        cmd = [
+            BIN_SAM,
+            "view",
+            "-b",
+            "-h",
+            "-@",
+            str(max(1, threads)),
+            "-L",
+            str(regions_bed),
             "-o",
             str(out_bam),
             str(bam_file),

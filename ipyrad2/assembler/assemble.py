@@ -15,6 +15,7 @@ from .beds import (
     get_reference_sort_order,
     get_coverage_bed_graphs,
     get_across_sample_loci_bed,
+    get_shared_locus_occupancy_counts,
     clip_depth_bedgraph_to_retained_loci,
     get_retained_depth_bedgraph_path,
     get_sample_depth_stats_in_final_loci,
@@ -51,7 +52,9 @@ from .read_filters import (
     classify_bam_layout,
     get_analysis_bam_path,
     get_calling_bam_path,
+    get_paralog_bam_path,
     prepare_filtered_analysis_bam,
+    prepare_paralog_bam,
     prepare_variant_call_bam,
 )
 from .variants import (
@@ -84,6 +87,7 @@ class SampleArtifacts:
     """
 
     pre_paralog_bam: Path
+    paralog_bam: Path
     post_paralog_call_bam: Path
     pre_paralog_depth_bedgraph: Path
     pre_paralog_goodcov_bed: Path
@@ -124,6 +128,8 @@ class SharedLociBuildOutputs:
 
     shared_loci_bed: Path
     raw_shared_loci_count: int
+    shared_loci_before_min_sample_coverage_filter: int | None
+    pre_min_sample_coverage_occupancy_counts: dict[int, int] | None
 
 
 def _build_sample_artifacts(
@@ -135,6 +141,7 @@ def _build_sample_artifacts(
     return {
         sname: SampleArtifacts(
             pre_paralog_bam=get_analysis_bam_path(tmpdir, sname),
+            paralog_bam=get_paralog_bam_path(tmpdir, sname),
             post_paralog_call_bam=get_calling_bam_path(tmpdir, sname),
             pre_paralog_depth_bedgraph=bed_dir / f"{sname}.fragments.bedgraph",
             pre_paralog_goodcov_bed=get_goodcov_bed_path(sname, tmpdir),
@@ -259,6 +266,14 @@ def _build_shared_loci_bed(
     raw_shared_loci_bed = bed_dir / "loci.raw.bed"
     shutil.copy2(shared_loci_bed, raw_shared_loci_bed)
     raw_count = _count_nonempty_lines(raw_shared_loci_bed)
+    pre_min_count, pre_min_occupancy_counts = get_shared_locus_occupancy_counts(
+        snames,
+        1,
+        min_locus_merge_distance,
+        min_locus_length,
+        suffix,
+        tmpdir,
+    )
     if preserve_multiinter_debug_workspace:
         debug_manifest = tmpdir / f"{name}.shared_loci_debug.json"
         debug_manifest.write_text(
@@ -273,6 +288,8 @@ def _build_shared_loci_bed(
                     "ref_info_path": str(tmpdir / "REF_info.txt"),
                     "raw_shared_loci_bed_path": str(raw_shared_loci_bed),
                     "raw_shared_loci_count": raw_count,
+                    "shared_loci_before_min_sample_coverage_filter": pre_min_count,
+                    "locus_occupancy_before_min_sample_coverage_filter": pre_min_occupancy_counts,
                     "multiinter_debug_workspace": (
                         str(debug_workspace_dir) if debug_workspace_dir is not None else None
                     ),
@@ -302,6 +319,8 @@ def _build_shared_loci_bed(
     return SharedLociBuildOutputs(
         shared_loci_bed=shared_loci_bed,
         raw_shared_loci_count=raw_count,
+        shared_loci_before_min_sample_coverage_filter=pre_min_count,
+        pre_min_sample_coverage_occupancy_counts=pre_min_occupancy_counts,
     )
 
 
@@ -1093,6 +1112,37 @@ def _prepare_variant_call_bams(
     )
 
 
+def _prepare_paralog_bams(
+    *,
+    sample_bams: dict[str, Path],
+    regions_bed: Path,
+    tmpdir: Path,
+    threads: int,
+    workers: int,
+    log_level: str,
+) -> dict[str, Path]:
+    """Write loci-restricted per-sample BAMs used only for paralog scoring."""
+    logger.info("preparing loci-restricted BAMs for paralog scoring")
+    jobs = {}
+    for sname, bam_file in sample_bams.items():
+        jobs[sname] = (
+            prepare_paralog_bam,
+            {
+                "sname": sname,
+                "bam_file": bam_file,
+                "regions_bed": regions_bed,
+                "tmpdir": tmpdir,
+                "threads": threads,
+            },
+        )
+    return run_with_pool(
+        jobs,
+        log_level,
+        workers,
+        msg="Preparing loci-restricted paralog BAMs",
+    )
+
+
 def _run_paralog_stage(
     *,
     sample_bams: dict[str, Path],
@@ -1110,6 +1160,7 @@ def _run_paralog_stage(
     maf_threshold: float,
     max_sites_above_maf: int,
     paralog_fail_frac_max: float,
+    threads: int,
     workers: int,
     log_level: str,
     rad_sample_names: list[str] | None = None,
@@ -1134,6 +1185,22 @@ def _run_paralog_stage(
         logger.info(
             "mixed RAD/WGS assembly detected; skipping softclip-based paralog failure for WGS samples"
         )
+    logger.info("paralog scoring uses the shared loci BED for all samples")
+
+    tmpdir = phase_dir.parent
+    ref_info = tmpdir / "REF_info.txt"
+    restricted_bams = _prepare_paralog_bams(
+        sample_bams=sample_bams,
+        regions_bed=regions_bed,
+        tmpdir=tmpdir,
+        threads=threads,
+        workers=workers,
+        log_level=log_level,
+    )
+    logger.info(
+        "loci-restricted paralog BAMs ready for {} samples",
+        len(restricted_bams),
+    )
 
     # Score every sample against the shared RAD-defined loci BED. RAD samples
     # still define the loci, but WGS samples are also evaluated here so their
@@ -1154,9 +1221,10 @@ def _run_paralog_stage(
         max_sites_above_maf=max_sites_above_maf,
         softclip_len_threshold=softclip_len_threshold,
         softclip_frac_max=softclip_frac_max,
+        reference_sort_order=ref_info,
     )
     jobs = {}
-    for sname, bam_file in sample_bams.items():
+    for sname, bam_file in restricted_bams.items():
         sample_kwargs = kwargs
         if mixed_mode and sname in wgs_sample_name_set:
             sample_kwargs = sample_kwargs | {
@@ -1414,8 +1482,10 @@ def _write_consensus_and_outputs(
     sample_retained_beds: dict[str, Path],
     reference: Path,
     masks: List[str] | None,
+    shared_loci_before_min_sample_coverage_filter: int | None,
     shared_loci_after_delimiting: int,
     shared_loci_after_paralog_filtering: int,
+    pre_min_sample_coverage_occupancy_counts: dict[int, int] | None,
     min_locus_sample_coverage: int,
     min_locus_trim_sample_coverage: int,
     min_locus_length: int,
@@ -1656,8 +1726,10 @@ def _write_consensus_and_outputs(
         sample_types=sample_type_labels or {},
         sample_layouts=sample_layout_labels or {},
         sample_filter_stats=sample_filter_stats or {},
+        shared_loci_before_min_sample_coverage_filter=shared_loci_before_min_sample_coverage_filter,
         shared_loci_after_delimiting=shared_loci_after_delimiting,
         shared_loci_after_paralog_filtering=shared_loci_after_paralog_filtering,
+        locus_occupancy_before_min_sample_coverage_filter=pre_min_sample_coverage_occupancy_counts,
         loci_summary=loci_summary,
         sample_depth_stats=sample_depth_stats,
         nsnps_written=nsnps_written,
@@ -1706,6 +1778,7 @@ def run_assembler(
     min_aligned_len: int | None = None,
     subsample: Path | None = None,
     logged_command: str | None = None,
+    keep_tmpdir: bool = False,
 ):
     # Normalize the top-level input/output paths first so later stages can
     # treat everything as concrete local files.
@@ -1963,10 +2036,18 @@ def run_assembler(
             preserve_multiinter_debug_workspace=log_level.upper() == "DEBUG",
         )
         loci_bed = shared_loci_outputs.shared_loci_bed
+        shared_loci_before_min_sample_coverage_filter = (
+            shared_loci_outputs.shared_loci_before_min_sample_coverage_filter
+        )
         shared_loci_after_delimiting = shared_loci_outputs.raw_shared_loci_count
+        pre_min_sample_coverage_occupancy_counts = (
+            shared_loci_outputs.pre_min_sample_coverage_occupancy_counts
+        )
     else:
         loci_bed = normalized_loci_bed
+        shared_loci_before_min_sample_coverage_filter = None
         shared_loci_after_delimiting = _count_nonempty_lines(loci_bed)
+        pre_min_sample_coverage_occupancy_counts = None
 
     # [2] Paralog filtering:
     # Score every sample against the shared RAD-defined loci BED, reduce those
@@ -1988,6 +2069,7 @@ def run_assembler(
         maf_threshold=maf_threshold,
         max_sites_above_maf=max_sites_above_maf,
         paralog_fail_frac_max=paralog_fail_frac_max,
+        threads=threads,
         workers=workers,
         log_level=log_level,
         rad_sample_names=sorted(bam_dict),
@@ -2061,8 +2143,10 @@ def run_assembler(
         sample_retained_beds=paralog_outputs.sample_retained_beds,
         reference=reference,
         masks=masks,
+        shared_loci_before_min_sample_coverage_filter=shared_loci_before_min_sample_coverage_filter,
         shared_loci_after_delimiting=shared_loci_after_delimiting,
         shared_loci_after_paralog_filtering=shared_loci_after_paralog_filtering,
+        pre_min_sample_coverage_occupancy_counts=pre_min_sample_coverage_occupancy_counts,
         min_locus_sample_coverage=min_locus_sample_coverage,
         min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
         min_locus_length=min_locus_length,
@@ -2098,5 +2182,10 @@ def run_assembler(
             for sname in snames
         },
     )
+    if keep_tmpdir:
+        logger.info("keeping assemble tmpdir at {}", tmpdir)
+    else:
+        shutil.rmtree(tmpdir)
+        logger.info("removed assemble tmpdir {}", tmpdir)
     logger.info("assemble complete; outputs written to {}", outdir)
     return

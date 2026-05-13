@@ -73,12 +73,13 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
         "--paralog-fail-frac-max",
         "--max-sample-hetero-frequency",
         "--subsample",
-        "-p, --populations",
+        "--populations",
         "--rename",
-        "-x, --masks",
+        "--masks",
         "-c, --cores",
         "-t, --threads",
         "-f, --force",
+        "--keep-tmpdir",
         "-l, --log-level",
         "-h, --help",
     ]
@@ -99,12 +100,12 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
     assert "Discard mapped reads with MAPQ below this threshold." in help_text
     assert "Locus BED delimiting:" in help_text
     assert "Min third-allele fraction at a SNP site" in help_text
-    assert "heterozygous/IUPAC plus masked-N-at-variable-site" in help_text
     assert "BED of loci to assemble instead of delimiting shared loci from RAD samples." in help_text
     assert "File whose first column selects BAM filenames or sample names; extra columns ignored" in help_text
     assert "File mapping BAM basenames to group names for population-level variant calls" in help_text
     assert "File mapping BAM basenames to new names for outputs; overrides BAM headers" in help_text
     assert "Optional site patterns to mask in final assembled sequences. [default=None]" in help_text
+    assert "Keep the assemble tmpdir after success; useful for testing." in help_text
     assert "--reindex-reference" not in help_text
     assert "ipyrad assemble -d" not in help_text
     assert "--ref REF" not in help_text
@@ -141,8 +142,10 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
         "--max-sites-above-maf",
         "--paralog-fail-frac-max",
         "--subsample",
-        "-x, --masks",
+        "--masks",
         "-t, --threads",
+        "--populations",
+        "--keep-tmpdir",
     ]
     for option_label in single_line_options:
         _assert_help_entry_is_single_line(help_text, option_label)
@@ -158,11 +161,11 @@ def test_assemble_parser_defaults_match_current_cli() -> None:
     assert args.loci_bed is None
     assert args.name == "assembly"
     assert args.out == Path("OUT")
-    assert args.min_map_q == 10
+    assert args.min_map_q == 30
     assert args.max_softclip is None
     assert args.min_aligned_len is None
     assert args.max_nm is None
-    assert args.max_tlen is None
+    assert args.max_tlen == 1000
     assert not hasattr(args, "require_same_scaffold")
     assert args.min_locus_sample_coverage == 4
     assert args.min_locus_length == 25
@@ -170,7 +173,7 @@ def test_assemble_parser_defaults_match_current_cli() -> None:
     assert args.min_base_q == 13
     assert args.min_site_q == 13
     assert args.min_geno_q == 13
-    assert args.min_sample_depth == 1
+    assert args.min_sample_depth == 5
     assert args.max_locus_hetero_frequency == 0.3
     assert args.max_locus_variant_frequency == 1.0
     assert args.min_locus_trim_sample_coverage == 4
@@ -189,6 +192,7 @@ def test_assemble_parser_defaults_match_current_cli() -> None:
     assert args.masks is None
     assert args.cores == 6
     assert args.threads == 3
+    assert args.keep_tmpdir is False
     assert args.force is False
     assert args.log_level == "INFO"
 

@@ -161,9 +161,18 @@ def build_softclip_bam(bam: Path, out_bam: Path, softclip_len_threshold: int) ->
     run_pipeline([cmd], out_bam)
 
 
-def bedtools_coverage_counts(a_bed: Path, b_bam: Path, out_tsv: Path) -> None:
-    """Run: bedtools coverage -a a_bed -b b_bam -counts; writes TSV."""
-    cmd = [BIN_BED, "coverage", "-a", str(a_bed), "-b", str(b_bam), "-counts"]
+def bedtools_coverage_counts(
+    a_bed: Path,
+    b_bam: Path,
+    out_tsv: Path,
+    *,
+    reference_sort_order: Path | None = None,
+) -> None:
+    """Run bedtools coverage -counts, optionally in sorted sweep mode."""
+    cmd = [BIN_BED, "coverage"]
+    if reference_sort_order is not None:
+        cmd.extend(["-sorted", "-g", str(reference_sort_order)])
+    cmd.extend(["-a", str(a_bed), "-b", str(b_bam), "-counts"])
     run_pipeline([cmd], out_tsv)
 
 
@@ -183,13 +192,20 @@ def all_reads_by_region(
     bam: Path,
     regions_bed: Path,
     out_tsv: Path,
+    *,
+    reference_sort_order: Path | None = None,
 ) -> pd.DataFrame:
     """Compute per-region read counts (all reads) using bedtools coverage -counts."""
     with NamedTemporaryFile(suffix=".all.cov.tsv", delete=False) as tmp:
         all_cov = Path(tmp.name)
 
     try:
-        bedtools_coverage_counts(regions_bed, bam, all_cov)
+        bedtools_coverage_counts(
+            regions_bed,
+            bam,
+            all_cov,
+            reference_sort_order=reference_sort_order,
+        )
         all_df = read_bedtools_coverage_counts(all_cov, "all_reads")
         all_df["rid"] = (
             all_df["chrom"].astype(str)
@@ -213,6 +229,7 @@ def softclip_fraction_by_region(
     out_tsv: Path,
     *,
     softclip_len_threshold: int,
+    reference_sort_order: Path | None = None,
 ) -> pd.DataFrame:
     """
     Compute per-region fraction of reads with sclen > softclip_len_threshold.
@@ -231,8 +248,18 @@ def softclip_fraction_by_region(
 
     try:
         build_softclip_bam(bam, clipped_bam, softclip_len_threshold)
-        bedtools_coverage_counts(regions_bed, bam, all_cov)
-        bedtools_coverage_counts(regions_bed, clipped_bam, scl_cov)
+        bedtools_coverage_counts(
+            regions_bed,
+            bam,
+            all_cov,
+            reference_sort_order=reference_sort_order,
+        )
+        bedtools_coverage_counts(
+            regions_bed,
+            clipped_bam,
+            scl_cov,
+            reference_sort_order=reference_sort_order,
+        )
 
         all_df = read_bedtools_coverage_counts(all_cov, "all_reads")
         scl_df = read_bedtools_coverage_counts(scl_cov, "scl_reads")
@@ -546,6 +573,7 @@ def get_sample_paralog_tables(
     softclip_len_threshold: int | None = None,
     softclip_frac_max: float | None = None,
     callable_regions_bed: Path | None = None,
+    reference_sort_order: Path | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Within-sample workflow returning (site_table, locus_table).
@@ -639,6 +667,7 @@ def get_sample_paralog_tables(
             regions_bed=regions_bed,
             out_tsv=scl_out,
             softclip_len_threshold=softclip_len_threshold,
+            reference_sort_order=reference_sort_order,
         )
 
     df_locus = add_softclip_and_pass(
@@ -650,7 +679,12 @@ def get_sample_paralog_tables(
     # Measure all reads per region separately from the SNP table so the
     # across-sample reducer can distinguish "no SNPs" from "no data".
     cov_out = tmpdir / f"{prefix}.all_reads_by_region.tsv"
-    df_all = all_reads_by_region(bam=bam, regions_bed=regions_bed, out_tsv=cov_out)
+    df_all = all_reads_by_region(
+        bam=bam,
+        regions_bed=regions_bed,
+        out_tsv=cov_out,
+        reference_sort_order=reference_sort_order,
+    )
     df_locus = df_locus.merge(
         df_all[["rid", "all_reads"]],
         on="rid",

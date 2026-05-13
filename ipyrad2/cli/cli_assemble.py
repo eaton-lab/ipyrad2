@@ -165,7 +165,7 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
     )
     paralogs.add_argument(
         "--max-sample-hetero-frequency", metavar="float", type=float, default=0.10,
-        help="Mask a sample for a locus when its heterozygous/IUPAC plus masked-N-at-variable-site fraction exceeds this value. [default=%(default)s]",
+        help="Max frac. of heterozygous or QUAL-masked SNP sites in a sample at a locus. [default=%(default)s]",
     )
 
     naming.add_argument(
@@ -173,7 +173,7 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="File whose first column selects BAM filenames or sample names; extra columns ignored",
     )
     naming.add_argument(
-        "-p", "--populations", metavar="Path", type=Path,
+        "--populations", metavar="Path", type=Path,
         help="File mapping BAM basenames to group names for population-level variant calls",
     )
     naming.add_argument(
@@ -181,7 +181,7 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="File mapping BAM basenames to new names for outputs; overrides BAM headers",
     )
     naming.add_argument(
-        "-x", "--masks", metavar="str", nargs="*", type=str,
+        "--masks", metavar="str", nargs="*", type=str,
         help="Optional site patterns to mask in final assembled sequences. [default=None]",
     )
 
@@ -197,6 +197,11 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         "-f", "--force", action="store_true",
         help="Overwrite assemble outputs for this run.",
     )
+    performance.add_argument(
+        "--keep-tmpdir", action="store_true",
+        help="Keep the assemble tmpdir after success; useful for testing.",
+    )
+
 
     logging.add_argument(
         "-l", "--log-level", metavar="str", type=str, default="INFO",

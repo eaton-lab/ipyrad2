@@ -5,8 +5,51 @@ from pathlib import Path
 import pandas as pd
 
 from ipyrad2.assembler.paralogs import aggregate_across_samples
+from ipyrad2.assembler.paralogs import bedtools_coverage_counts
 from ipyrad2.assembler.paralogs import get_sample_paralog_tables
+from ipyrad2.assembler.paralogs import BIN_BED
 from ipyrad2.assembler.paralogs import write_per_sample_final_good
+
+
+def test_bedtools_coverage_counts_uses_sorted_sweep_with_reference_order(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    observed: list[list[list[str]]] = []
+    bed = tmp_path / "regions.bed"
+    bam = tmp_path / "sample.bam"
+    out = tmp_path / "counts.tsv"
+    ref_info = tmp_path / "REF_info.txt"
+
+    def _fake_run_pipeline(cmds, outfile=None, **kwargs):
+        del kwargs
+        observed.append(cmds)
+        assert outfile == out
+        return 0, b"", b""
+
+    monkeypatch.setattr("ipyrad2.assembler.paralogs.run_pipeline", _fake_run_pipeline)
+
+    bedtools_coverage_counts(
+        bed,
+        bam,
+        out,
+        reference_sort_order=ref_info,
+    )
+
+    assert observed == [[
+        [
+            BIN_BED,
+            "coverage",
+            "-sorted",
+            "-g",
+            str(ref_info),
+            "-a",
+            str(bed),
+            "-b",
+            str(bam),
+            "-counts",
+        ]
+    ]]
 
 
 def test_get_sample_paralog_tables_keeps_has_data_for_loci_with_no_snps(
@@ -39,8 +82,8 @@ def test_get_sample_paralog_tables_keeps_has_data_for_loci_with_no_snps(
         ),
     )
 
-    def _fake_all_reads_by_region(*, bam, regions_bed, out_tsv):
-        del bam, regions_bed
+    def _fake_all_reads_by_region(*, bam, regions_bed, out_tsv, reference_sort_order=None):
+        del bam, regions_bed, reference_sort_order
         df = pd.DataFrame(
             {
                 "chrom": ["chr1", "chr1"],
@@ -103,8 +146,8 @@ def test_get_sample_paralog_tables_handles_empty_masked_snp_table(
         ),
     )
 
-    def _fake_all_reads_by_region(*, bam, regions_bed, out_tsv):
-        del bam, regions_bed
+    def _fake_all_reads_by_region(*, bam, regions_bed, out_tsv, reference_sort_order=None):
+        del bam, regions_bed, reference_sort_order
         df = pd.DataFrame(
             {
                 "chrom": ["chr1", "chr1"],
