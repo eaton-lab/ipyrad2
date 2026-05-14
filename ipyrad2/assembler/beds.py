@@ -284,6 +284,71 @@ def get_shared_locus_occupancy_counts(
 
     return total_loci, dict(sorted(occupancy_counts.items()))
 
+
+def get_fixed_locus_occupancy_counts(
+    loci_bed: Path,
+    snames: list[str],
+    suffix: str,
+    tmpdir: Path,
+) -> dict[int, int]:
+    """Return occupancy counts for a fixed loci BED against selected sample BEDs."""
+    loci_bed = Path(loci_bed)
+    if not loci_bed.exists():
+        raise IPyradError(f"Fixed loci BED not found: {loci_bed}")
+
+    bed_paths = _get_shared_locus_bed_paths(snames, suffix, tmpdir)
+    ref_info = tmpdir / "REF_info.txt"
+    loci: list[tuple[str, int, int]] = []
+    with loci_bed.open("r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            fields = line.split()
+            if len(fields) < 3:
+                raise IPyradError(
+                    "Could not parse fixed loci BED line during occupancy counting."
+                )
+            loci.append((fields[0], int(fields[1]), int(fields[2])))
+
+    if not loci:
+        return {}
+
+    locus_to_index = {key: idx for idx, key in enumerate(loci)}
+    occupancy_by_locus = [0] * len(loci)
+
+    for bed_path in bed_paths:
+        cmd = [
+            BIN_BED,
+            "intersect",
+            "-sorted",
+            "-g",
+            str(ref_info),
+            "-u",
+            "-a",
+            str(loci_bed),
+            "-b",
+            str(bed_path),
+        ]
+        for line in stream_pipeline_lines([cmd]):
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) < 3:
+                raise IPyradError(
+                    "Could not parse `bedtools intersect` output during fixed-locus occupancy counting."
+                )
+            locus_key = (fields[0], int(fields[1]), int(fields[2]))
+            try:
+                occupancy_by_locus[locus_to_index[locus_key]] += 1
+            except KeyError as exc:
+                raise IPyradError(
+                    "Fixed-locus occupancy counting produced a locus not present in the input BED."
+                ) from exc
+
+    occupancy_counts = Counter(
+        count for count in occupancy_by_locus if count > 0
+    )
+    return dict(sorted(occupancy_counts.items()))
+
 def _iter_selected_fasta_records(
     reference_fasta: Path,
     contigs: set[str],

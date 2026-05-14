@@ -15,6 +15,7 @@ from .beds import (
     get_reference_sort_order,
     get_coverage_bed_graphs,
     get_across_sample_loci_bed,
+    get_fixed_locus_occupancy_counts,
     get_shared_locus_occupancy_counts,
     clip_depth_bedgraph_to_retained_loci,
     get_retained_depth_bedgraph_path,
@@ -130,6 +131,7 @@ class SharedLociBuildOutputs:
     raw_shared_loci_count: int
     shared_loci_before_min_sample_coverage_filter: int | None
     pre_min_sample_coverage_occupancy_counts: dict[int, int] | None
+    post_min_sample_coverage_occupancy_counts: dict[int, int] | None
 
 
 def _build_sample_artifacts(
@@ -274,6 +276,12 @@ def _build_shared_loci_bed(
         suffix,
         tmpdir,
     )
+    post_min_occupancy_counts = get_fixed_locus_occupancy_counts(
+        shared_loci_bed,
+        snames,
+        suffix,
+        tmpdir,
+    )
     if preserve_multiinter_debug_workspace:
         debug_manifest = tmpdir / f"{name}.shared_loci_debug.json"
         debug_manifest.write_text(
@@ -290,6 +298,7 @@ def _build_shared_loci_bed(
                     "raw_shared_loci_count": raw_count,
                     "shared_loci_before_min_sample_coverage_filter": pre_min_count,
                     "locus_occupancy_before_min_sample_coverage_filter": pre_min_occupancy_counts,
+                    "locus_occupancy_after_min_sample_coverage_filter": post_min_occupancy_counts,
                     "multiinter_debug_workspace": (
                         str(debug_workspace_dir) if debug_workspace_dir is not None else None
                     ),
@@ -321,6 +330,7 @@ def _build_shared_loci_bed(
         raw_shared_loci_count=raw_count,
         shared_loci_before_min_sample_coverage_filter=pre_min_count,
         pre_min_sample_coverage_occupancy_counts=pre_min_occupancy_counts,
+        post_min_sample_coverage_occupancy_counts=post_min_occupancy_counts,
     )
 
 
@@ -1486,6 +1496,7 @@ def _write_consensus_and_outputs(
     shared_loci_after_delimiting: int,
     shared_loci_after_paralog_filtering: int,
     pre_min_sample_coverage_occupancy_counts: dict[int, int] | None,
+    post_min_sample_coverage_occupancy_counts: dict[int, int] | None,
     min_locus_sample_coverage: int,
     min_locus_trim_sample_coverage: int,
     min_locus_length: int,
@@ -1729,7 +1740,8 @@ def _write_consensus_and_outputs(
         shared_loci_before_min_sample_coverage_filter=shared_loci_before_min_sample_coverage_filter,
         shared_loci_after_delimiting=shared_loci_after_delimiting,
         shared_loci_after_paralog_filtering=shared_loci_after_paralog_filtering,
-        locus_occupancy_before_min_sample_coverage_filter=pre_min_sample_coverage_occupancy_counts,
+        rad_locus_occupancy_before_min_sample_coverage_filter=pre_min_sample_coverage_occupancy_counts,
+        rad_locus_occupancy_after_min_sample_coverage_filter=post_min_sample_coverage_occupancy_counts,
         loci_summary=loci_summary,
         sample_depth_stats=sample_depth_stats,
         nsnps_written=nsnps_written,
@@ -2043,11 +2055,15 @@ def run_assembler(
         pre_min_sample_coverage_occupancy_counts = (
             shared_loci_outputs.pre_min_sample_coverage_occupancy_counts
         )
+        post_min_sample_coverage_occupancy_counts = (
+            shared_loci_outputs.post_min_sample_coverage_occupancy_counts
+        )
     else:
         loci_bed = normalized_loci_bed
         shared_loci_before_min_sample_coverage_filter = None
         shared_loci_after_delimiting = _count_nonempty_lines(loci_bed)
         pre_min_sample_coverage_occupancy_counts = None
+        post_min_sample_coverage_occupancy_counts = None
 
     # [2] Paralog filtering:
     # Score every sample against the shared RAD-defined loci BED, reduce those
@@ -2147,6 +2163,7 @@ def run_assembler(
         shared_loci_after_delimiting=shared_loci_after_delimiting,
         shared_loci_after_paralog_filtering=shared_loci_after_paralog_filtering,
         pre_min_sample_coverage_occupancy_counts=pre_min_sample_coverage_occupancy_counts,
+        post_min_sample_coverage_occupancy_counts=post_min_sample_coverage_occupancy_counts,
         min_locus_sample_coverage=min_locus_sample_coverage,
         min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
         min_locus_length=min_locus_length,

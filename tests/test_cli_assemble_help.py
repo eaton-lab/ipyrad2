@@ -98,6 +98,7 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
     assert "$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa --rename rename.tsv -o OUT" in help_text
     assert "RAD BAM inputs that delimit loci unless --loci-bed is provided" in help_text
     assert "Discard mapped reads with MAPQ below this threshold." in help_text
+    assert "Min RAD samples with data required to retain a locus." in help_text
     assert "Locus BED delimiting:" in help_text
     assert "Min third-allele fraction at a SNP site" in help_text
     assert "BED of loci to assemble instead of delimiting shared loci from RAD samples." in help_text

@@ -31,6 +31,7 @@ from ipyrad2.assembler.beds import BIN_BED
 from ipyrad2.assembler.beds import clip_depth_bedgraph_to_retained_loci
 from ipyrad2.assembler.beds import get_retained_depth_bedgraph_path
 from ipyrad2.assembler.beds import get_across_sample_loci_bed
+from ipyrad2.assembler.beds import get_fixed_locus_occupancy_counts
 from ipyrad2.assembler.beds import get_coverage_bed_graphs
 from ipyrad2.assembler.beds import get_names_from_bams
 from ipyrad2.assembler.beds import get_sample_depth_stats_in_final_loci
@@ -1066,6 +1067,7 @@ def test_write_consensus_and_outputs_uses_one_pool_with_stage_specific_consensus
             shared_loci_after_delimiting=5,
             shared_loci_after_paralog_filtering=5,
             pre_min_sample_coverage_occupancy_counts={5: 5},
+            post_min_sample_coverage_occupancy_counts={5: 5},
             min_locus_sample_coverage=1,
             min_locus_trim_sample_coverage=1,
             min_locus_length=25,
@@ -1232,6 +1234,7 @@ def test_write_consensus_and_outputs_logs_locus_database_and_snp_database_summar
             shared_loci_after_delimiting=1,
             shared_loci_after_paralog_filtering=1,
             pre_min_sample_coverage_occupancy_counts={1: 1},
+            post_min_sample_coverage_occupancy_counts={1: 1},
             min_locus_sample_coverage=1,
             min_locus_trim_sample_coverage=1,
             min_locus_length=1,
@@ -1796,6 +1799,38 @@ def test_get_shared_locus_occupancy_counts_carries_sample_membership_through_mer
 
     assert total == 2
     assert occupancy == {1: 1, 2: 1}
+
+
+def test_get_fixed_locus_occupancy_counts_counts_support_on_fixed_loci(
+    tmp_path: Path,
+) -> None:
+    tmpdir = tmp_path / "assembly_tmpdir"
+    bed_dir = tmpdir / "beds"
+    bed_dir.mkdir(parents=True)
+    (tmpdir / "REF_info.txt").write_text("chr1\t100\n", encoding="utf-8")
+    loci_bed = bed_dir / "loci.bed"
+    loci_bed.write_text("chr1\t0\t10\nchr1\t20\t30\n", encoding="utf-8")
+    (bed_dir / "s1.fragments.merged.bed").write_text(
+        "chr1\t0\t10\nchr1\t20\t30\n",
+        encoding="utf-8",
+    )
+    (bed_dir / "s2.fragments.merged.bed").write_text(
+        "chr1\t5\t10\n",
+        encoding="utf-8",
+    )
+    (bed_dir / "s3.fragments.merged.bed").write_text(
+        "chr1\t25\t30\n",
+        encoding="utf-8",
+    )
+
+    occupancy = get_fixed_locus_occupancy_counts(
+        loci_bed,
+        ["s1", "s2", "s3"],
+        suffix=".fragments.merged.bed",
+        tmpdir=tmpdir,
+    )
+
+    assert occupancy == {2: 2}
 
 
 def test_get_across_sample_loci_bed_rejects_duplicate_sample_names(
@@ -4327,6 +4362,7 @@ def test_run_assembler_raw_shared_bed_matches_direct_recomputation(
     assert build["min_locus_length"] == 50
     assert build["shared_loci_before_min_sample_coverage_filter"] >= build["raw_shared_loci_count"]
     assert build["locus_occupancy_before_min_sample_coverage_filter"]
+    assert build["locus_occupancy_after_min_sample_coverage_filter"]
     assert build["raw_shared_loci_count"] == len(expected_text.splitlines())
     assert build["multiinter_debug_workspace"] is not None
     assert len(build["sample_beds"]) == len(bam_names)
@@ -4556,6 +4592,9 @@ def test_run_assembler_accepts_loci_bed_without_rad_samples(
         observed["pre_min_sample_coverage_occupancy_counts"] = kwargs[
             "pre_min_sample_coverage_occupancy_counts"
         ]
+        observed["post_min_sample_coverage_occupancy_counts"] = kwargs[
+            "post_min_sample_coverage_occupancy_counts"
+        ]
 
     monkeypatch.setattr("ipyrad2.assembler.assemble.run_with_pool", _fake_run_with_pool)
     monkeypatch.setattr("ipyrad2.assembler.assemble._run_paralog_stage", _fake_run_paralog_stage)
@@ -4617,6 +4656,7 @@ def test_run_assembler_accepts_loci_bed_without_rad_samples(
     assert observed["shared_loci_after_delimiting"] == 2
     assert observed["shared_loci_after_paralog_filtering"] == 2
     assert observed["pre_min_sample_coverage_occupancy_counts"] is None
+    assert observed["post_min_sample_coverage_occupancy_counts"] is None
     assert observed["regions_bed"] == tmp_path / "OUT" / "assembly_tmpdir" / "beds" / "loci.raw.bed"
     assert observed["regions_bed"].read_text(encoding="utf-8") == "chr2\t0\t4\nchr1\t5\t10\n"
 
@@ -4936,7 +4976,8 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
         shared_loci_before_min_sample_coverage_filter=14,
         shared_loci_after_delimiting=10,
         shared_loci_after_paralog_filtering=8,
-        locus_occupancy_before_min_sample_coverage_filter={1: 6, 2: 8},
+        rad_locus_occupancy_before_min_sample_coverage_filter={1: 6, 2: 8},
+        rad_locus_occupancy_after_min_sample_coverage_filter={1: 4, 2: 6},
         loci_summary={
             "nloci_after_filtering": 6,
             "nsites_after_filtering": 24,
@@ -5002,7 +5043,10 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
     assert "# Locus Occupancy" in report
     assert "Shared loci before minimum sample coverage filter" in report
     assert "Shared loci after delimiting" in report
-    assert "Loci before minimum sample coverage filter" in report
+    assert "RAD loci before min sample coverage" in report
+    assert "RAD loci after min sample coverage" in report
+    assert "Final filtered RAD loci with WGS" in report
+    assert "Cumulative final loci" in report
     assert "Final SNP sites written" in report
     assert "Sample type" in report
     assert "Read layout" in report
@@ -5024,8 +5068,23 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
     assert report_json["locus_filtering"]["loci_filtered_min_samples"] == 4
     assert "Loci filtered by minimum sample coverage" in report
     assert "  4" in report
-    assert report_json["locus_occupancy"][1]["loci_before_min_sample_coverage_filter"] == 6
-    assert report_json["locus_occupancy"][2]["loci_before_min_sample_coverage_filter"] == 8
+    assert report_json["locus_occupancy"][1]["rad_loci_before_min_sample_coverage"] == 6
+    assert report_json["locus_occupancy"][2]["rad_loci_before_min_sample_coverage"] == 8
+    assert report_json["locus_occupancy"][1]["rad_loci_after_min_sample_coverage"] == 4
+    assert report_json["locus_occupancy"][2]["rad_loci_after_min_sample_coverage"] == 6
+    assert (
+        report_json["locus_occupancy"][1]["final_filtered_rad_loci_with_wgs"]
+        == 3
+    )
+    assert (
+        report_json["locus_occupancy"][2]["final_filtered_rad_loci_with_wgs"]
+        == 3
+    )
+    assert report_json["locus_occupancy"][0]["cumulative_final_loci"] == 0
+    assert report_json["locus_occupancy"][1]["cumulative_final_loci"] == 3
+    assert report_json["locus_occupancy"][2]["cumulative_final_loci"] == 6
+    assert report_json["locus_occupancy"][1]["fraction_of_final_loci"] == pytest.approx(0.5)
+    assert report_json["locus_occupancy"][2]["fraction_of_final_loci"] == pytest.approx(0.5)
     assert report_json["command"] == "ipyrad2 assemble -d a.bam -r ref.fa -o OUT"
     assert report_json["sample_masking"]["loci_with_samples_masked_by_max_hetero_frequency"] == 2
     assert report_json["sample_summary"][0]["sample"] == "s1"
@@ -5051,7 +5110,8 @@ def test_write_assemble_stats_report_includes_mixed_run_summary(tmp_path: Path) 
         shared_loci_before_min_sample_coverage_filter=None,
         shared_loci_after_delimiting=10,
         shared_loci_after_paralog_filtering=8,
-        locus_occupancy_before_min_sample_coverage_filter=None,
+        rad_locus_occupancy_before_min_sample_coverage_filter=None,
+        rad_locus_occupancy_after_min_sample_coverage_filter=None,
         loci_summary={
             "nloci_after_filtering": 6,
             "nsites_after_filtering": 24,
@@ -5119,7 +5179,10 @@ def test_write_assemble_stats_report_includes_mixed_run_summary(tmp_path: Path) 
     assert "N/A" in report
     assert report_json["summary"]["shared_loci_before_min_sample_coverage_filter"] is None
     assert report_json["locus_filtering"]["loci_filtered_min_samples"] is None
-    assert report_json["locus_occupancy"][0]["loci_before_min_sample_coverage_filter"] is None
+    assert report_json["locus_occupancy"][0]["rad_loci_before_min_sample_coverage"] is None
+    assert report_json["locus_occupancy"][0]["rad_loci_after_min_sample_coverage"] is None
+    assert report_json["locus_occupancy"][1]["final_filtered_rad_loci_with_wgs"] == 3
+    assert report_json["locus_occupancy"][1]["cumulative_final_loci"] == 3
     assert "# Mixed RAD/WGS Diagnostics" in report
     assert "Sites supported by WGS only" in report
     assert "WGS heterozygous genotypes masked by allele balance" in report
@@ -5196,6 +5259,7 @@ def test_write_consensus_and_outputs_fails_cleanly_when_no_loci_survive(
             shared_loci_after_delimiting=5,
             shared_loci_after_paralog_filtering=5,
             pre_min_sample_coverage_occupancy_counts={1: 5},
+            post_min_sample_coverage_occupancy_counts={1: 5},
             min_locus_sample_coverage=1,
             min_locus_trim_sample_coverage=1,
             min_locus_length=25,

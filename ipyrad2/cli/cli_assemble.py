@@ -90,7 +90,7 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
 
     bed.add_argument(
         "-m", "--min-locus-sample-coverage", metavar="int", type=int, default=4,
-        help="Min number of samples with data required to retain a locus. [default=%(default)s]",
+        help="Min RAD samples with data required to retain a locus. [default=%(default)s]",
     )
     bed.add_argument(
         "-z", "--min-locus-length", metavar="int", type=int, default=25,
