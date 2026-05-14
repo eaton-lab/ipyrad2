@@ -736,7 +736,10 @@ def _human_stats_label(key: str) -> str:
         "masked_by_max_hetero_frequency": "Masked by sample heterozygosity threshold",
         "samples_with_data": "Samples with data",
         "loci": "Loci",
-        "loci_before_min_sample_coverage_filter": "Loci before minimum sample coverage filter",
+        "rad_loci_before_min_sample_coverage": "RAD loci before min sample coverage",
+        "rad_loci_after_min_sample_coverage": "RAD loci after min sample coverage",
+        "final_filtered_rad_loci_with_wgs": "Final filtered RAD loci with WGS",
+        "cumulative_final_loci": "Cumulative final loci",
         "fraction_of_final_loci": "Fraction of final loci",
         "rad_samples": "RAD samples",
         "wgs_samples": "WGS samples",
@@ -765,7 +768,8 @@ def write_assemble_stats_report(
     shared_loci_before_min_sample_coverage_filter: int | None,
     shared_loci_after_delimiting: int,
     shared_loci_after_paralog_filtering: int,
-    locus_occupancy_before_min_sample_coverage_filter: dict[int, int] | None,
+    rad_locus_occupancy_before_min_sample_coverage_filter: dict[int, int] | None,
+    rad_locus_occupancy_after_min_sample_coverage_filter: dict[int, int] | None,
     loci_summary: dict[str, object],
     sample_depth_stats: dict[str, dict[str, float]],
     nsnps_written: int,
@@ -943,22 +947,43 @@ def write_assemble_stats_report(
 
     occupancy_headers = [
         "samples_with_data",
-        "loci",
-        "loci_before_min_sample_coverage_filter",
+        "rad_loci_before_min_sample_coverage",
+        "rad_loci_after_min_sample_coverage",
+        "final_filtered_rad_loci_with_wgs",
+        "cumulative_final_loci",
         "fraction_of_final_loci",
     ]
     pre_min_occupancy_counts = {
         int(key): int(value)
-        for key, value in (locus_occupancy_before_min_sample_coverage_filter or {}).items()
+        for key, value in (rad_locus_occupancy_before_min_sample_coverage_filter or {}).items()
     }
+    post_min_occupancy_counts = {
+        int(key): int(value)
+        for key, value in (rad_locus_occupancy_after_min_sample_coverage_filter or {}).items()
+    }
+    cumulative_final_loci = 0
+    cumulative_final_loci_by_sample_count: dict[int, int] = {}
+    for sample_count in range(len(snames) + 1):
+        cumulative_final_loci += int(samples_per_locus_counts.get(sample_count, 0))
+        cumulative_final_loci_by_sample_count[sample_count] = cumulative_final_loci
     locus_occupancy_data = [
         {
             "samples_with_data": int(sample_count),
-            "loci": int(samples_per_locus_counts.get(sample_count, 0)),
-            "loci_before_min_sample_coverage_filter": (
+            "rad_loci_before_min_sample_coverage": (
                 int(pre_min_occupancy_counts.get(sample_count, 0))
-                if locus_occupancy_before_min_sample_coverage_filter is not None
+                if rad_locus_occupancy_before_min_sample_coverage_filter is not None
                 else None
+            ),
+            "rad_loci_after_min_sample_coverage": (
+                int(post_min_occupancy_counts.get(sample_count, 0))
+                if rad_locus_occupancy_after_min_sample_coverage_filter is not None
+                else None
+            ),
+            "final_filtered_rad_loci_with_wgs": int(
+                samples_per_locus_counts.get(sample_count, 0)
+            ),
+            "cumulative_final_loci": int(
+                cumulative_final_loci_by_sample_count.get(sample_count, 0)
             ),
             "fraction_of_final_loci": _safe_fraction(
                 int(samples_per_locus_counts.get(sample_count, 0)),
@@ -970,8 +995,10 @@ def write_assemble_stats_report(
     occupancy_rows = [
         [
             _format_count(row["samples_with_data"]),
-            _format_count(row["loci"]),
-            _format_optional_count(row["loci_before_min_sample_coverage_filter"]),
+            _format_optional_count(row["rad_loci_before_min_sample_coverage"]),
+            _format_optional_count(row["rad_loci_after_min_sample_coverage"]),
+            _format_count(row["final_filtered_rad_loci_with_wgs"]),
+            _format_count(row["cumulative_final_loci"]),
             _format_fraction(row["fraction_of_final_loci"]),
         ]
         for row in locus_occupancy_data

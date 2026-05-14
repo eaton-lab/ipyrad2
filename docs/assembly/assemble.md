@@ -112,9 +112,11 @@ These settings can strongly affect downstream locus retention. Overly strict val
 
 These settings matter only when loci are being delimited from RAD BAMs:
 
-- `-m, --min-locus-sample-coverage`: minimum number of samples required to retain a locus
+- `-m, --min-locus-sample-coverage`: minimum number of RAD samples required to retain a locus
 - `-z, --min-locus-length`: minimum locus length after delimiting
 - `-g, --min-locus-merge-distance`: merge nearby coverage intervals within this distance
+
+WGS samples do not help a locus pass `-m`. In mixed RAD/WGS runs, RAD BAMs define the loci first, and WGS samples are assembled only inside loci that already passed the RAD-based delimiting step.
 
 If `--loci-bed` is provided, `assemble` ignores these RAD-delimiting controls.
 
