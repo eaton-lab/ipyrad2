@@ -444,6 +444,7 @@ def run_subcommand(args, _exit=True):
             max_locus_hetero_frequency=args.max_locus_hetero_frequency,
             max_locus_variant_frequency=args.max_locus_variant_frequency,
             max_sample_hetero_frequency=args.max_sample_hetero_frequency,
+            min_sample_observed_fraction=args.min_sample_observed_fraction,
             softclip_len_threshold=args.softclip_len_threshold,
             softclip_frac_max=args.softclip_frac_max,
             depth_z_max=args.depth_z_max,

@@ -56,9 +56,9 @@ def get_sample_mask_path(sname: str, tmpdir: Path) -> Path:
     return tmpdir / "beds" / f"{sname}.mask.bed"
 
 
-def get_consensus_hetero_mask_path(sname: str, tmpdir: Path) -> Path:
-    """Return the final-output BED path for consensus heterozygosity masking."""
-    return tmpdir / "beds" / f"{sname}.consensus_hetero.mask.bed"
+def get_consensus_sample_mask_path(sname: str, tmpdir: Path) -> Path:
+    """Return the final-output BED path for sample-row masking in consensus outputs."""
+    return tmpdir / "beds" / f"{sname}.consensus_sample.mask.bed"
 
 
 def get_final_vcf_mask_path(sname: str, tmpdir: Path) -> Path:
@@ -230,7 +230,7 @@ def merge_final_vcf_mask_beds(
     *,
     lowdepth_bed: Path,
     indel_overlap_bed: Path,
-    consensus_hetero_bed: Path,
+    consensus_sample_bed: Path,
     ref_info: Path,
     out_bed: Path,
     sort_tmpdir: Path,
@@ -242,7 +242,7 @@ def merge_final_vcf_mask_beds(
     """
     existing = [
         path
-        for path in (lowdepth_bed, indel_overlap_bed, consensus_hetero_bed)
+        for path in (lowdepth_bed, indel_overlap_bed, consensus_sample_bed)
         if path.exists() and path.stat().st_size
     ]
     if not existing:
@@ -461,6 +461,34 @@ def _mask_high_hetero_samples(
     return masked, masked_samples, sample_props
 
 
+def _mask_low_observed_samples(
+    tnames: list[str],
+    tseqs: np.ndarray,
+    *,
+    min_sample_observed_fraction: float,
+) -> tuple[np.ndarray, list[str], dict[str, float]]:
+    """Mask samples with too little observed sequence across the trimmed locus."""
+    if tseqs.size == 0:
+        return tseqs.copy(), [], {}
+
+    masked = tseqs.copy()
+    masked_samples: list[str] = []
+    sample_props: dict[str, float] = {}
+    locus_length = int(masked.shape[1])
+    for row_idx, sname in enumerate(tnames):
+        if sname == "assembly_reference_sequence":
+            continue
+        row = masked[row_idx]
+        observed = (row != 78) & (row != 45)
+        numer = int(observed.sum())
+        prop = float(numer / locus_length) if locus_length else 0.0
+        sample_props[sname] = prop
+        if prop < min_sample_observed_fraction:
+            masked[row_idx, :] = np.uint8(ord("N"))
+            masked_samples.append(sname)
+    return masked, masked_samples, sample_props
+
+
 def resolve_locus_for_output(
     header: str,
     locus_dict: dict[str, str],
@@ -470,6 +498,7 @@ def resolve_locus_for_output(
     max_locus_hetero_frequency: float,
     max_locus_variant_frequency: float,
     max_sample_hetero_frequency: float = 0.10,
+    min_sample_observed_fraction: float = 0.10,
     *,
     forced_masked_samples: set[str] | None = None,
 ):
@@ -499,6 +528,8 @@ def resolve_locus_for_output(
         "variant_site_frequency_where_sample_cov_greater_than_2": 0,
         "variant_phylo_informative_site_frequency": 0,
         "variant_phylo_informative_site_frequency_where_sample_cov_greater_than_3": 0,
+        "masked_samples_by_min_sample_observed_fraction": tuple(),
+        "masked_sample_count_by_min_sample_observed_fraction": 0,
         "masked_samples_by_max_sample_hetero_frequency": tuple(),
         "masked_sample_count_by_max_sample_hetero_frequency": 0,
     }
@@ -509,32 +540,52 @@ def resolve_locus_for_output(
     )
 
     if forced_masked_samples is None:
-        tseqs, masked_samples, sample_props = _mask_high_hetero_samples(
+        tseqs, masked_low_obs_samples, sample_observed_props = _mask_low_observed_samples(
+            tnames,
+            tseqs,
+            min_sample_observed_fraction=min_sample_observed_fraction,
+        )
+        if masked_low_obs_samples:
+            tseqs, tsite_sample_covs, extra_left, extra_right = _trim_locus_matrix(
+                tseqs,
+                min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
+            )
+            trim_left += extra_left
+            trim_right += extra_right
+
+        tseqs, masked_hetero_samples, sample_hetero_props = _mask_high_hetero_samples(
             tnames,
             tseqs,
             max_sample_hetero_frequency=max_sample_hetero_frequency,
         )
+        if masked_hetero_samples:
+            tseqs, tsite_sample_covs, extra_left, extra_right = _trim_locus_matrix(
+                tseqs,
+                min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
+            )
+            trim_left += extra_left
+            trim_right += extra_right
+        masked_samples = [*masked_low_obs_samples, *masked_hetero_samples]
     else:
         tseqs = tseqs.copy()
+        masked_low_obs_samples = []
+        masked_hetero_samples = []
+        sample_observed_props = {}
+        sample_hetero_props = {}
         masked_samples = []
-        sample_props = {}
         for row_idx, sname in enumerate(tnames):
             if sname in forced_masked_samples:
                 tseqs[row_idx, :] = np.uint8(ord("N"))
                 masked_samples.append(sname)
 
-    if masked_samples:
-        tseqs, tsite_sample_covs, extra_left, extra_right = _trim_locus_matrix(
-            tseqs,
-            min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
-        )
-        trim_left += extra_left
-        trim_right += extra_right
-
-    stats["masked_samples_by_max_sample_hetero_frequency"] = tuple(masked_samples)
-    stats["masked_sample_count_by_max_sample_hetero_frequency"] = len(masked_samples)
-    if sample_props:
-        stats["sample_hetero_frequencies"] = sample_props
+    stats["masked_samples_by_min_sample_observed_fraction"] = tuple(masked_low_obs_samples)
+    stats["masked_sample_count_by_min_sample_observed_fraction"] = len(masked_low_obs_samples)
+    stats["masked_samples_by_max_sample_hetero_frequency"] = tuple(masked_hetero_samples)
+    stats["masked_sample_count_by_max_sample_hetero_frequency"] = len(masked_hetero_samples)
+    if sample_observed_props:
+        stats["sample_observed_fractions"] = sample_observed_props
+    if sample_hetero_props:
+        stats["sample_hetero_frequencies"] = sample_hetero_props
 
     row_has_data = _sample_rows_with_data(tseqs)
     effective_locus_cov = int(row_has_data.sum())
@@ -589,6 +640,7 @@ def filter_trim_locus(
     max_locus_hetero_frequency: float,
     max_locus_variant_frequency: float,
     max_sample_hetero_frequency: float = 1.0,
+    min_sample_observed_fraction: float = 0.10,
 ):
     """Trim one locus, evaluate the final filters, and return summary metrics."""
     return resolve_locus_for_output(
@@ -600,6 +652,7 @@ def filter_trim_locus(
         max_locus_hetero_frequency,
         max_locus_variant_frequency,
         max_sample_hetero_frequency,
+        min_sample_observed_fraction,
     )
 
 
@@ -708,6 +761,8 @@ def _human_stats_label(key: str) -> str:
         "loci_filtered_max_variant_rate": "Loci filtered by maximum variant frequency",
         "loci_filtered_max_shared_heterozygosity": "Loci filtered by maximum shared heterozygosity",
         "loci_filtered_max_depth_outlier": "Loci filtered by maximum depth outlier",
+        "loci_with_samples_masked_by_min_observed_fraction": "Loci with samples masked by minimum observed fraction threshold",
+        "total_masked_sample_occurrences_by_min_observed_fraction": "Sample masks triggered by minimum observed fraction threshold",
         "loci_with_samples_masked_by_max_hetero_frequency": "Loci with samples masked by sample heterozygosity threshold",
         "total_masked_sample_occurrences_by_max_hetero_frequency": "Sample masks triggered by sample heterozygosity threshold",
         "mean_locus_length": "Mean locus length",
@@ -733,6 +788,7 @@ def _human_stats_label(key: str) -> str:
         "median_depth_shared_loci": "Median depth in shared loci",
         "mean_depth_nonzero_shared_loci": "Mean depth in nonzero shared loci",
         "median_depth_nonzero_shared_loci": "Median depth in nonzero shared loci",
+        "masked_by_min_observed_fraction": "Masked by minimum observed fraction threshold",
         "masked_by_max_hetero_frequency": "Masked by sample heterozygosity threshold",
         "samples_with_data": "Samples with data",
         "loci": "Loci",
@@ -843,6 +899,12 @@ def write_assemble_stats_report(
         "loci_filtered_max_depth_outlier": int(filter_counts["max_depth_outlier"]),
     }
     sample_masking_data = {
+        "loci_with_samples_masked_by_min_observed_fraction": int(
+            loci_summary.get("loci_with_samples_masked_by_min_observed_fraction", 0)
+        ),
+        "total_masked_sample_occurrences_by_min_observed_fraction": int(
+            loci_summary.get("total_masked_sample_occurrences_by_min_observed_fraction", 0)
+        ),
         "loci_with_samples_masked_by_max_hetero_frequency": int(
             loci_summary.get("loci_with_samples_masked_by_max_hetero_frequency", 0)
         ),
@@ -887,6 +949,7 @@ def write_assemble_stats_report(
         "median_depth_shared_loci",
         "mean_depth_nonzero_shared_loci",
         "median_depth_nonzero_shared_loci",
+        "masked_by_min_observed_fraction",
         "masked_by_max_hetero_frequency",
     ]
     sample_summary_data: list[dict[str, object]] = []
@@ -921,6 +984,11 @@ def write_assemble_stats_report(
             "median_depth_nonzero_shared_loci": float(
                 depth_stats["median_depth_nonzero_shared_loci"]
             ),
+            "masked_by_min_observed_fraction": int(
+                loci_summary.get("masked_by_min_observed_fraction_counts", {}).get(
+                    sname, 0
+                )
+            ),
             "masked_by_max_hetero_frequency": int(
                 loci_summary.get("masked_by_max_hetero_frequency_counts", {}).get(
                     sname, 0
@@ -942,6 +1010,7 @@ def write_assemble_stats_report(
             _format_float(sample_record["median_depth_shared_loci"]),
             _format_float(sample_record["mean_depth_nonzero_shared_loci"]),
             _format_float(sample_record["median_depth_nonzero_shared_loci"]),
+            _format_count(sample_record["masked_by_min_observed_fraction"]),
             _format_count(sample_record["masked_by_max_hetero_frequency"]),
         ])
 
@@ -1184,7 +1253,13 @@ def _build_retained_locus_outputs(
     """Build all retained-locus outputs needed by the ordered final writer."""
     scaff, pos = header.split(":")
     pos0, pos1 = (int(i) for i in pos.split("-"))
-    masked_samples = set(stats.get("masked_samples_by_max_sample_hetero_frequency", ()))
+    masked_low_observed_samples = set(
+        stats.get("masked_samples_by_min_sample_observed_fraction", ())
+    )
+    masked_hetero_samples = set(
+        stats.get("masked_samples_by_max_sample_hetero_frequency", ())
+    )
+    masked_samples = masked_low_observed_samples | masked_hetero_samples
 
     sample_mask = np.array([sname != refname for sname in tnames], dtype=bool)
     sample_rows = sample_mask & _sample_rows_with_data(tseqs)
@@ -1199,7 +1274,7 @@ def _build_retained_locus_outputs(
         sample_seqs = tseqs[sample_rows]
         nonmissing_sample_bases = int(np.sum((sample_seqs != 78) & (sample_seqs != 45)))
 
-    # `.loci.gz` should omit samples masked by the max-sample-heterozygosity rule,
+    # `.loci.gz` should omit samples masked by any final sample-row filter,
     # while fixed-axis outputs keep them as missing data for that locus.
     visible_rows = [
         (sname, seq)
@@ -1220,6 +1295,8 @@ def _build_retained_locus_outputs(
         "locus_length": int(tseqs.shape[1]),
         "bed_row": f"{scaff}\t{pos0 - 1}\t{pos1}\t{len(visible_rows)}\n",
         "manifest_row": (raw_header, header, ",".join(sorted(masked_samples))),
+        "masked_low_observed_samples": sorted(masked_low_observed_samples),
+        "masked_hetero_samples": sorted(masked_hetero_samples),
         "masked_samples": sorted(masked_samples),
         "mask_bed_row": f"{scaff}\t{pos0 - 1}\t{pos1}\n",
         "sample_names_with_data": sample_names_with_data,
@@ -1244,6 +1321,7 @@ def _resolve_output_batch(
     max_locus_hetero_frequency: float,
     max_locus_variant_frequency: float,
     max_sample_hetero_frequency: float,
+    min_sample_observed_fraction: float,
     padded: dict[str, str],
     refname: str,
     output_snames: list[str],
@@ -1276,6 +1354,7 @@ def _resolve_output_batch(
             max_locus_hetero_frequency,
             max_locus_variant_frequency,
             max_sample_hetero_frequency,
+            min_sample_observed_fraction,
         )
         for key in total_filters:
             total_filters[key] += int(filters[key])
@@ -1334,13 +1413,14 @@ def write_final_outputs(
     reference: Path,
     database_fasta: Path,
     retained_loci_manifest: Path,
-    consensus_hetero_mask_beds: dict[str, Path],
+    consensus_sample_mask_beds: dict[str, Path],
     min_locus_sample_coverage: int,
     min_locus_trim_sample_coverage: int,
     min_locus_length: int,
     max_locus_hetero_frequency: float,
     max_locus_variant_frequency: float,
     max_sample_hetero_frequency: float = 0.10,
+    min_sample_observed_fraction: float = 0.10,
     cores: int = 1,
     log_level: str = "INFO",
     batch_size: int = 128,
@@ -1355,7 +1435,7 @@ def write_final_outputs(
 
     loci_file = outdir / f"{name}.loci.gz"
     final_loci_bed = outdir / f"{name}.bed"
-    for path in consensus_hetero_mask_beds.values():
+    for path in consensus_sample_mask_beds.values():
         path.parent.mkdir(parents=True, exist_ok=True)
 
     real_snames = list(snames)
@@ -1385,8 +1465,11 @@ def write_final_outputs(
         "max_shared_hetero_frequency": 0,
         "max_depth_outlier": 0,
     }
+    masked_by_min_observed_fraction_counts = {i: 0 for i in real_snames}
     masked_by_max_hetero_frequency_counts = {i: 0 for i in real_snames}
+    loci_with_samples_masked_by_min_observed_fraction = 0
     loci_with_samples_masked_by_max_hetero_frequency = 0
+    total_masked_sample_occurrences_by_min_observed_fraction = 0
     total_masked_sample_occurrences_by_max_hetero_frequency = 0
     total_stats = {
         "variant_sites": 0,
@@ -1418,6 +1501,7 @@ def write_final_outputs(
                     max_locus_hetero_frequency=max_locus_hetero_frequency,
                     max_locus_variant_frequency=max_locus_variant_frequency,
                     max_sample_hetero_frequency=max_sample_hetero_frequency,
+                    min_sample_observed_fraction=min_sample_observed_fraction,
                     padded=padded,
                     refname=refname,
                     output_snames=output_snames,
@@ -1435,13 +1519,15 @@ def write_final_outputs(
         manifest_writer = csv.writer(manifest_handle, delimiter="\t")
         manifest_writer.writerow(["raw_header", "final_header", "masked_samples"])
         mask_handles = {
-            sname: consensus_hetero_mask_beds[sname].open("w", encoding="utf-8")
+            sname: consensus_sample_mask_beds[sname].open("w", encoding="utf-8")
             for sname in real_snames
         }
 
         def _flush_pending() -> None:
             nonlocal next_batch_idx, nloci_before_filtering, flidx
+            nonlocal loci_with_samples_masked_by_min_observed_fraction
             nonlocal loci_with_samples_masked_by_max_hetero_frequency
+            nonlocal total_masked_sample_occurrences_by_min_observed_fraction
             nonlocal total_masked_sample_occurrences_by_max_hetero_frequency
             nonlocal alignment_nonmissing_sample_bases
             while next_batch_idx in pending_results:
@@ -1455,12 +1541,25 @@ def write_final_outputs(
                     out_bed.write(str(locus_output["bed_row"]))
                     retained_scaffold_names_seen.add(str(locus_output["scaff"]))
                     manifest_writer.writerow(list(locus_output["manifest_row"]))
+                    masked_low_obs_samples = list(locus_output["masked_low_observed_samples"])
+                    if masked_low_obs_samples:
+                        loci_with_samples_masked_by_min_observed_fraction += 1
+                        total_masked_sample_occurrences_by_min_observed_fraction += len(
+                            masked_low_obs_samples
+                        )
+                        for sname in masked_low_obs_samples:
+                            masked_by_min_observed_fraction_counts[sname] += 1
+                    masked_hetero_samples = list(locus_output["masked_hetero_samples"])
                     masked_samples = list(locus_output["masked_samples"])
-                    if masked_samples:
+                    if masked_hetero_samples:
                         loci_with_samples_masked_by_max_hetero_frequency += 1
-                        total_masked_sample_occurrences_by_max_hetero_frequency += len(masked_samples)
-                        for sname in masked_samples:
+                        total_masked_sample_occurrences_by_max_hetero_frequency += len(
+                            masked_hetero_samples
+                        )
+                        for sname in masked_hetero_samples:
                             masked_by_max_hetero_frequency_counts[sname] += 1
+                    if masked_samples:
+                        for sname in masked_samples:
                             mask_handles[sname].write(str(locus_output["mask_bed_row"]))
 
                     for sname in locus_output["sample_names_with_data"]:
@@ -1499,6 +1598,7 @@ def write_final_outputs(
                         max_locus_hetero_frequency=max_locus_hetero_frequency,
                         max_locus_variant_frequency=max_locus_variant_frequency,
                         max_sample_hetero_frequency=max_sample_hetero_frequency,
+                        min_sample_observed_fraction=min_sample_observed_fraction,
                         padded=padded,
                         refname=refname,
                         output_snames=output_snames,
@@ -1554,6 +1654,9 @@ def write_final_outputs(
         "filter_counts": dict(total_filters),
         "site_totals": dict(total_stats),
         "sample_locus_counts": dict(per_sample_locus_counts),
+        "masked_by_min_observed_fraction_counts": dict(masked_by_min_observed_fraction_counts),
+        "loci_with_samples_masked_by_min_observed_fraction": loci_with_samples_masked_by_min_observed_fraction,
+        "total_masked_sample_occurrences_by_min_observed_fraction": total_masked_sample_occurrences_by_min_observed_fraction,
         "masked_by_max_hetero_frequency_counts": dict(masked_by_max_hetero_frequency_counts),
         "loci_with_samples_masked_by_max_hetero_frequency": loci_with_samples_masked_by_max_hetero_frequency,
         "total_masked_sample_occurrences_by_max_hetero_frequency": total_masked_sample_occurrences_by_max_hetero_frequency,
@@ -1574,6 +1677,7 @@ def write_loci_and_stats_files(
     max_locus_hetero_frequency: float,
     max_locus_variant_frequency: float,
     max_sample_hetero_frequency: float = 0.10,
+    min_sample_observed_fraction: float = 0.10,
 )-> dict[str, object]:
     """Write the final `.loci.gz` and `.bed` outputs and collect report counters."""
     # database file is in the tmpdir inside outdir
@@ -1604,8 +1708,11 @@ def write_loci_and_stats_files(
         "max_shared_hetero_frequency": 0,
         "max_depth_outlier": 0,
     }
+    masked_by_min_observed_fraction_counts = {i: 0 for i in real_snames}
     masked_by_max_hetero_frequency_counts = {i: 0 for i in real_snames}
+    loci_with_samples_masked_by_min_observed_fraction = 0
     loci_with_samples_masked_by_max_hetero_frequency = 0
+    total_masked_sample_occurrences_by_min_observed_fraction = 0
     total_masked_sample_occurrences_by_max_hetero_frequency = 0
     total_stats = {
         "variant_sites": 0,
@@ -1634,7 +1741,7 @@ def write_loci_and_stats_files(
         manifest_writer = csv.writer(manifest_handle, delimiter="\t")
         manifest_writer.writerow(["raw_header", "final_header", "masked_samples"])
         mask_handles = {
-            sname: get_consensus_hetero_mask_path(sname, tmpdir).open("w", encoding="utf-8")
+            sname: get_consensus_sample_mask_path(sname, tmpdir).open("w", encoding="utf-8")
             for sname in real_snames
         }
         for oheader, ldict in iter_parse_loci(database):
@@ -1649,6 +1756,7 @@ def write_loci_and_stats_files(
                 max_locus_hetero_frequency,
                 max_locus_variant_frequency,
                 max_sample_hetero_frequency,
+                min_sample_observed_fraction,
             )
             result = filter_trim_locus(*args)
             header, tnames, tseqs, snpsarr, filters, stats = result
@@ -1663,7 +1771,16 @@ def write_loci_and_stats_files(
                 # stays synchronized with the filtered loci text output.
                 scaff, pos = header.split(":")
                 pos0, pos1 = (int(i) for i in pos.split("-"))
-                masked_samples = list(stats.get("masked_samples_by_max_sample_hetero_frequency", ()))
+                masked_low_obs_samples = list(
+                    stats.get("masked_samples_by_min_sample_observed_fraction", ())
+                )
+                masked_hetero_samples = list(
+                    stats.get("masked_samples_by_max_sample_hetero_frequency", ())
+                )
+                masked_samples = [
+                    *masked_low_obs_samples,
+                    *masked_hetero_samples,
+                ]
                 visible_sample_rows = [
                     (sname, seq)
                     for sname, seq in zip(tnames, tseqs, strict=True)
@@ -1671,11 +1788,20 @@ def write_loci_and_stats_files(
                 ]
                 out_bed.write(f"{scaff}\t{pos0 - 1}\t{pos1}\t{len(visible_sample_rows)}\n")
                 manifest_writer.writerow([oheader, header, ",".join(masked_samples)])
-                if masked_samples:
+                if masked_low_obs_samples:
+                    loci_with_samples_masked_by_min_observed_fraction += 1
+                    total_masked_sample_occurrences_by_min_observed_fraction += len(
+                        masked_low_obs_samples
+                    )
+                    for sname in masked_low_obs_samples:
+                        masked_by_min_observed_fraction_counts[sname] += 1
+                if masked_hetero_samples:
                     loci_with_samples_masked_by_max_hetero_frequency += 1
-                    total_masked_sample_occurrences_by_max_hetero_frequency += len(masked_samples)
-                    for sname in masked_samples:
+                    total_masked_sample_occurrences_by_max_hetero_frequency += len(masked_hetero_samples)
+                    for sname in masked_hetero_samples:
                         masked_by_max_hetero_frequency_counts[sname] += 1
+                if masked_samples:
+                    for sname in masked_samples:
                         mask_handles[sname].write(f"{scaff}\t{pos0 - 1}\t{pos1}\n")
 
                 # Count only empirical samples in the report summaries so the
@@ -1733,6 +1859,9 @@ def write_loci_and_stats_files(
         "filter_counts": dict(total_filters),
         "site_totals": dict(total_stats),
         "sample_locus_counts": dict(per_sample_locus_counts),
+        "masked_by_min_observed_fraction_counts": dict(masked_by_min_observed_fraction_counts),
+        "loci_with_samples_masked_by_min_observed_fraction": loci_with_samples_masked_by_min_observed_fraction,
+        "total_masked_sample_occurrences_by_min_observed_fraction": total_masked_sample_occurrences_by_min_observed_fraction,
         "masked_by_max_hetero_frequency_counts": dict(masked_by_max_hetero_frequency_counts),
         "loci_with_samples_masked_by_max_hetero_frequency": loci_with_samples_masked_by_max_hetero_frequency,
         "total_masked_sample_occurrences_by_max_hetero_frequency": total_masked_sample_occurrences_by_max_hetero_frequency,

@@ -63,6 +63,7 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
         "-u, --max-locus-hetero-frequency",
         "-y, --max-locus-variant-frequency",
         "-a, --min-locus-trim-sample-coverage",
+        "--min-sample-observed-fraction",
         "--depth-z-max",
         "--softclip-len-threshold",
         "--softclip-frac-max",
@@ -99,6 +100,7 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
     assert "RAD BAM inputs that delimit loci unless --loci-bed is provided" in help_text
     assert "Discard mapped reads with MAPQ below this threshold." in help_text
     assert "Min RAD samples with data required to retain a locus." in help_text
+    assert "Min frac. observed non-N, non-gap bases required to keep a sample in a locus." in help_text
     assert "Locus BED delimiting:" in help_text
     assert "Min third-allele fraction at a SNP site" in help_text
     assert "BED of loci to assemble instead of delimiting shared loci from RAD samples." in help_text
@@ -134,6 +136,7 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
         "-u, --max-locus-hetero-frequency",
         "-y, --max-locus-variant-frequency",
         "-a, --min-locus-trim-sample-coverage",
+        "--min-sample-observed-fraction",
         "--depth-z-max",
         "--softclip-len-threshold",
         "--softclip-frac-max",
@@ -178,8 +181,9 @@ def test_assemble_parser_defaults_match_current_cli() -> None:
     assert args.max_locus_hetero_frequency == 0.3
     assert args.max_locus_variant_frequency == 1.0
     assert args.min_locus_trim_sample_coverage == 4
+    assert args.min_sample_observed_fraction == 0.10
     assert args.depth_z_max == 7.0
-    assert args.softclip_len_threshold == 20
+    assert args.softclip_len_threshold == 100
     assert args.softclip_frac_max == 0.5
     assert args.third_frac_cut == 0.10
     assert args.min_3allele_sites == 2

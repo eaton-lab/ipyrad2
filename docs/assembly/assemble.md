@@ -126,11 +126,12 @@ If `--loci-bed` is provided, `assemble` ignores these RAD-delimiting controls.
 - `-qs, --min-site-q`: minimum site QUAL for retained variant sites
 - `-qg, --min-geno-q`: minimum per-sample genotype quality
 - `-s, --min-sample-depth`: minimum within-sample depth to keep a genotype instead of masking it
+- `--min-sample-observed-fraction`: minimum fraction of non-`N`, non-gap bases required to keep one sample in one final locus
 - `-u, --max-locus-hetero-frequency`: maximum fraction of samples heterozygous at one site before the locus is considered paralog-like
 - `-y, --max-locus-variant-frequency`: maximum fraction of sites in a locus that can be variant before filtering
 - `-a, --min-locus-trim-sample-coverage`: minimum number of samples with non-`N` calls required to keep positions at locus edges
 
-These settings control what survives into the final `.loci`, `.vcf.gz`, and `.hdf5` outputs.
+These settings control what survives into the final `.loci`, `.vcf.gz`, and `.hdf5` outputs. In particular, `--min-sample-observed-fraction` removes sample rows that are mostly missing after trimming and depth/genotype masking, while `--max-sample-hetero-frequency` separately targets rows with too many heterozygous observed bases.
 
 ### Paralog Filters
 
@@ -144,6 +145,7 @@ These settings control what survives into the final `.loci`, `.vcf.gz`, and `.hd
 - `--maf-threshold`
 - `--max-sites-above-maf`
 - `--paralog-fail-frac-max`
+- `--max-sample-hetero-frequency`
 
 The user-facing idea is simple: loci can be flagged as paralog-like by unusually deep coverage, unusually clipped reads, strong third-allele evidence, or excess allelic variation. Those signals are evaluated within samples and then reduced across samples before the final shared BED is accepted.
 

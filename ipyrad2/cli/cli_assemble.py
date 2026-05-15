@@ -136,7 +136,7 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="Max per-sample read-depth z-score to tag a locus as a high-depth outlier. [default=%(default)s]",
     )
     paralogs.add_argument(
-        "--softclip-len-threshold", metavar="int", type=int, default=20,
+        "--softclip-len-threshold", metavar="int", type=int, default=100,
         help="Max soft-clipped bases to label as read as 'highly clipped'. [default=%(default)s]",
     )
     paralogs.add_argument(
@@ -163,9 +163,13 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         "--paralog-fail-frac-max", metavar="float", type=float, default=0.10,
         help="Max frac. samples with data allowed to fail before a locus is dropped globally. [default=%(default)s]",
     )
+    locus.add_argument(
+        "--min-sample-observed-fraction", metavar="float", type=float, default=0.10,
+        help="Min frac. observed non-N, non-gap bases required to keep a sample in a locus. [default=%(default)s]",
+    )
     paralogs.add_argument(
         "--max-sample-hetero-frequency", metavar="float", type=float, default=0.10,
-        help="Max frac. of heterozygous or QUAL-masked SNP sites in a sample at a locus. [default=%(default)s]",
+        help="Max frac. observed bases that can be heterozygous in one sample at a locus. [default=%(default)s]",
     )
 
     naming.add_argument(
