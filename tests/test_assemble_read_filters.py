@@ -45,7 +45,7 @@ from ipyrad2.assembler.read_filters import prepare_paralog_bam
 from ipyrad2.assembler.loci import filter_trim_locus
 from ipyrad2.assembler.loci import build_locus_fasta_database
 from ipyrad2.assembler.loci import get_consensus
-from ipyrad2.assembler.loci import get_consensus_hetero_mask_path
+from ipyrad2.assembler.loci import get_consensus_sample_mask_path
 from ipyrad2.assembler.loci import get_final_good_bed_path
 from ipyrad2.assembler.loci import get_final_vcf_mask_path
 from ipyrad2.assembler.loci import get_goodcov_bed_path
@@ -1593,13 +1593,13 @@ def test_merge_final_vcf_mask_beds_excludes_paralog_only_intervals(tmp_path: Pat
     get_paralog_mask_path("s1", tmpdir).write_text("chr1\t20\t25\n", encoding="utf-8")
     indel_overlap_bed = get_indel_overlap_mask_path("s1", tmpdir)
     indel_overlap_bed.write_text("chr1\t4\t10\n", encoding="utf-8")
-    consensus_hetero_bed = get_consensus_hetero_mask_path("s1", tmpdir)
-    consensus_hetero_bed.write_text("chr1\t30\t35\n", encoding="utf-8")
+    consensus_sample_bed = get_consensus_sample_mask_path("s1", tmpdir)
+    consensus_sample_bed.write_text("chr1\t30\t35\n", encoding="utf-8")
 
     out_bed = merge_final_vcf_mask_beds(
         lowdepth_bed=lowdepth_bed,
         indel_overlap_bed=indel_overlap_bed,
-        consensus_hetero_bed=consensus_hetero_bed,
+        consensus_sample_bed=consensus_sample_bed,
         ref_info=ref_info,
         out_bed=get_final_vcf_mask_path("s1", tmpdir),
         sort_tmpdir=tmpdir,
@@ -2867,13 +2867,14 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
         reference,
         database_fasta,
         retained_loci_manifest,
-        consensus_hetero_mask_beds,
+        consensus_sample_mask_beds,
         min_locus_sample_coverage,
         min_locus_trim_sample_coverage,
         min_locus_length,
         max_locus_hetero_frequency,
         max_locus_variant_frequency,
         max_sample_hetero_frequency,
+        min_sample_observed_fraction,
         cores,
         log_level,
     ):
@@ -2884,17 +2885,18 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
         del max_locus_hetero_frequency
         del max_locus_variant_frequency
         del max_sample_hetero_frequency
+        del min_sample_observed_fraction
         del cores
         del log_level
         del database_fasta
         del retained_loci_manifest
-        del consensus_hetero_mask_beds
+        del consensus_sample_mask_beds
         (outdir / f"{name}.bed").write_text("chr1\t0\t10\t1\n", encoding="utf-8")
         with gzip.open(outdir / f"{name}.loci.gz", "wt", encoding="utf-8") as out:
             out.write("// test\n")
         (outdir / f"{name}.hdf5").write_text("", encoding="utf-8")
-        (outdir / "assembly_tmpdir" / "beds" / "rad.consensus_hetero.mask.bed").write_text("", encoding="utf-8")
-        (outdir / "assembly_tmpdir" / "beds" / "wgs.consensus_hetero.mask.bed").write_text("", encoding="utf-8")
+        (outdir / "assembly_tmpdir" / "beds" / "rad.consensus_sample.mask.bed").write_text("", encoding="utf-8")
+        (outdir / "assembly_tmpdir" / "beds" / "wgs.consensus_sample.mask.bed").write_text("", encoding="utf-8")
         summary = {
             "nloci_before_filtering": 1,
             "nloci_after_filtering": 1,
@@ -2916,6 +2918,9 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
                 "nsites_sample_cov_greater_than_or_equal_to_min_locus_trim_sample_coverage": 4,
             },
             "sample_locus_counts": {"rad": 1, "wgs": 1},
+            "masked_by_min_observed_fraction_counts": {"rad": 0, "wgs": 0},
+            "loci_with_samples_masked_by_min_observed_fraction": 0,
+            "total_masked_sample_occurrences_by_min_observed_fraction": 0,
             "masked_by_max_hetero_frequency_counts": {"rad": 0, "wgs": 0},
             "loci_with_samples_masked_by_max_hetero_frequency": 0,
             "total_masked_sample_occurrences_by_max_hetero_frequency": 0,
@@ -3144,8 +3149,8 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
     assert final_vcf_mask_jobs["wgs"][1]["lowdepth_bed"].name == "wgs.lowdepth.mask.bed"
     assert final_vcf_mask_jobs["rad"][1]["indel_overlap_bed"].name == "rad.indel_overlap.mask.bed"
     assert final_vcf_mask_jobs["wgs"][1]["indel_overlap_bed"].name == "wgs.indel_overlap.mask.bed"
-    assert final_vcf_mask_jobs["rad"][1]["consensus_hetero_bed"].name == "rad.consensus_hetero.mask.bed"
-    assert final_vcf_mask_jobs["wgs"][1]["consensus_hetero_bed"].name == "wgs.consensus_hetero.mask.bed"
+    assert final_vcf_mask_jobs["rad"][1]["consensus_sample_bed"].name == "rad.consensus_sample.mask.bed"
+    assert final_vcf_mask_jobs["wgs"][1]["consensus_sample_bed"].name == "wgs.consensus_sample.mask.bed"
     assert final_vcf_mask_jobs["rad"][1]["out_bed"].name == "rad.final.vcf.mask.bed"
     assert final_vcf_mask_jobs["wgs"][1]["out_bed"].name == "wgs.final.vcf.mask.bed"
     final_depth_bedgraph_jobs = pool_calls[11][1]
@@ -4804,6 +4809,8 @@ def test_write_loci_and_stats_files_masks_samples_above_max_sample_hetero_freque
 
     assert summary["nloci_after_filtering"] == 1
     assert summary["sample_locus_counts"] == {"s1": 0, "s2": 1, "s3": 1}
+    assert summary["masked_by_min_observed_fraction_counts"] == {"s1": 0, "s2": 0, "s3": 0}
+    assert summary["loci_with_samples_masked_by_min_observed_fraction"] == 0
     assert summary["masked_by_max_hetero_frequency_counts"] == {"s1": 1, "s2": 0, "s3": 0}
     assert summary["loci_with_samples_masked_by_max_hetero_frequency"] == 1
     assert summary["total_masked_sample_occurrences_by_max_hetero_frequency"] == 1
@@ -4812,9 +4819,64 @@ def test_write_loci_and_stats_files_masks_samples_above_max_sample_hetero_freque
     assert loci_lines[2].startswith("s3")
     assert loci_lines[3].startswith("//")
     assert (tmp_path / "assembly.bed").read_text(encoding="utf-8") == "chr1\t0\t4\t3\n"
-    assert (tmp_path / "beds" / "s1.consensus_hetero.mask.bed").read_text(encoding="utf-8") == "chr1\t0\t4\n"
+    assert (tmp_path / "beds" / "s1.consensus_sample.mask.bed").read_text(encoding="utf-8") == "chr1\t0\t4\n"
     manifest = (tmp_path / "assembly.retained_loci.tsv").read_text(encoding="utf-8")
     assert "chr1:1-4\tchr1:1-4\ts1" in manifest
+
+
+def test_filter_trim_locus_masks_samples_below_min_sample_observed_fraction() -> None:
+    header = "chr1:1-10"
+    locus_dict = {
+        "assembly_reference_sequence": "AAAAAAAAAA",
+        "s1": "ANNNNNNNNN",
+        "s2": "AAAAAAAAAA",
+        "s3": "AAAAAAAAAA",
+    }
+
+    _header, _names, tseqs, _snps, filters, stats = filter_trim_locus(
+        header,
+        locus_dict,
+        min_locus_sample_coverage=1,
+        min_locus_trim_sample_coverage=1,
+        min_locus_length=1,
+        max_locus_hetero_frequency=1.0,
+        max_locus_variant_frequency=1.0,
+        max_sample_hetero_frequency=1.0,
+        min_sample_observed_fraction=0.20,
+    )
+
+    assert not any(filters.values())
+    assert stats["masked_samples_by_min_sample_observed_fraction"] == ("s1",)
+    assert stats["masked_samples_by_max_sample_hetero_frequency"] == ()
+    assert stats["sample_observed_fractions"]["s1"] == pytest.approx(0.1)
+    assert bytes(tseqs[1]).decode() == "NNNNNNNNNN"
+
+
+def test_filter_trim_locus_keeps_samples_at_min_sample_observed_fraction_threshold() -> None:
+    header = "chr1:1-10"
+    locus_dict = {
+        "assembly_reference_sequence": "AAAAAAAAAA",
+        "s1": "ANNNNNNNNA",
+        "s2": "AAAAAAAAAA",
+        "s3": "AAAAAAAAAA",
+    }
+
+    _header, _names, tseqs, _snps, filters, stats = filter_trim_locus(
+        header,
+        locus_dict,
+        min_locus_sample_coverage=1,
+        min_locus_trim_sample_coverage=1,
+        min_locus_length=1,
+        max_locus_hetero_frequency=1.0,
+        max_locus_variant_frequency=1.0,
+        max_sample_hetero_frequency=1.0,
+        min_sample_observed_fraction=0.20,
+    )
+
+    assert not any(filters.values())
+    assert stats["masked_samples_by_min_sample_observed_fraction"] == ()
+    assert stats["sample_observed_fractions"]["s1"] == pytest.approx(0.2)
+    assert bytes(tseqs[1]).decode() == "ANNNNNNNNA"
 
 
 def test_filter_trim_locus_ignores_missing_bases_for_sample_hetero_filter() -> None:
@@ -4998,6 +5060,9 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
                 "nsites_sample_cov_greater_than_or_equal_to_min_locus_trim_sample_coverage": 18,
             },
             "sample_locus_counts": {"s1": 5, "s2": 4},
+            "masked_by_min_observed_fraction_counts": {"s1": 1, "s2": 0},
+            "loci_with_samples_masked_by_min_observed_fraction": 1,
+            "total_masked_sample_occurrences_by_min_observed_fraction": 1,
             "masked_by_max_hetero_frequency_counts": {"s1": 2, "s2": 0},
             "loci_with_samples_masked_by_max_hetero_frequency": 2,
             "total_masked_sample_occurrences_by_max_hetero_frequency": 2,
@@ -5052,6 +5117,9 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
     assert "Read layout" in report
     assert "Reads before filtering" in report
     assert "Reads after filtering" in report
+    assert "Masked by minimum observed fraction threshold" in report
+    assert "Loci with samples masked by minimum observed fraction threshold" in report
+    assert "Sample masks triggered by minimum observed fraction threshold" in report
     assert "Masked by sample heterozygosity threshold" in report
     assert "Loci with samples masked by sample heterozygosity threshold" in report
     assert "Sample masks triggered by sample heterozygosity threshold" in report
@@ -5086,12 +5154,14 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
     assert report_json["locus_occupancy"][1]["fraction_of_final_loci"] == pytest.approx(0.5)
     assert report_json["locus_occupancy"][2]["fraction_of_final_loci"] == pytest.approx(0.5)
     assert report_json["command"] == "ipyrad2 assemble -d a.bam -r ref.fa -o OUT"
+    assert report_json["sample_masking"]["loci_with_samples_masked_by_min_observed_fraction"] == 1
     assert report_json["sample_masking"]["loci_with_samples_masked_by_max_hetero_frequency"] == 2
     assert report_json["sample_summary"][0]["sample"] == "s1"
     assert report_json["sample_summary"][0]["sample_type"] == "RAD"
     assert report_json["sample_summary"][0]["read_layout"] == "PE"
     assert report_json["sample_summary"][0]["reads_before_filtering"] == 20
     assert report_json["sample_summary"][0]["reads_after_filtering"] == 12
+    assert report_json["sample_summary"][0]["masked_by_min_observed_fraction"] == 1
     assert report_json["sample_summary"][0]["masked_by_max_hetero_frequency"] == 2
     assert "mixed_rad_wgs_diagnostics" not in report_json
 
@@ -5132,6 +5202,12 @@ def test_write_assemble_stats_report_includes_mixed_run_summary(tmp_path: Path) 
                 "nsites_sample_cov_greater_than_or_equal_to_min_locus_trim_sample_coverage": 18,
             },
             "sample_locus_counts": {"rad": 5, "wgs": 4},
+            "masked_by_min_observed_fraction_counts": {"rad": 0, "wgs": 0},
+            "loci_with_samples_masked_by_min_observed_fraction": 0,
+            "total_masked_sample_occurrences_by_min_observed_fraction": 0,
+            "masked_by_max_hetero_frequency_counts": {"rad": 0, "wgs": 0},
+            "loci_with_samples_masked_by_max_hetero_frequency": 0,
+            "total_masked_sample_occurrences_by_max_hetero_frequency": 0,
             "samples_per_locus_counts": {1: 3, 2: 3},
             "locus_length_counts": {4: 2, 5: 4},
             "alignment_nonmissing_sample_bases": 36,
@@ -5584,9 +5660,9 @@ def test_write_final_outputs_finalizes_hdf5_after_bed_is_complete(tmp_path: Path
         reference=reference,
         database_fasta=database,
         retained_loci_manifest=tmpdir / "assembly.retained_loci.tsv",
-        consensus_hetero_mask_beds={
-            "s1": get_consensus_hetero_mask_path("s1", tmpdir),
-            "s2": get_consensus_hetero_mask_path("s2", tmpdir),
+        consensus_sample_mask_beds={
+            "s1": get_consensus_sample_mask_path("s1", tmpdir),
+            "s2": get_consensus_sample_mask_path("s2", tmpdir),
         },
         min_locus_sample_coverage=1,
         min_locus_trim_sample_coverage=1,

@@ -25,7 +25,7 @@ from .beds import (
 )
 from .loci import (
     write_sam_faidx,
-    get_consensus_hetero_mask_path,
+    get_consensus_sample_mask_path,
     get_final_vcf_mask_path,
     get_reference_in_loci_beds,
     get_goodcov_bed_path,
@@ -97,7 +97,7 @@ class SampleArtifacts:
     indel_overlap_mask_bed: Path
     sample_mask_bed: Path
     consensus_fasta: Path
-    consensus_hetero_mask_bed: Path
+    consensus_sample_mask_bed: Path
     final_vcf_mask_bed: Path
     retained_depth_bedgraph: Path
 
@@ -152,7 +152,7 @@ def _build_sample_artifacts(
             indel_overlap_mask_bed=get_indel_overlap_mask_path(sname, tmpdir),
             sample_mask_bed=get_sample_mask_path(sname, tmpdir),
             consensus_fasta=tmpdir / "consensus_seqs" / f"{sname}.consensus.fa",
-            consensus_hetero_mask_bed=get_consensus_hetero_mask_path(sname, tmpdir),
+            consensus_sample_mask_bed=get_consensus_sample_mask_path(sname, tmpdir),
             final_vcf_mask_bed=get_final_vcf_mask_path(sname, tmpdir),
             retained_depth_bedgraph=get_retained_depth_bedgraph_path(sname, tmpdir),
         )
@@ -1515,6 +1515,7 @@ def _write_consensus_and_outputs(
     sample_type_labels: dict[str, str] | None = None,
     sample_layout_labels: dict[str, str] | None = None,
     sample_filter_stats: dict[str, dict[str, int]] | None = None,
+    min_sample_observed_fraction: float = 0.10,
 ) -> None:
     """Write consensus sequences, final locus outputs, and the SNP database."""
     output_artifacts = _build_consensus_output_artifacts(name, tmpdir)
@@ -1574,8 +1575,8 @@ def _write_consensus_and_outputs(
         reference=reference,
         database_fasta=output_artifacts.database_fasta,
         retained_loci_manifest=output_artifacts.retained_loci_manifest,
-        consensus_hetero_mask_beds={
-            sname: sample_artifacts[sname].consensus_hetero_mask_bed for sname in snames
+        consensus_sample_mask_beds={
+            sname: sample_artifacts[sname].consensus_sample_mask_bed for sname in snames
         },
         min_locus_sample_coverage=min_locus_sample_coverage,
         min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
@@ -1583,6 +1584,7 @@ def _write_consensus_and_outputs(
         max_locus_hetero_frequency=max_locus_hetero_frequency,
         max_locus_variant_frequency=max_locus_variant_frequency,
         max_sample_hetero_frequency=max_sample_hetero_frequency,
+        min_sample_observed_fraction=min_sample_observed_fraction,
         cores=max(1, int(cores or workers)),
         log_level=log_level,
     )
@@ -1611,7 +1613,7 @@ def _write_consensus_and_outputs(
                     dict(
                         lowdepth_bed=artifacts.lowdepth_mask_bed,
                         indel_overlap_bed=artifacts.indel_overlap_mask_bed,
-                        consensus_hetero_bed=artifacts.consensus_hetero_mask_bed,
+                        consensus_sample_bed=artifacts.consensus_sample_mask_bed,
                         ref_info=tmpdir / "REF_info.txt",
                         out_bed=artifacts.final_vcf_mask_bed,
                         sort_tmpdir=tmpdir,
@@ -1791,6 +1793,7 @@ def run_assembler(
     subsample: Path | None = None,
     logged_command: str | None = None,
     keep_tmpdir: bool = False,
+    min_sample_observed_fraction: float = 0.10,
 ):
     # Normalize the top-level input/output paths first so later stages can
     # treat everything as concrete local files.
@@ -1813,6 +1816,8 @@ def run_assembler(
         raise IPyradError("min_aligned_len must be >= 0 when provided.")
     if not 0 <= max_sample_hetero_frequency <= 1:
         raise IPyradError("max_sample_hetero_frequency must be between 0 and 1.")
+    if not 0 <= min_sample_observed_fraction <= 1:
+        raise IPyradError("min_sample_observed_fraction must be between 0 and 1.")
     if min_3allele_sites < 0:
         raise IPyradError("min_3allele_sites must be >= 0.")
     if max_sites_above_maf < 0:
@@ -2170,6 +2175,7 @@ def run_assembler(
         max_locus_hetero_frequency=max_locus_hetero_frequency,
         max_locus_variant_frequency=max_locus_variant_frequency,
         max_sample_hetero_frequency=max_sample_hetero_frequency,
+        min_sample_observed_fraction=min_sample_observed_fraction,
         consensus_workers=consensus_workers,
         final_vcf_mask_workers=final_vcf_mask_workers,
         workers=workers,
