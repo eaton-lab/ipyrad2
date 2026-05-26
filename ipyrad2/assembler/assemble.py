@@ -941,6 +941,32 @@ def _collect_named_bams(
     return bam_dict, renamed
 
 
+def _validate_input_bam_paths(
+    *,
+    option_name: str,
+    bam_paths: list[Path],
+) -> str | None:
+    """Return one user-facing missing-input error message for one BAM option."""
+    if not bam_paths:
+        return None
+
+    missing = [
+        bam_path for bam_path in bam_paths
+        if (not bam_path.exists()) or (not bam_path.is_file())
+    ]
+    if not missing:
+        return None
+
+    joined = ", ".join(str(path) for path in missing)
+    hint = "Check the directory path or shell wildcard expansion."
+    if len(missing) == len(bam_paths):
+        return f"No BAM files found for {option_name}: {joined}. {hint}"
+    return (
+        f"{option_name} contains BAM paths that were not found: {joined}. "
+        f"{hint}"
+    )
+
+
 def _probe_bam_metadata(bam_file: Path) -> dict[str, object]:
     """Return sampled layout and ordered `@SQ` records for one BAM."""
     return {
@@ -1854,6 +1880,23 @@ def run_assembler(
         raise IPyradError(
             "No input BAM files found. Provide --rad-bams and/or --wgs-bams."
         )
+
+    missing_bam_errors = [
+        message
+        for message in (
+            _validate_input_bam_paths(
+                option_name="--rad-bams",
+                bam_paths=expanded_rad_bams,
+            ),
+            _validate_input_bam_paths(
+                option_name="--wgs-bams",
+                bam_paths=expanded_wgs_bams,
+            ),
+        )
+        if message is not None
+    ]
+    if missing_bam_errors:
+        raise IPyradError("\n".join(missing_bam_errors))
 
     rename_map: dict[str, str] = {}
     if rename is not None:
