@@ -37,6 +37,17 @@ def _coerce_positive_int(value, label: str) -> int:
     return parsed
 
 
+def _coerce_nonnegative_int(value, label: str) -> int:
+    """Return one non-negative integer CLI option."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise IPyradError(f"{label} must be an integer.") from exc
+    if parsed < 0:
+        raise IPyradError(f"{label} must be >= 0.")
+    return parsed
+
+
 def _safe_ratio(numer: float, denom: float) -> float:
     """Return one guarded float ratio."""
     if np.isclose(denom, 0.0):
@@ -212,6 +223,8 @@ def _make_preview_extracter(
     exclude,
     include_reference: bool,
     cores: int,
+    min_genotype_depth: int = 0,
+    min_site_qual: float = 0.0,
 ):
     """Create a non-running SNP extracter to normalize sample selection inputs."""
     return SNPsExtracter(
@@ -221,6 +234,8 @@ def _make_preview_extracter(
         min_minor_allele_frequency=0.0,
         imap=imap,
         minmap=minmap,
+        min_genotype_depth=min_genotype_depth,
+        min_site_qual=min_site_qual,
         exclude=exclude,
         include_reference=include_reference,
         cores=cores,
@@ -243,6 +258,8 @@ def _resolve_quartets_and_selection(
         min_sample_coverage=request.min_sample_coverage,
         imap=request.imap,
         minmap=request.minmap,
+        min_genotype_depth=request.min_genotype_depth,
+        min_site_qual=request.min_site_qual,
         exclude=list(request.exclude),
         include_reference=request.include_reference,
         cores=request.cores,
@@ -1288,6 +1305,8 @@ def _build_summary_json(
             "name": request.name,
             "outdir": request.outdir,
             "min_sample_coverage": request.min_sample_coverage,
+            "min_genotype_depth": request.min_genotype_depth,
+            "min_site_qual": request.min_site_qual,
             "resampling": request.resampling,
             "bootstrap_replicates": request.bootstrap_replicates,
             "jackknife_block_bp": request.jackknife_block_bp,
@@ -1453,6 +1472,8 @@ def _build_manifest(
             f"namespace: {tree_meta['namespace']}",
             f"input_mode: {tree_meta['input_mode']}",
             f"min_sample_coverage: {request.min_sample_coverage}",
+            f"min_genotype_depth: {request.min_genotype_depth}",
+            f"min_site_qual: {request.min_site_qual}",
             f"resampling: {request.resampling}",
             f"bootstrap_replicates: {request.bootstrap_replicates}",
             f"jackknife_block_bp: {request.jackknife_block_bp}",
@@ -1574,6 +1595,8 @@ def _run_baba(request: BabaRequest) -> BabaResult:
         min_minor_allele_frequency=0.0,
         imap=run_imap,
         minmap=None,
+        min_genotype_depth=request.min_genotype_depth,
+        min_site_qual=request.min_site_qual,
         exclude=run_exclude,
         include_reference=request.include_reference,
         cores=request.cores,
@@ -1723,6 +1746,8 @@ def run_baba_method(
     cores: int,
     force: bool,
     log_level: str,
+    min_genotype_depth: int = 0,
+    min_site_qual: float = 0.0,
     logged_command: str | None = None,
 ) -> None:
     """Run the ABBA/BABA analysis workflow."""
@@ -1735,6 +1760,8 @@ def run_baba_method(
         imap=None if imap is None else Path(imap).expanduser().absolute(),
         minmap=None if minmap is None else Path(minmap).expanduser().absolute(),
         min_sample_coverage=_coerce_positive_int(min_sample_coverage, "min_sample_coverage"),
+        min_genotype_depth=_coerce_nonnegative_int(min_genotype_depth, "min_genotype_depth"),
+        min_site_qual=float(min_site_qual),
         exclude=tuple() if exclude is None else tuple(exclude),
         include_reference=bool(include_reference),
         resampling=resampling,

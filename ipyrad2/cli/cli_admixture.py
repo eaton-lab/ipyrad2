@@ -82,6 +82,14 @@ def _setup_admixture_subparser(
         help="Minimum minor allele frequency required to retain a SNP. [default=0.0]",
     )
     filtering.add_argument(
+        "--min-genotype-depth", metavar="int", type=int, default=0,
+        help="Mask sample genotypes with FORMAT/DP below this threshold before site filtering. [default=0]",
+    )
+    filtering.add_argument(
+        "--min-site-qual", metavar="float", type=float, default=0.0,
+        help="Minimum VCF QUAL score required to retain a SNP site. [default=0.0]",
+    )
+    filtering.add_argument(
         "-I", "--impute-method", metavar="str", choices=("sample", "none"), default="sample",
         help="Imputation method used before PLINK staging. [default=sample]",
     )

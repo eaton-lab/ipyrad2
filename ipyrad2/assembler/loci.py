@@ -24,6 +24,7 @@ BIN_SAM = str(BIN / "samtools")
 BIN_BCF = str(BIN / "bcftools")
 BIN_BED = str(BIN / "bedtools")
 HETERO_CODES = np.array(list(b"RSKYWM"), dtype=np.uint8)
+REFERENCE_SAMPLE_NAME = "assembly_reference_sequence"
 
 
 def get_lowdepth_mask_path(sname: str, tmpdir: Path) -> Path:
@@ -405,13 +406,27 @@ def iter_locus_batches(database_fasta: Path, batch_size: int = 128):
         yield batch_idx, batch
 
 
+def _empirical_sample_row_mask(
+    tnames: list[str],
+    *,
+    refname: str = REFERENCE_SAMPLE_NAME,
+) -> np.ndarray:
+    """Return a boolean row mask that excludes the synthetic reference row."""
+    return np.array([sname != refname for sname in tnames], dtype=bool)
+
+
 def _trim_locus_matrix(
     seqs: np.ndarray,
     *,
     min_locus_trim_sample_coverage: int,
+    empirical_row_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int, int]:
     """Trim one locus matrix to the region with sufficient sample coverage."""
-    site_sample_covs = np.sum((seqs != 78) & (seqs != 45), axis=0)
+    if empirical_row_mask is None:
+        empirical_seqs = seqs
+    else:
+        empirical_seqs = seqs[empirical_row_mask]
+    site_sample_covs = np.sum((empirical_seqs != 78) & (empirical_seqs != 45), axis=0)
     cov_sufficient = np.where(site_sample_covs >= min_locus_trim_sample_coverage)[0]
     try:
         trim_left = int(cov_sufficient[0])
@@ -447,7 +462,7 @@ def _mask_high_hetero_samples(
     masked_samples: list[str] = []
     sample_props: dict[str, float] = {}
     for row_idx, sname in enumerate(tnames):
-        if sname == "assembly_reference_sequence":
+        if sname == REFERENCE_SAMPLE_NAME:
             continue
         row = masked[row_idx]
         observed = (row != 78) & (row != 45)
@@ -476,7 +491,7 @@ def _mask_low_observed_samples(
     sample_props: dict[str, float] = {}
     locus_length = int(masked.shape[1])
     for row_idx, sname in enumerate(tnames):
-        if sname == "assembly_reference_sequence":
+        if sname == REFERENCE_SAMPLE_NAME:
             continue
         row = masked[row_idx]
         observed = (row != 78) & (row != 45)
@@ -506,6 +521,7 @@ def resolve_locus_for_output(
     scaff, pos = header.split(":")
     rstart, rend = [int(i) for i in pos.split("-")]
     tnames = list(locus_dict.keys())
+    empirical_row_mask = _empirical_sample_row_mask(tnames)
     seqs = np.array([list(bytes(seq, "utf-8")) for seq in locus_dict.values()], dtype=np.uint8)
 
     filters = {
@@ -537,6 +553,7 @@ def resolve_locus_for_output(
     tseqs, tsite_sample_covs, trim_left, trim_right = _trim_locus_matrix(
         seqs,
         min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
+        empirical_row_mask=empirical_row_mask,
     )
 
     if forced_masked_samples is None:
@@ -549,6 +566,7 @@ def resolve_locus_for_output(
             tseqs, tsite_sample_covs, extra_left, extra_right = _trim_locus_matrix(
                 tseqs,
                 min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
+                empirical_row_mask=empirical_row_mask,
             )
             trim_left += extra_left
             trim_right += extra_right
@@ -562,6 +580,7 @@ def resolve_locus_for_output(
             tseqs, tsite_sample_covs, extra_left, extra_right = _trim_locus_matrix(
                 tseqs,
                 min_locus_trim_sample_coverage=min_locus_trim_sample_coverage,
+                empirical_row_mask=empirical_row_mask,
             )
             trim_left += extra_left
             trim_right += extra_right
@@ -587,7 +606,7 @@ def resolve_locus_for_output(
     if sample_hetero_props:
         stats["sample_hetero_frequencies"] = sample_hetero_props
 
-    row_has_data = _sample_rows_with_data(tseqs)
+    row_has_data = empirical_row_mask & _sample_rows_with_data(tseqs)
     effective_locus_cov = int(row_has_data.sum())
     stats["locus_cov"] = effective_locus_cov
     if effective_locus_cov < min_locus_sample_coverage:
@@ -621,8 +640,9 @@ def resolve_locus_for_output(
     if stats["variant_site_frequency_where_sample_cov_greater_than_2"] > max_locus_variant_frequency:
         filters["max_variant_frequency"] = True
 
-    if tseqs.size:
-        max_shared_h = max_heteros_count_numba(tseqs)
+    empirical_tseqs = tseqs[empirical_row_mask]
+    if empirical_tseqs.size:
+        max_shared_h = max_heteros_count_numba(empirical_tseqs)
         max_shared_h_prop = max_shared_h / max(1, effective_locus_cov)
         if max_shared_h_prop > max_locus_hetero_frequency:
             filters["max_shared_hetero_frequency"] = True
@@ -1261,7 +1281,7 @@ def _build_retained_locus_outputs(
     )
     masked_samples = masked_low_observed_samples | masked_hetero_samples
 
-    sample_mask = np.array([sname != refname for sname in tnames], dtype=bool)
+    sample_mask = _empirical_sample_row_mask(tnames, refname=refname)
     sample_rows = sample_mask & _sample_rows_with_data(tseqs)
     sample_names_with_data = [
         sname
@@ -1281,6 +1301,7 @@ def _build_retained_locus_outputs(
         for sname, seq in zip(tnames, tseqs, strict=True)
         if sname not in masked_samples
     ]
+    visible_empirical_row_count = sum(1 for sname, _seq in visible_rows if sname != refname)
     locus_lines = [f"{padded[sname]}{bytes(seq).decode()}" for sname, seq in visible_rows]
     snpstring_arr = snpsarr.copy()
     snpstring_arr[snpstring_arr == 0] = 32
@@ -1293,7 +1314,7 @@ def _build_retained_locus_outputs(
         "tseqs": tseqs,
         "tnames": tnames,
         "locus_length": int(tseqs.shape[1]),
-        "bed_row": f"{scaff}\t{pos0 - 1}\t{pos1}\t{len(visible_rows)}\n",
+        "bed_row": f"{scaff}\t{pos0 - 1}\t{pos1}\t{visible_empirical_row_count}\n",
         "manifest_row": (raw_header, header, ",".join(sorted(masked_samples))),
         "masked_low_observed_samples": sorted(masked_low_observed_samples),
         "masked_hetero_samples": sorted(masked_hetero_samples),
@@ -1439,7 +1460,7 @@ def write_final_outputs(
         path.parent.mkdir(parents=True, exist_ok=True)
 
     real_snames = list(snames)
-    refname = "assembly_reference_sequence"
+    refname = REFERENCE_SAMPLE_NAME
     output_snames = [refname] + sorted(real_snames)
     max_len = max(len(i) for i in output_snames) + 2
     padded = {n: n + (" " * (max_len - len(n))) for n in output_snames}
@@ -1688,7 +1709,7 @@ def write_loci_and_stats_files(
     # Add the reference as a synthetic sample in the written database/stats
     # without mutating the caller-owned sample-name list.
     real_snames = list(snames)
-    refname = "assembly_reference_sequence"
+    refname = REFERENCE_SAMPLE_NAME
     write_snames = real_snames + [refname]
 
     # get name padding for loci file
@@ -1786,7 +1807,12 @@ def write_loci_and_stats_files(
                     for sname, seq in zip(tnames, tseqs, strict=True)
                     if sname not in masked_samples
                 ]
-                out_bed.write(f"{scaff}\t{pos0 - 1}\t{pos1}\t{len(visible_sample_rows)}\n")
+                visible_empirical_row_count = sum(
+                    1 for sname, _seq in visible_sample_rows if sname != refname
+                )
+                out_bed.write(
+                    f"{scaff}\t{pos0 - 1}\t{pos1}\t{visible_empirical_row_count}\n"
+                )
                 manifest_writer.writerow([oheader, header, ",".join(masked_samples)])
                 if masked_low_obs_samples:
                     loci_with_samples_masked_by_min_observed_fraction += 1
@@ -1806,7 +1832,7 @@ def write_loci_and_stats_files(
 
                 # Count only empirical samples in the report summaries so the
                 # synthetic reference row does not inflate occupancy metrics.
-                sample_mask = np.array([sname != refname for sname in tnames], dtype=bool)
+                sample_mask = _empirical_sample_row_mask(tnames, refname=refname)
                 sample_rows = sample_mask & _sample_rows_with_data(tseqs)
                 sample_count = int(np.sum(sample_rows))
                 for row_idx, sname in enumerate(tnames):

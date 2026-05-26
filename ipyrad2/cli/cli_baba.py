@@ -69,6 +69,14 @@ def _setup_baba_subparser(
         help="Minimum selected samples with data before quartet-specific filters. [default=1]",
     )
     filtering.add_argument(
+        "--min-genotype-depth", metavar="int", type=int, default=0,
+        help="Mask sample genotypes with FORMAT/DP below this threshold before quartet analysis. [default=0]",
+    )
+    filtering.add_argument(
+        "--min-site-qual", metavar="float", type=float, default=0.0,
+        help="Minimum VCF QUAL score required to retain a SNP site before quartet analysis. [default=0.0]",
+    )
+    filtering.add_argument(
         "-e", "--exclude", metavar="str", type=str, nargs="*",
         help="Exclude one or more samples by name. This overrides IMAP membership and `-R`.",
     )

@@ -414,6 +414,8 @@ def run_snmf_method(
     cv_replicates: int = _DEFAULT_CV_REPLICATES,
     cv_holdout: float = _DEFAULT_CV_HOLDOUT,
     log_level: str = "INFO",
+    min_genotype_depth: int = 0,
+    min_site_qual: float = 0.0,
 ) -> None:
     """CLI entrypoint for sparse NMF-style clustering with cross-entropy K scoring."""
     require_hdf5_input(data, "snmf")
@@ -463,6 +465,8 @@ def run_snmf_method(
         min_minor_allele_frequency=min_minor_allele_frequency,
         imap=imap,
         minmap=minmap,
+        min_genotype_depth=min_genotype_depth,
+        min_site_qual=min_site_qual,
         exclude=exclude,
         include_reference=include_reference,
         cores=cores,
@@ -489,7 +493,7 @@ def run_snmf_method(
     )
     if prepared.matrix.shape[1] == 0:
         raise IPyradError("sNMF requires at least one SNP after filtering.")
-    log_snp_imputation_summary("snmf", prepared.imputation)
+    log_snp_imputation_summary("snmf", prepared.imputation, subsample=subsample)
     log_snp_view_summary(
         "snmf",
         summarize_prepared_snp_view(extracter, prepared.view, subsample=subsample),

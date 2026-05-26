@@ -116,6 +116,8 @@ def run_dapc_method(
     cores: int,
     force: bool,
     log_level: str = "INFO",
+    min_genotype_depth: int = 0,
+    min_site_qual: float = 0.0,
 ) -> None:
     """CLI entrypoint for DAPC-style clustering."""
     require_hdf5_input(data, "dapc")
@@ -142,6 +144,8 @@ def run_dapc_method(
         min_minor_allele_frequency=min_minor_allele_frequency,
         imap=imap,
         minmap=minmap,
+        min_genotype_depth=min_genotype_depth,
+        min_site_qual=min_site_qual,
         exclude=exclude,
         include_reference=include_reference,
         cores=cores,
@@ -154,7 +158,7 @@ def run_dapc_method(
         impute_method=impute_method,
         log_level=log_level,
     )
-    log_snp_imputation_summary("dapc", prepared.imputation)
+    log_snp_imputation_summary("dapc", prepared.imputation, subsample=subsample)
     log_snp_view_summary(
         "dapc",
         summarize_prepared_snp_view(extracter, prepared.view, subsample=subsample),

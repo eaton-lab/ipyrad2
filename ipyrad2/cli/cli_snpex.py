@@ -60,6 +60,14 @@ def _setup_snpex_subparser(
         help="Minimum minor allele frequency required to retain a SNP. [default=0.0]",
     )
     filtering.add_argument(
+        "--min-genotype-depth", metavar="int", type=int, default=0,
+        help="Mask sample genotypes with FORMAT/DP below this threshold before site filtering. [default=0]",
+    )
+    filtering.add_argument(
+        "--min-site-qual", metavar="float", type=float, default=0.0,
+        help="Minimum VCF QUAL score required to retain a SNP site. [default=0.0]",
+    )
+    filtering.add_argument(
         "-e", "--exclude", metavar="str", type=str, nargs="*",
         help="Exclude one or more samples by name. This takes precedence over IMAP membership and `-R`.",
     )

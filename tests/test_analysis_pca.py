@@ -709,13 +709,20 @@ def test_run_pca_method_logs_linewise_filter_stats_and_imputation_summary(tmp_pa
     assert any("filter statistic pre_filter_snps: 6" in msg for msg in messages)
     assert any("filter statistic post_filter_snps: 6" in msg for msg in messages)
     assert any(
+        "filter statistic post_filter_percent_missing:" in msg
+        and "linked post-filter genotype cells missing before optional subsampling" in msg
+        for msg in messages
+    )
+    assert any(
         "pca SNP imputation: algorithm=zero-fill" in msg
-        and "snps=1/3" in msg
-        and "genotypes=2/18" in msg
+        and "prepared_matrix_scope=subsampled_unlinked" in msg
+        and "snp_columns_with_missing=1/3" in msg
+        and "missing_genotype_cells=2/18" in msg
         for msg in messages
     )
     assert any(
         "pca prepared SNP summary:" in msg
+        and "prepared_matrix_scope=subsampled_unlinked" in msg
         and "linked_post_filter_snps=6" in msg
         and "prepared_snps=3" in msg
         for msg in messages
@@ -759,6 +766,9 @@ def test_run_pca_method_aggregates_multi_replicate_logging_and_keeps_details_at_
 
     assert any(
         "pca SNP imputation across 2 replicates: algorithm=sample" in msg
+        and "prepared_matrix_scope=subsampled_unlinked" in msg
+        and "snp_columns_with_missing=" in msg
+        and "missing_genotype_cells=" in msg
         for msg in messages
     )
     assert any("pca replicate 0 prepared SNP matrix:" in msg for msg in messages)
