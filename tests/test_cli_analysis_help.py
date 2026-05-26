@@ -202,6 +202,8 @@ def test_snpex_help_groups_examples_and_reference_controls_are_present() -> None
         "-m, --min-sample-coverage",
         "-r, --max-sample-missing",
         "-a, --min-minor-allele-frequency",
+        "--min-genotype-depth",
+        "--min-site-qual",
         "-e, --exclude",
         "-R, --include-reference",
         "-i, --imap",
@@ -236,6 +238,8 @@ def test_snpex_help_groups_examples_and_reference_controls_are_present() -> None
     assert "-I" in help_text
     assert "Population-to-minimum-coverage mapping file" in help_text
     assert "`population<TAB>min`" in help_text
+    assert "--min-genotype-depth" in help_text
+    assert "--min-site-qual" in help_text
     assert "--include-reference" in help_text
     assert "assembly_reference_sequence" in help_text
     assert help_text.index("-h, --help") > help_text.index("Logging:")
@@ -306,6 +310,8 @@ def test_pca_help_groups_examples_and_imputation_are_present() -> None:
     assert "--plot-marker-size" in help_text
     assert "Population-to-minimum-coverage mapping file" in help_text
     assert "`population<TAB>min`" in help_text
+    assert "--min-genotype-depth" in help_text
+    assert "--min-site-qual" in help_text
     assert "chunked SNP filtering and UMAP embedding" in help_text
     assert "$ ipyrad2 pca -d snps.hdf5 -o OUT/ --plot" in help_text
     assert help_text.index("-h, --help") > help_text.index("Logging:")
@@ -338,6 +344,8 @@ def test_snmf_help_groups_examples_and_imputation_are_present() -> None:
     assert "--cv-holdout" in help_text
     assert "Population-to-minimum-coverage mapping file" in help_text
     assert "`population<TAB>min`" in help_text
+    assert "--min-genotype-depth" in help_text
+    assert "--min-site-qual" in help_text
     assert help_text.index("-h, --help") > help_text.index("Logging:")
 
 
@@ -360,6 +368,8 @@ def test_dapc_help_groups_examples_and_imputation_are_present() -> None:
     assert "--n-pcs" in help_text
     assert "Population-to-minimum-coverage mapping file" in help_text
     assert "`population<TAB>min`" in help_text
+    assert "--min-genotype-depth" in help_text
+    assert "--min-site-qual" in help_text
     assert help_text.index("-h, --help") > help_text.index("Logging:")
 
 
@@ -384,6 +394,8 @@ def test_admixture_help_groups_examples_and_imputation_are_present() -> None:
     assert "--keep-intermediates" in help_text
     assert "Population-to-minimum-coverage mapping file" in help_text
     assert "`population<TAB>min`" in help_text
+    assert "--min-genotype-depth" in help_text
+    assert "--min-site-qual" in help_text
     assert help_text.index("-h, --help") > help_text.index("Logging:")
 
 
@@ -413,6 +425,8 @@ def test_popgen_help_groups_examples_and_backend_controls_are_present() -> None:
     assert "Sequence HDF5 supports the full panel" in help_text
     assert "population-aware coverage filtering" in help_text
     assert "global `-m` filter" in help_text
+    assert "--min-genotype-depth" in help_text
+    assert "--min-site-qual" in help_text
     assert help_text.index("-h, --help") > help_text.index("Logging:")
 
 
@@ -443,6 +457,8 @@ def test_baba_help_groups_examples_and_tree_controls_are_present() -> None:
     assert "requires `--imap`" in help_text
     assert "Input SNP HDF5 file containing `genos` and `snpsmap`." in help_text
     assert "Population-to-minimum-coverage file; applied per quartet and requires `--imap`." in help_text
+    assert "--min-genotype-depth" in help_text
+    assert "--min-site-qual" in help_text
     assert "Significance method; `auto` prefers physical-block jackknife." in help_text
     assert "P-value threshold for zeroing non-significant tree f_G values." in help_text
     assert "$ ipyrad2 baba -d assembly.hdf5 -o OUT/ --tests quartets.tsv" in help_text

@@ -173,6 +173,8 @@ def run_admixture_method(
     cores: int,
     force: bool,
     log_level: str = "INFO",
+    min_genotype_depth: int = 0,
+    min_site_qual: float = 0.0,
 ) -> None:
     """CLI entrypoint for external ADMIXTURE runs."""
     require_hdf5_input(data, "admixture")
@@ -200,6 +202,8 @@ def run_admixture_method(
         min_minor_allele_frequency=min_minor_allele_frequency,
         imap=imap,
         minmap=minmap,
+        min_genotype_depth=min_genotype_depth,
+        min_site_qual=min_site_qual,
         exclude=exclude,
         include_reference=include_reference,
         cores=cores,
@@ -215,7 +219,7 @@ def run_admixture_method(
         if normalized_impute is not None
         else None
     )
-    log_snp_imputation_summary("admixture", imputation_summary)
+    log_snp_imputation_summary("admixture", imputation_summary, subsample=subsample)
     log_snp_view_summary(
         "admixture",
         summarize_prepared_snp_view(extracter, view, subsample=subsample),

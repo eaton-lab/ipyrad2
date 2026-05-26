@@ -26,6 +26,18 @@ reference
 description: The ordered REF allele at every SNP position.
 dtype: np.uint8
 shape: (nsnps,)
+
+sample_dp
+---------
+description: The ordered per-sample FORMAT/DP value at every SNP position.
+dtype: np.uint32
+shape: (nsamples, nsnps)
+
+site_qual
+---------
+description: The ordered VCF QUAL value at every SNP position.
+dtype: np.float32
+shape: (nsnps,)
 """
 
 from __future__ import annotations
@@ -192,18 +204,49 @@ def _return_gt_allele(gt_field: str, index: int) -> np.uint8:
 _v_return_gt_allele = np.vectorize(_return_gt_allele, otypes=[np.uint8])
 
 
+def _return_dp_value(sample_field: str) -> np.uint32:
+    """Return one non-negative DP value from a `GT:DP` query token, else 0."""
+    if not isinstance(sample_field, str):
+        return np.uint32(0)
+    parts = sample_field.split(":", 1)
+    if len(parts) != 2:
+        return np.uint32(0)
+    dp_field = parts[1].strip()
+    if dp_field in {"", "."}:
+        return np.uint32(0)
+    try:
+        parsed = int(dp_field)
+    except ValueError:
+        return np.uint32(0)
+    return np.uint32(max(0, parsed))
+
+
+_v_return_dp_value = np.vectorize(_return_dp_value, otypes=[np.uint32])
+
+
+def _safe_parse_qual(value) -> np.float32:
+    """Return one float QUAL value or NaN when unavailable."""
+    text = str(value).strip()
+    if text in {"", "."}:
+        return np.float32(np.nan)
+    try:
+        return np.float32(float(text))
+    except ValueError:
+        return np.float32(np.nan)
+
+
 def _chunk_query_to_gt_arrays(
     chunkdf: pd.DataFrame,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Convert one bcftools GT-only query chunk into genotype and REF arrays."""
     nsnps = int(chunkdf.shape[0])
-    nsamples = max(0, int(chunkdf.shape[1]) - 4)
+    nsamples = max(0, int(chunkdf.shape[1]) - 5)
 
     ref = np.frombuffer(
-        "".join(chunkdf.iloc[:, 2].astype(str)).encode("ascii"),
+        "".join(chunkdf.iloc[:, 3].astype(str)).encode("ascii"),
         dtype=np.uint8,
     )
-    alts = chunkdf.iloc[:, 3].astype(bytes).to_numpy(copy=False)
+    alts = chunkdf.iloc[:, 4].astype(bytes).to_numpy(copy=False)
     alt_bytes = np.char.replace(alts, b",", b"")
     alts1 = np.zeros(nsps := nsnps, dtype=np.uint8)
     alts2 = np.zeros(nsps, dtype=np.uint8)
@@ -216,9 +259,14 @@ def _chunk_query_to_gt_arrays(
     if np.any(lengths >= 3):
         alts3[lengths >= 3] = [value[2] for value in alt_bytes[lengths >= 3]]
 
-    gt_fields = chunkdf.iloc[:, 4:]
+    gt_fields = chunkdf.iloc[:, 5:]
     g0 = _v_return_gt_allele(gt_fields, 0)
     g1 = _v_return_gt_allele(gt_fields, 2)
+    sample_dp = _v_return_dp_value(gt_fields)
+    site_qual = np.array(
+        [_safe_parse_qual(value) for value in chunkdf.iloc[:, 2]],
+        dtype=np.float32,
+    )
 
     alleles = np.column_stack((ref, alts1, alts2, alts3)).astype(np.uint8, copy=False)
     row_index = np.arange(nsnps, dtype=np.int64)[:, None]
@@ -240,7 +288,7 @@ def _chunk_query_to_gt_arrays(
     genos[:, :, 0] = g0.T
     genos[:, :, 1] = g1.T
     genos[:, :, 2] = snps.T
-    return genos, ref, snps
+    return genos, ref, snps, sample_dp.T, site_qual
 
 
 def _build_chunk_snpsmap(
@@ -307,6 +355,8 @@ def _write_snp_chunk_worker(
     out_map = workdir / f"snp-chunk-{chunk_idx}.snpsmap.npy"
     out_gen = workdir / f"snp-chunk-{chunk_idx}.genos.npy"
     out_ref = workdir / f"snp-chunk-{chunk_idx}.reference.npy"
+    out_dp = workdir / f"snp-chunk-{chunk_idx}.sample_dp.npy"
+    out_qual = workdir / f"snp-chunk-{chunk_idx}.site_qual.npy"
 
     try:
         sample_arg = ",".join(snames)
@@ -320,7 +370,7 @@ def _write_snp_chunk_worker(
             "-i",
             'FILTER="PASS" && TYPE="snp"',
             "-f",
-            "%CHROM\t%POS\t%REF\t%ALT[\t%GT]\n",
+            "%CHROM\t%POS\t%QUAL\t%REF\t%ALT[\t%GT:%DP]\n",
             str(vcf_path),
         ]
         run_pipeline([query_cmd], outfile=query_tsv)
@@ -333,12 +383,20 @@ def _write_snp_chunk_worker(
                 allow_pickle=False,
             )
             np.save(out_ref, np.empty((0,), dtype=np.uint8), allow_pickle=False)
+            np.save(
+                out_dp,
+                np.empty((len(snames), 0), dtype=np.uint32),
+                allow_pickle=False,
+            )
+            np.save(out_qual, np.empty((0,), dtype=np.float32), allow_pickle=False)
             return {
                 "chunk_idx": chunk_idx,
                 "nsnps": 0,
                 "snpsmap": str(out_map),
                 "genos": str(out_gen),
                 "reference": str(out_ref),
+                "sample_dp": str(out_dp),
+                "site_qual": str(out_qual),
             }
 
         bed_index, _local_scaff2idx = load_bed_index_nonoverlap(chunk_bed)
@@ -349,6 +407,8 @@ def _write_snp_chunk_worker(
         maps: list[np.ndarray] = []
         genos: list[np.ndarray] = []
         refs: list[np.ndarray] = []
+        depths: list[np.ndarray] = []
+        quals: list[np.ndarray] = []
         total = 0
 
         for chunkdf in pd.read_csv(
@@ -369,10 +429,14 @@ def _write_snp_chunk_worker(
                 counters=counters,
                 map_dtype=map_dtype,
             )
-            chunk_genos, chunk_ref, _chunk_snps = _chunk_query_to_gt_arrays(chunkdf)
+            chunk_genos, chunk_ref, _chunk_snps, chunk_dp, chunk_qual = _chunk_query_to_gt_arrays(
+                chunkdf
+            )
             maps.append(chunk_map)
             genos.append(chunk_genos)
             refs.append(chunk_ref)
+            depths.append(chunk_dp)
+            quals.append(chunk_qual)
             total += int(chunkdf.shape[0])
 
         map_arr = (
@@ -390,15 +454,29 @@ def _write_snp_chunk_worker(
             if refs
             else np.empty((0,), dtype=np.uint8)
         )
+        dp_arr = (
+            np.concatenate(depths, axis=1)
+            if depths
+            else np.empty((len(snames), 0), dtype=np.uint32)
+        )
+        qual_arr = (
+            np.concatenate(quals, axis=0)
+            if quals
+            else np.empty((0,), dtype=np.float32)
+        )
         np.save(out_map, map_arr, allow_pickle=False)
         np.save(out_gen, gen_arr, allow_pickle=False)
         np.save(out_ref, ref_arr, allow_pickle=False)
+        np.save(out_dp, dp_arr, allow_pickle=False)
+        np.save(out_qual, qual_arr, allow_pickle=False)
         return {
             "chunk_idx": chunk_idx,
             "nsnps": int(total),
             "snpsmap": str(out_map),
             "genos": str(out_gen),
             "reference": str(out_ref),
+            "sample_dp": str(out_dp),
+            "site_qual": str(out_qual),
         }
     finally:
         query_tsv.unlink(missing_ok=True)
@@ -410,31 +488,43 @@ def _append_snp_chunk(
     snpsmap_ds: h5py.Dataset,
     genos_ds: h5py.Dataset,
     reference_ds: h5py.Dataset,
+    sample_dp_ds: h5py.Dataset,
+    site_qual_ds: h5py.Dataset,
     total: int,
 ) -> int:
     """Append one temporary chunk's arrays into the final HDF5 datasets."""
     map_path = Path(str(result["snpsmap"]))
     gen_path = Path(str(result["genos"]))
     ref_path = Path(str(result["reference"]))
+    dp_path = Path(str(result["sample_dp"]))
+    qual_path = Path(str(result["site_qual"]))
     try:
         map_arr = np.load(map_path, allow_pickle=False)
         if map_arr.shape[0] == 0:
             return total
         gen_arr = np.load(gen_path, allow_pickle=False)
         ref_arr = np.load(ref_path, allow_pickle=False)
+        dp_arr = np.load(dp_path, allow_pickle=False)
+        qual_arr = np.load(qual_path, allow_pickle=False)
         new_total = total + int(map_arr.shape[0])
         nsamples = int(genos_ds.shape[0])
         snpsmap_ds.resize((new_total, 5))
         genos_ds.resize((nsamples, new_total, 3))
         reference_ds.resize((new_total,))
+        sample_dp_ds.resize((nsamples, new_total))
+        site_qual_ds.resize((new_total,))
         snpsmap_ds[total:new_total, :] = map_arr
         genos_ds[:, total:new_total, :] = gen_arr
         reference_ds[total:new_total] = ref_arr
+        sample_dp_ds[:, total:new_total] = dp_arr
+        site_qual_ds[total:new_total] = qual_arr
         return new_total
     finally:
         map_path.unlink(missing_ok=True)
         gen_path.unlink(missing_ok=True)
         ref_path.unlink(missing_ok=True)
+        dp_path.unlink(missing_ok=True)
+        qual_path.unlink(missing_ok=True)
 
 
 def write_snps_hdf5(
@@ -561,6 +651,26 @@ def write_snps_hdf5(
                 compression_opts=4,
                 shuffle=True,
             )
+            sample_dp_ds = io5.create_dataset(
+                "sample_dp",
+                shape=(nsamples, 0),
+                maxshape=(nsamples, None),
+                dtype=np.uint32,
+                chunks=(nsamples, chunk_snps),
+                compression="gzip",
+                compression_opts=4,
+                shuffle=True,
+            )
+            site_qual_ds = io5.create_dataset(
+                "site_qual",
+                shape=(0,),
+                maxshape=(None,),
+                dtype=np.float32,
+                chunks=(chunk_snps,),
+                compression="gzip",
+                compression_opts=4,
+                shuffle=True,
+            )
 
             total = 0
             for chunk_idx in sorted(chunk_results):
@@ -569,6 +679,8 @@ def write_snps_hdf5(
                     snpsmap_ds=snpsmap_ds,
                     genos_ds=genos_ds,
                     reference_ds=reference_ds,
+                    sample_dp_ds=sample_dp_ds,
+                    site_qual_ds=site_qual_ds,
                     total=total,
                 )
             io5.attrs["nsnps"] = int(total)

@@ -16,6 +16,18 @@ reference
 description: The ordered REF allele at every SNP position.
 dtype: np.uint8
 shape: (nsnps,)
+
+sample_dp
+---------
+description: The ordered per-sample FORMAT/DP value at every SNP position.
+dtype: np.uint32
+shape: (nsamples, nsnps)
+
+site_qual
+---------
+description: The ordered VCF QUAL value at every SNP position.
+dtype: np.float32
+shape: (nsnps,)
 """
 
 import os
@@ -186,6 +198,8 @@ class VCFToHDF5(object):
             io5.create_dataset("snps", (self.nsamples, self.nsnps), np.uint8)
             io5.create_dataset("snpsmap", (self.nsnps, 5), np.uint32)
             io5.create_dataset("reference", (self.nsnps,), np.uint8)
+            io5.create_dataset("sample_dp", (self.nsnps, self.nsamples), np.uint32)
+            io5.create_dataset("site_qual", (self.nsnps,), np.float32)
             io5["snps"].attrs["names"] = [i.encode() for i in self.names]
             io5["genos"].attrs["names"] = [i.encode() for i in self.names]
             io5["snpsmap"].attrs["columns"] = [
@@ -200,14 +214,19 @@ class VCFToHDF5(object):
         # Reshape genos to align with new ip2 hdf5 format
         with h5py.File(self.database, 'a') as io5:
             io5["tmp"] = io5["genos"]  
+            io5["tmp_dp"] = io5["sample_dp"]
             del io5["genos"]
+            del io5["sample_dp"]
             del io5["snps"]
         with h5py.File(self.database, 'a') as io5:
             io5.create_dataset("genos", (self.nsamples, self.nsnps, 3), np.uint8)
+            io5.create_dataset("sample_dp", (self.nsamples, self.nsnps), np.uint32)
             io5["genos"][:] = np.ascontiguousarray(io5["tmp"][:].transpose(1, 0, 2))
+            io5["sample_dp"][:] = np.ascontiguousarray(io5["tmp_dp"][:].transpose(1, 0))
             io5.attrs["nsnps"] = int(self.nsnps)
             io5.attrs["names"] = np.array(self.names, dtype=h5py.string_dtype(encoding="utf-8"))
             del io5["tmp"]
+            del io5["tmp_dp"]
 
 
     def build_chunked_matrix(self):
@@ -241,7 +260,10 @@ class VCFToHDF5(object):
                 for chunkdf in self.df:
 
                     # get sub arrays
-                    genos, snps, reference = chunk_to_arrs(chunkdf, self.nsamples)
+                    genos, snps, reference, sample_dp, site_qual = chunk_to_arrs(
+                        chunkdf,
+                        self.nsamples,
+                    )
 
                     # get sub snpsmap
                     snpsmap, lastchrom = self.get_snpsmap(
@@ -258,6 +280,8 @@ class VCFToHDF5(object):
                     io5['genos'][xx:xx + chunkdf.shape[0], :, :2] = genos
                     io5['snpsmap'][xx:xx + chunkdf.shape[0], :] = snpsmap
                     io5['reference'][xx:xx + chunkdf.shape[0]] = reference
+                    io5['sample_dp'][xx:xx + chunkdf.shape[0], :] = sample_dp
+                    io5['site_qual'][xx:xx + chunkdf.shape[0]] = site_qual
                     xx += chunkdf.shape[0]
 
                     # print progress
@@ -409,30 +433,83 @@ def run_vcf_to_hdf5(
     return Path(tool.database)
 
 
-def get_genos(gstr):
-    """
-    Extract geno from vcf string: e.g., (0/1:...). 
-    First pulls the indices then uses refalt to pull genos.
-    """
-    gen = gstr.split(":")[0]
+def _safe_parse_qual(value) -> np.float32:
+    """Return one float QUAL value or NaN when unavailable."""
+    if pd.isna(value):
+        return np.float32(np.nan)
+    text = str(value).strip()
+    if text in {"", "."}:
+        return np.float32(np.nan)
     try:
-        return gen[0], gen[2]
-    except IndexError:
+        return np.float32(float(text))
+    except ValueError:
+        return np.float32(np.nan)
+
+
+def _parse_gt_alleles(gt_field: str) -> tuple[np.uint8, np.uint8]:
+    """Return diploid allele indexes from one GT token or missing sentinels."""
+    if not isinstance(gt_field, str):
         return _MISSING_GENO, _MISSING_GENO
-    # return gstr[0], gstr[2]
+    token = gt_field.strip()
+    if token in {"", ".", "./.", ".|."}:
+        return _MISSING_GENO, _MISSING_GENO
+    token = token.replace("|", "/")
+    parts = token.split("/")
+    if len(parts) != 2:
+        return _MISSING_GENO, _MISSING_GENO
+    alleles = []
+    for part in parts:
+        if part in {"", "."}:
+            return _MISSING_GENO, _MISSING_GENO
+        try:
+            parsed = int(part)
+        except ValueError:
+            return _MISSING_GENO, _MISSING_GENO
+        alleles.append(parsed if parsed >= 0 else _MISSING_GENO)
+    return np.uint8(alleles[0]), np.uint8(alleles[1])
 
 
-def return_g(gstr, i):
-    "returns the genotype str from vcf at one position (0/1) -> 0"
-    gen = gstr.split(":")[0]
+def _parse_dp_value(dp_field: str) -> np.uint32:
+    """Return one non-negative DP value, defaulting missing or malformed to 0."""
+    if not isinstance(dp_field, str):
+        return np.uint32(0)
+    token = dp_field.strip()
+    if token in {"", "."}:
+        return np.uint32(0)
     try:
-        return int(gen[i])
-    except:
-        return _MISSING_GENO
+        parsed = int(token)
+    except ValueError:
+        return np.uint32(0)
+    return np.uint32(max(0, parsed))
 
 
-# vectorized version of return g
-v_return_g = np.vectorize(return_g, otypes=[np.uint8])
+def _extract_format_arrays(chunkdf, nsamples):
+    """Return GT-derived genotype indexes and per-sample DP arrays for one chunk."""
+    nsnps = int(chunkdf.shape[0])
+    g0 = np.full((nsnps, nsamples), _MISSING_GENO, dtype=np.uint8)
+    g1 = np.full((nsnps, nsamples), _MISSING_GENO, dtype=np.uint8)
+    sample_dp = np.zeros((nsnps, nsamples), dtype=np.uint32)
+
+    for ridx, row in enumerate(chunkdf.itertuples(index=False, name=None)):
+        format_field = row[8] if len(row) > 8 else ""
+        format_keys = str(format_field).split(":") if format_field else []
+        try:
+            gt_idx = format_keys.index("GT")
+        except ValueError:
+            gt_idx = -1
+        try:
+            dp_idx = format_keys.index("DP")
+        except ValueError:
+            dp_idx = -1
+
+        for sidx, sample_field in enumerate(row[9 : 9 + nsamples]):
+            parts = str(sample_field).split(":") if sample_field else []
+            gt_field = parts[gt_idx] if 0 <= gt_idx < len(parts) else ""
+            dp_field = parts[dp_idx] if 0 <= dp_idx < len(parts) else ""
+            g0[ridx, sidx], g1[ridx, sidx] = _parse_gt_alleles(gt_field)
+            sample_dp[ridx, sidx] = _parse_dp_value(dp_field)
+
+    return g0, g1, sample_dp
 
 
 def chunk_to_arrs(chunkdf, nsamples):
@@ -442,11 +519,6 @@ def chunk_to_arrs(chunkdf, nsamples):
     """
     # nsnps in this chunk
     nsnps = chunkdf.shape[0]
-
-    # chrom, pos as factor, integers
-    arrpos = chunkdf.iloc[:, [0, 1]].values
-    arrpos[:, 0] = pd.factorize(arrpos[:, 0])[0]
-    arrpos = arrpos.astype(np.int64)
 
     # base calls as int8 (0/1/2/3/255)
     ref = np.frombuffer(''.join(chunkdf.iloc[:, 3]).encode('ascii'), dtype=np.uint8)
@@ -460,16 +532,20 @@ def chunk_to_arrs(chunkdf, nsamples):
     alts2[lens == 2] = [i[1] for i in sas[lens == 2]]
     alts3[lens == 3] = [i[2] for i in sas[lens == 3]]
 
-    # genotypes as int8 
-    g0 = v_return_g(chunkdf.iloc[:, 9:], 0)
-    g1 = v_return_g(chunkdf.iloc[:, 9:], 2)
+    # genotypes and per-sample depth from row-specific FORMAT layouts.
+    g0, g1, sample_dp = _extract_format_arrays(chunkdf, nsamples)
     genos = np.zeros((nsnps, nsamples, 2), dtype=np.uint8)
     genos[:, :, 0] = g0
     genos[:, :, 1] = g1
 
+    site_qual = np.array(
+        [_safe_parse_qual(value) for value in chunkdf.iloc[:, 5]],
+        dtype=np.float32,
+    )
+
     # numba func to fill
     snps = jfill_snps(nsnps, nsamples, ref, g0, g1, alts1, alts2, alts3)
-    return genos, snps, ref
+    return genos, snps, ref, sample_dp, site_qual
 
 
 def jfill_snps(nsnps, nsamples, ref, g0, g1, alts1, alts2, alts3):

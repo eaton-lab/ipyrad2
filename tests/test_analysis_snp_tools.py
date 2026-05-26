@@ -177,6 +177,46 @@ def _write_assembly_style_snps_h5(path: Path) -> Path:
     return path
 
 
+def _write_depth_qual_snps_h5(path: Path) -> Path:
+    string_dtype = h5py.string_dtype(encoding="utf-8")
+    genos = np.array(
+        [
+            [[0, 0, ord("A")], [0, 0, ord("A")]],
+            [[0, 1, ord("R")], [0, 1, ord("R")]],
+        ],
+        dtype=np.uint8,
+    )
+    snpsmap = np.array(
+        [
+            [0, 0, 0, 0, 10],
+            [1, 0, 0, 0, 20],
+        ],
+        dtype=np.uint32,
+    )
+    sample_dp = np.array(
+        [
+            [5, 1],
+            [5, 5],
+        ],
+        dtype=np.uint32,
+    )
+    site_qual = np.array([60.0, 10.0], dtype=np.float32)
+    with h5py.File(path, "w") as io5:
+        io5.attrs["version"] = 2.0
+        io5.attrs["names"] = np.array(["s1", "s2"], dtype=string_dtype)
+        io5.attrs["nsnps"] = int(snpsmap.shape[0])
+        io5.create_dataset("genos", data=genos)
+        io5.create_dataset(
+            "reference",
+            data=np.array([ord("A"), ord("A")], dtype=np.uint8),
+        )
+        io5.create_dataset("sample_dp", data=sample_dp)
+        io5.create_dataset("site_qual", data=site_qual)
+        ds = io5.create_dataset("snpsmap", data=snpsmap)
+        ds.attrs["columns"] = np.array(SNPSMAP_COLUMNS, dtype=string_dtype)
+    return path
+
+
 def _write_imap_files(tmp_path: Path, *, include_reference: bool) -> tuple[Path, Path]:
     imap_path = tmp_path / "imap.tsv"
     if include_reference:
@@ -201,9 +241,11 @@ def _write_vcf(path: Path) -> Path:
                 "##fileformat=VCFv4.2",
                 "##source=testvcf",
                 "##reference=testref.fa",
+                "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
+                "##FORMAT=<ID=DP,Number=1,Type=Integer,Description=\"Depth\">",
                 "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\ts2",
-                "chr1\t1\t.\tA\tG\t.\tPASS\t.\tGT\t0/0\t0/1",
-                "chr1\t5\t.\tC\tT\t.\tPASS\t.\tGT\t1/1\t0/1",
+                "chr1\t1\t.\tA\tG\t60\tPASS\t.\tGT:DP\t0/0:8\t0/1:7",
+                "chr1\t5\t.\tC\tT\t15\tPASS\t.\tDP:GT\t6:1/1\t9:0/1",
             ]
         )
         + "\n",
@@ -467,7 +509,13 @@ def test_run_snps_extracter_logs_extraction_then_no_imputation_then_export_summa
 
     assert extraction_idx < imputation_idx < export_idx
     assert any(
+        "snpex SNP imputation: no imputation performed" in msg
+        and "prepared_matrix_scope=subsampled_unlinked" in msg
+        for msg in messages
+    )
+    assert any(
         "snpex exported SNP summary:" in msg
+        and "prepared_matrix_scope=subsampled_unlinked" in msg
         and "linked_post_filter_snps=3" in msg
         and "exported_snps=2" in msg
         for msg in messages
@@ -520,6 +568,83 @@ def test_snps_extracter_defaults_missing_minmap_to_zero_effect_per_population(
     assert int(tool.stats["filter_by_minmap"]) == 0
     assert int(tool.stats["post_filter_snps"]) == 2
     assert tool.snpsmap.shape[0] == 2
+
+
+def test_snps_extracter_masks_low_depth_genotypes_before_site_filters(tmp_path: Path) -> None:
+    h5 = _write_depth_qual_snps_h5(tmp_path / "snps.hdf5")
+
+    tool = SNPsExtracter(
+        data=h5,
+        min_sample_coverage=2,
+        max_sample_missing=1.0,
+        min_minor_allele_frequency=0.0,
+        imap=None,
+        minmap=None,
+        min_genotype_depth=2,
+        min_site_qual=0.0,
+        include_reference=False,
+        cores=1,
+    )
+    tool.run(log_level="INFO")
+
+    assert tool.genos.shape == (2, 1)
+    assert int(tool.stats["masked_genotypes_by_min_depth"]) == 1
+    assert int(tool.stats["filter_by_mincov"]) == 1
+    assert int(tool.stats["filter_by_min_site_qual"]) == 0
+
+
+def test_snps_extracter_filters_low_site_qual_sites(tmp_path: Path) -> None:
+    h5 = _write_depth_qual_snps_h5(tmp_path / "snps.hdf5")
+
+    tool = SNPsExtracter(
+        data=h5,
+        min_sample_coverage=1,
+        max_sample_missing=1.0,
+        min_minor_allele_frequency=0.0,
+        imap=None,
+        minmap=None,
+        min_genotype_depth=0,
+        min_site_qual=20.0,
+        include_reference=False,
+        cores=1,
+    )
+    tool.run(log_level="INFO")
+
+    assert tool.genos.shape == (2, 1)
+    assert int(tool.stats["filter_by_min_site_qual"]) == 1
+    assert int(tool.stats["masked_genotypes_by_min_depth"]) == 0
+
+
+def test_snps_extracter_rejects_new_filters_on_legacy_hdf5(tmp_path: Path) -> None:
+    h5 = _write_snps_h5(tmp_path / "snps.hdf5")
+
+    with pytest.raises(IPyradError, match="sample_dp"):
+        SNPsExtracter(
+            data=h5,
+            min_sample_coverage=1,
+            max_sample_missing=1.0,
+            min_minor_allele_frequency=0.0,
+            imap=None,
+            minmap=None,
+            min_genotype_depth=2,
+            min_site_qual=0.0,
+            include_reference=False,
+            cores=1,
+        )
+
+    with pytest.raises(IPyradError, match="site_qual"):
+        SNPsExtracter(
+            data=h5,
+            min_sample_coverage=1,
+            max_sample_missing=1.0,
+            min_minor_allele_frequency=0.0,
+            imap=None,
+            minmap=None,
+            min_genotype_depth=0,
+            min_site_qual=20.0,
+            include_reference=False,
+            cores=1,
+        )
 
 
 def test_global_snpex_imputation_requires_reference_dataset(tmp_path: Path) -> None:
@@ -785,6 +910,14 @@ def test_run_vcf_to_hdf5_writes_snp_compatible_database(tmp_path: Path) -> None:
         assert np.array_equal(
             io5["reference"][:],
             np.array([ord("A"), ord("C")], dtype=np.uint8),
+        )
+        np.testing.assert_array_equal(
+            io5["sample_dp"][:],
+            np.array([[8, 6], [7, 9]], dtype=np.uint32),
+        )
+        np.testing.assert_allclose(
+            io5["site_qual"][:],
+            np.array([60.0, 15.0], dtype=np.float32),
         )
 
     tool = SNPsExtracter(

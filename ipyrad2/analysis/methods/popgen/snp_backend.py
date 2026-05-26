@@ -40,6 +40,8 @@ def run_snp_popgen(
     random_seed: int | None,
     cores: int,
     log_level: str,
+    min_genotype_depth: int = 0,
+    min_site_qual: float = 0.0,
 ) -> PopgenResult:
     """Compute SNP-backed population-genetic summaries from filtered genotypes."""
     unsupported = sorted(set(requested_stats).difference(SNP_STATS))
@@ -54,6 +56,8 @@ def run_snp_popgen(
         min_sample_coverage=min_sample_coverage,
         max_sample_missing=max_sample_missing,
         min_minor_allele_frequency=min_minor_allele_frequency,
+        min_genotype_depth=min_genotype_depth,
+        min_site_qual=min_site_qual,
         imap=imap,
         minmap=minmap,
         exclude=exclude,
@@ -275,6 +279,8 @@ def run_snp_popgen(
         "subsample_unlinked": subsample_unlinked,
         "random_seed": random_seed,
         "min_minor_allele_frequency": min_minor_allele_frequency,
+        "min_genotype_depth": tool.min_genotype_depth,
+        "min_site_qual": tool.min_site_qual,
         "linked_post_filter_snps": int(tool.stats["post_filter_snps"]),
         "exported_snps": int(view.genos.shape[1]),
     }

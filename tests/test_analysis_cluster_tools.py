@@ -212,6 +212,19 @@ def test_run_snmf_method_logs_output_directory_once(tmp_path: Path) -> None:
     )
 
     assert extraction_idx < imputation_idx < prepared_idx < selected_idx
+    assert any(
+        "snmf SNP imputation:" in msg
+        and "prepared_matrix_scope=subsampled_unlinked" in msg
+        and "snp_columns_with_missing=" in msg
+        and "missing_genotype_cells=" in msg
+        for msg in messages
+    )
+    assert any(
+        "snmf prepared SNP summary:" in msg
+        and "prepared_matrix_scope=subsampled_unlinked" in msg
+        and "prepared_snps=" in msg
+        for msg in messages
+    )
     assert not any("subsampled " in msg for msg in messages)
     assert any(
         msg.strip() == f"wrote sNMF outputs to {(tmp_path / 'OUT').resolve()}"

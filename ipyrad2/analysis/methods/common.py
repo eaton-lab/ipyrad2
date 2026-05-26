@@ -31,6 +31,18 @@ class ImputationSummary:
 
 
 @dataclass
+class MatrixMissingnessSummary:
+    """Shared missing-data counts and fractions for one genotype matrix."""
+
+    missing_snp_count: int
+    total_snps: int
+    missing_snp_fraction: float
+    missing_genotype_count: int
+    total_genotypes: int
+    missing_genotype_fraction: float
+
+
+@dataclass
 class NumericalInput:
     """Filtered SNP data prepared for a numerical analysis method."""
 
@@ -50,6 +62,29 @@ class PreparedSNPViewSummary:
     selected_snps: int
     selected_snp_containing_linkage_blocks: int
     subsample: bool
+
+
+def summarize_matrix_missingness(matrix: np.ndarray) -> MatrixMissingnessSummary:
+    """Summarize missing genotype cells and SNP columns for one matrix."""
+    missing_mask = matrix == _MISSING_GENO
+    missing_genotype_count = int(np.sum(missing_mask))
+    total_genotypes = int(matrix.size)
+    total_snps = int(matrix.shape[1]) if matrix.ndim == 2 else 0
+    missing_snp_count = (
+        int(np.count_nonzero(np.any(missing_mask, axis=0)))
+        if total_snps
+        else 0
+    )
+    return MatrixMissingnessSummary(
+        missing_snp_count=missing_snp_count,
+        total_snps=total_snps,
+        missing_snp_fraction=(missing_snp_count / total_snps) if total_snps else 0.0,
+        missing_genotype_count=missing_genotype_count,
+        total_genotypes=total_genotypes,
+        missing_genotype_fraction=(
+            missing_genotype_count / total_genotypes if total_genotypes else 0.0
+        ),
+    )
 
 
 def require_hdf5_input(data: Path | str, tool_name: str) -> Path:
@@ -96,6 +131,8 @@ def run_snps_extracter_for_method(
     include_reference: bool,
     cores: int,
     log_level: str,
+    min_genotype_depth: int = 0,
+    min_site_qual: float = 0.0,
 ) -> SNPsExtracter:
     """Run the canonical SNP extracter once for a phase-2 method."""
     tool = SNPsExtracter(
@@ -105,6 +142,8 @@ def run_snps_extracter_for_method(
         min_minor_allele_frequency=min_minor_allele_frequency,
         imap=imap,
         minmap=minmap,
+        min_genotype_depth=min_genotype_depth,
+        min_site_qual=min_site_qual,
         exclude=exclude,
         include_reference=include_reference,
         cores=cores,
@@ -176,13 +215,34 @@ def _format_fraction_range(values: list[float]) -> str:
     return f"{low:.1%}" if np.isclose(low, high) else f"{low:.1%}-{high:.1%}"
 
 
+def describe_prepared_matrix_scope(subsample: bool) -> tuple[str, str]:
+    """Return a stable scope label and explanation for the prepared matrix."""
+    if subsample:
+        return (
+            "subsampled_unlinked",
+            "one SNP per linkage block selected for the downstream method",
+        )
+    return (
+        "linked_post_filter",
+        "full linked post-filter SNP matrix used directly",
+    )
+
+
 def log_snp_imputation_summary(
     tool: str,
     summaries: ImputationSummary | Iterable[ImputationSummary] | None,
+    *,
+    subsample: bool,
 ) -> None:
     """Log one shared SNP-imputation summary for one run."""
+    matrix_scope, scope_reason = describe_prepared_matrix_scope(subsample)
     if summaries is None:
-        logger.info("{} SNP imputation: no imputation performed", tool)
+        logger.info(
+            "{} SNP imputation: no imputation performed prepared_matrix_scope={} ({})",
+            tool,
+            matrix_scope,
+            scope_reason,
+        )
         return
 
     if isinstance(summaries, ImputationSummary):
@@ -190,7 +250,12 @@ def log_snp_imputation_summary(
     else:
         items = list(summaries)
     if not items:
-        logger.info("{} SNP imputation: no imputation performed", tool)
+        logger.info(
+            "{} SNP imputation: no imputation performed prepared_matrix_scope={} ({})",
+            tool,
+            matrix_scope,
+            scope_reason,
+        )
         return
 
     algorithms = sorted({summary.algorithm for summary in items})
@@ -201,9 +266,12 @@ def log_snp_imputation_summary(
     if len(items) == 1:
         summary = items[0]
         logger.info(
-            "{} SNP imputation: algorithm={} snps={}/{} ({:.1%}) genotypes={}/{} ({:.1%})",
+            "{} SNP imputation: algorithm={} prepared_matrix_scope={} ({}) "
+            "snp_columns_with_missing={}/{} ({:.1%}) missing_genotype_cells={}/{} ({:.1%})",
             tool,
             algorithm,
+            matrix_scope,
+            scope_reason,
             summary.imputed_snp_count,
             summary.total_snps,
             summary.imputed_snp_fraction,
@@ -214,10 +282,13 @@ def log_snp_imputation_summary(
         return
 
     logger.info(
-        "{} SNP imputation across {} replicates: algorithm={} snps={}/{} ({}) genotypes={}/{} ({})",
+        "{} SNP imputation across {} replicates: algorithm={} prepared_matrix_scope={} ({}) "
+        "snp_columns_with_missing={}/{} ({}) missing_genotype_cells={}/{} ({})",
         tool,
         len(items),
         algorithm,
+        matrix_scope,
+        scope_reason,
         _format_int_range([summary.imputed_snp_count for summary in items]),
         _format_int_range([summary.total_snps for summary in items]),
         _format_fraction_range([summary.imputed_snp_fraction for summary in items]),
@@ -234,10 +305,15 @@ def log_snp_view_summary(
     view_label: str,
 ) -> None:
     """Log one prepared or exported SNP-view count summary."""
+    matrix_scope, scope_reason = describe_prepared_matrix_scope(summary.subsample)
     logger.info(
-        "{} {} SNP summary: samples={} linked_post_filter_snps={} linked_post_filter_snp_containing_linkage_blocks={} {}_snps={} {}_snp_containing_linkage_blocks={} subsample={}",
+        "{} {} SNP summary: prepared_matrix_scope={} ({}) samples={} "
+        "linked_post_filter_snps={} linked_post_filter_snp_containing_linkage_blocks={} "
+        "{}_snps={} {}_snp_containing_linkage_blocks={} subsample={}",
         tool,
         view_label,
+        matrix_scope,
+        scope_reason,
         summary.samples_retained,
         summary.linked_post_filter_snps,
         summary.linked_post_filter_snp_containing_linkage_blocks,
@@ -284,25 +360,15 @@ def resolve_imputation_algorithm_label(impute_method: str | None) -> str:
 
 def summarize_imputation(matrix: np.ndarray, impute_method: str | None) -> ImputationSummary:
     """Summarize missing-data imputation needs for one genotype matrix."""
-    missing_mask = matrix == _MISSING_GENO
-    imputed_genotype_count = int(np.sum(missing_mask))
-    total_genotypes = int(matrix.size)
-    total_snps = int(matrix.shape[1]) if matrix.ndim == 2 else 0
-    imputed_snp_count = (
-        int(np.count_nonzero(np.any(missing_mask, axis=0)))
-        if total_snps
-        else 0
-    )
+    missingness = summarize_matrix_missingness(matrix)
     return ImputationSummary(
         algorithm=resolve_imputation_algorithm_label(impute_method),
-        imputed_snp_count=imputed_snp_count,
-        total_snps=total_snps,
-        imputed_snp_fraction=(imputed_snp_count / total_snps) if total_snps else 0.0,
-        imputed_genotype_count=imputed_genotype_count,
-        total_genotypes=total_genotypes,
-        imputed_genotype_fraction=(
-            imputed_genotype_count / total_genotypes if total_genotypes else 0.0
-        ),
+        imputed_snp_count=missingness.missing_snp_count,
+        total_snps=missingness.total_snps,
+        imputed_snp_fraction=missingness.missing_snp_fraction,
+        imputed_genotype_count=missingness.missing_genotype_count,
+        total_genotypes=missingness.total_genotypes,
+        imputed_genotype_fraction=missingness.missing_genotype_fraction,
     )
 
 

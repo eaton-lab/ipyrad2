@@ -110,6 +110,8 @@ class PopgenRequest:
     min_sample_coverage: float
     max_sample_missing: float
     min_minor_allele_frequency: float
+    min_genotype_depth: int
+    min_site_qual: float
     imap: Any
     minmap: Any
     exclude: tuple[str, ...]

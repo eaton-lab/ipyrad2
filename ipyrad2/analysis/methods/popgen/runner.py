@@ -181,6 +181,8 @@ def _build_popgen_request(
     min_sample_coverage: float,
     max_sample_missing: float,
     min_minor_allele_frequency: float,
+    min_genotype_depth: int = 0,
+    min_site_qual: float = 0.0,
     imap,
     minmap,
     exclude,
@@ -204,6 +206,8 @@ def _build_popgen_request(
         min_sample_coverage=min_sample_coverage,
         max_sample_missing=max_sample_missing,
         min_minor_allele_frequency=min_minor_allele_frequency,
+        min_genotype_depth=min_genotype_depth,
+        min_site_qual=min_site_qual,
         imap=imap,
         minmap=minmap,
         exclude=tuple() if exclude is None else tuple(exclude),
@@ -250,6 +254,8 @@ def run_popgen_method(
     step_size: int | None = None,
     loci_per_window: int | None = None,
     locus_step: int | None = None,
+    min_genotype_depth: int = 0,
+    min_site_qual: float = 0.0,
 ) -> None:
     """Run the genome-wide population-genetic analysis workflow."""
     data = Path(data).expanduser().absolute()
@@ -285,6 +291,14 @@ def run_popgen_method(
             raise IPyradError(
                 "--min-minor-allele-frequency is only supported on SNP-backed popgen runs."
             )
+        if min_genotype_depth:
+            raise IPyradError(
+                "--min-genotype-depth is only supported on SNP-backed popgen runs."
+            )
+        if min_site_qual:
+            raise IPyradError(
+                "--min-site-qual is only supported on SNP-backed popgen runs."
+            )
         result = run_sequence_popgen(
             data=data,
             requested_stats=requested_stats,
@@ -308,6 +322,8 @@ def run_popgen_method(
             min_sample_coverage=min_sample_coverage,
             max_sample_missing=max_sample_missing,
             min_minor_allele_frequency=min_minor_allele_frequency,
+            min_genotype_depth=min_genotype_depth,
+            min_site_qual=min_site_qual,
             imap=imap,
             minmap=minmap,
             exclude=exclude,
@@ -329,6 +345,8 @@ def run_popgen_method(
         min_sample_coverage=min_sample_coverage,
         max_sample_missing=max_sample_missing,
         min_minor_allele_frequency=min_minor_allele_frequency,
+        min_genotype_depth=min_genotype_depth,
+        min_site_qual=min_site_qual,
         imap=imap,
         minmap=minmap,
         exclude=exclude,
@@ -411,6 +429,8 @@ def run_popgen_method(
                 "min_sample_coverage": request.min_sample_coverage,
                 "max_sample_missing": request.max_sample_missing,
                 "min_minor_allele_frequency": request.min_minor_allele_frequency,
+                "min_genotype_depth": request.min_genotype_depth,
+                "min_site_qual": request.min_site_qual,
                 "include_reference": request.include_reference,
                 "exclude": list(request.exclude),
                 "imap": request.imap,

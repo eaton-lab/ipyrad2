@@ -43,6 +43,8 @@ class BabaRequest:
     imap: Path | None
     minmap: Path | None
     min_sample_coverage: int
+    min_genotype_depth: int
+    min_site_qual: float
     exclude: tuple[str, ...]
     include_reference: bool
     resampling: str

@@ -30,10 +30,12 @@ STATS_HEADER = [
     "samples",
     "pre_filter_snps",
     "pre_filter_percent_missing",
+    "masked_genotypes_by_min_depth",
     "filter_by_indels_present",
     "filter_by_non_biallelic",
     "filter_by_mincov",
     "filter_by_minmap",
+    "filter_by_min_site_qual",
     "filter_by_invariant_after_subsampling",
     "filter_by_minor_allele_frequency",
     "post_filter_snps",
@@ -100,6 +102,8 @@ class SNPsExtracter:
         min_minor_allele_frequency: float,
         imap: Path | str | Dict | None,
         minmap: Path | Dict | None,
+        min_genotype_depth: int = 0,
+        min_site_qual: float = 0.0,
         exclude: Path | str | List | None = None,
         include_reference: bool = False,
         cores: int = 1,
@@ -114,6 +118,8 @@ class SNPsExtracter:
         self.mincov = min_sample_coverage
         self.max_sample_missing = min(1.0, max(0.0, max_sample_missing))
         self.maf = min_minor_allele_frequency
+        self.min_genotype_depth = max(0, int(min_genotype_depth))
+        self.min_site_qual = max(0.0, float(min_site_qual))
         self.exclude = exclude if exclude else []
         self.include_reference = include_reference
         self.cores = cores
@@ -133,11 +139,14 @@ class SNPsExtracter:
         self.snpsmap: np.ndarray | None = None
         self.reference: np.ndarray | None = None
         self.has_reference_dataset = False
+        self.has_sample_dp_dataset = False
+        self.has_site_qual_dataset = False
         self.synthetic_reference_row = False
         self.stats: pd.Series | None = None
         self.sample_missing: pd.Series | None = None
 
         self._set_nsnps_and_check_h5_file_format()
+        self._check_requested_h5_capabilities()
         self._get_exclude(self.exclude)
         self._get_snames_and_sidxs_subset(self.imap)
         self._get_imap_minmap(self.imap, self.minmap)
@@ -274,9 +283,24 @@ class SNPsExtracter:
             if "genos" not in io5:
                 raise IPyradError(f"SNP HDF5 is missing the required `genos` dataset: {self.data}")
             self.has_reference_dataset = "reference" in io5
+            self.has_sample_dp_dataset = "sample_dp" in io5
+            self.has_site_qual_dataset = "site_qual" in io5
             self.dbnames, self.dbname_to_genos_index = self._resolve_snp_sample_names(io5)
             self.snames = list(self.dbnames)
             self.dbname_to_index = {name: idx for idx, name in enumerate(self.dbnames)}
+
+    def _check_requested_h5_capabilities(self) -> None:
+        """Reject legacy HDF5 files when new optional SNP filters are requested."""
+        if self.min_genotype_depth > 0 and not self.has_sample_dp_dataset:
+            raise IPyradError(
+                "The `--min-genotype-depth` filter requires the HDF5 `sample_dp` dataset. "
+                "Rebuild the SNP HDF5 with a current assemble or `ipyrad2 vcf2hdf5` run."
+            )
+        if self.min_site_qual > 0 and not self.has_site_qual_dataset:
+            raise IPyradError(
+                "The `--min-site-qual` filter requires the HDF5 `site_qual` dataset. "
+                "Rebuild the SNP HDF5 with a current assemble or `ipyrad2 vcf2hdf5` run."
+            )
 
     def _resolve_snp_sample_names(
         self, io5: h5py.File
@@ -404,6 +428,7 @@ class SNPsExtracter:
         reference_arrs = []
         nmissing = 0
         ntotal = 0
+        depth_masked_genotypes = 0
 
         if self.cores == 1:
             results = {}
@@ -418,9 +443,9 @@ class SNPsExtracter:
 
         for job in results:
             try:
-                snpsmap, snps, genos, reference, masks, nmiss, ntot = results[job].get()
+                snpsmap, snps, genos, reference, masks, nmiss, ntot, ndp = results[job].get()
             except (NameError, AttributeError):
-                snpsmap, snps, genos, reference, masks, nmiss, ntot = results[job]
+                snpsmap, snps, genos, reference, masks, nmiss, ntot, ndp = results[job]
             snpsmap_arrs.append(snpsmap)
             snps_arrs.append(snps)
             genos_arrs.append(genos)
@@ -429,6 +454,7 @@ class SNPsExtracter:
                 reference_arrs.append(reference)
             nmissing += nmiss
             ntotal += ntot
+            depth_masked_genotypes += ndp
 
         if not mask_arrs:
             raise ValueError("No SNPs found.")
@@ -450,12 +476,14 @@ class SNPsExtracter:
         stats.samples = len(self.snames)
         stats.pre_filter_snps = self.nsnps
         stats.pre_filter_percent_missing = 100 * (nmissing / ntotal) if ntotal else 100.0
+        stats.masked_genotypes_by_min_depth = depth_masked_genotypes
         stats.filter_by_indels_present = mask[:, 0].sum()
         stats.filter_by_non_biallelic = mask[:, 1].sum()
         stats.filter_by_mincov = mask[:, 2].sum()
         stats.filter_by_minmap = mask[:, 3].sum()
-        stats.filter_by_invariant_after_subsampling = mask[:, 4].sum()
-        stats.filter_by_minor_allele_frequency = mask[:, 5].sum()
+        stats.filter_by_min_site_qual = mask[:, 4].sum()
+        stats.filter_by_invariant_after_subsampling = mask[:, 5].sum()
+        stats.filter_by_minor_allele_frequency = mask[:, 6].sum()
         stats.post_filter_snps = snpsmap.shape[0]
         stats.post_filter_snp_containing_linkage_blocks = np.unique(snpsmap[:, 0]).size
         stats.post_filter_percent_missing = 100 * missing_percent
@@ -479,11 +507,25 @@ class SNPsExtracter:
         logger.info("SNP extraction summary")
         pretty = self.stats.map(lambda value: f"{value:.3f}".rstrip("0").rstrip("."))
         for key, value in pretty.items():
+            if key == "pre_filter_percent_missing":
+                logger.info(
+                    "filter statistic {}: {} (linked genotype cells missing before site filtering)",
+                    key,
+                    value,
+                )
+                continue
+            if key == "post_filter_percent_missing":
+                logger.info(
+                    "filter statistic {}: {} (linked post-filter genotype cells missing before optional subsampling)",
+                    key,
+                    value,
+                )
+                continue
             logger.info("filter statistic {}: {}", key, value)
 
     def _get_masks_chunk(
         self, start: int
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray, int, int]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray, int, int, int]:
         """Load one chunk from HDF5 and calculate filters."""
         chunkslice = slice(start, start + CHUNKSIZE)
         with h5py.File(self.data, "r") as io5:
@@ -491,6 +533,8 @@ class SNPsExtracter:
             genos_ds = io5["genos"][:, :, :2]
             snpsmap = io5["snpsmap"]
             reference = io5["reference"] if "reference" in io5 else None
+            sample_dp_ds = io5["sample_dp"] if "sample_dp" in io5 else None
+            site_qual_ds = io5["site_qual"] if "site_qual" in io5 else None
 
             start = chunkslice.start
             end = min(chunkslice.stop, genos_ds.shape[1])
@@ -498,8 +542,14 @@ class SNPsExtracter:
 
             snpsmap = snpsmap[start:end, :]
             ref = reference[start:end].astype(np.uint8) if reference is not None else None
+            site_qual = (
+                site_qual_ds[start:end].astype(np.float32, copy=False)
+                if site_qual_ds is not None
+                else None
+            )
             snps_rows = []
             genos_rows = []
+            dp_rows = []
             for name in self.snames:
                 row_index = self.dbname_to_genos_index[name]
                 if row_index is None:
@@ -510,16 +560,35 @@ class SNPsExtracter:
                         )
                     snps_rows.append(ref.copy())
                     genos_rows.append(np.zeros((nsnps, 2), dtype=np.uint8))
+                    dp_rows.append(np.full(nsnps, np.iinfo(np.uint32).max, dtype=np.uint32))
                 else:
                     snps_rows.append(snps_ds[row_index, start:end])
                     genos_rows.append(genos_ds[row_index, start:end, :].astype(np.uint8))
+                    if sample_dp_ds is not None:
+                        dp_rows.append(sample_dp_ds[row_index, start:end].astype(np.uint32))
             snps = np.stack(snps_rows, axis=0).astype(np.uint8, copy=False)
             genos = np.stack(genos_rows, axis=0).astype(np.uint8, copy=False)
+            sample_dp = (
+                np.stack(dp_rows, axis=0).astype(np.uint32, copy=False)
+                if sample_dp_ds is not None
+                else None
+            )
 
             nmissing = np.sum(genos == _MISSING_GENO)
             ntotal = genos.size
+            depth_masked_genotypes = 0
 
-            masks, diplos = self._masks_filter(nsnps, snps, genos)
+            if self.min_genotype_depth > 0 and sample_dp is not None:
+                called_mask = np.any(genos != _MISSING_GENO, axis=2)
+                depth_mask = called_mask & (sample_dp < self.min_genotype_depth)
+                if np.any(depth_mask):
+                    genos = genos.copy()
+                    snps = snps.copy()
+                    genos[depth_mask] = _MISSING_GENO
+                    snps[depth_mask] = _MISSING_SNP
+                    depth_masked_genotypes = int(np.count_nonzero(depth_mask))
+
+            masks, diplos = self._masks_filter(nsnps, snps, genos, site_qual=site_qual)
             flat_mask = np.invert(masks.sum(axis=1).astype(bool))
 
             snpsmap = snpsmap[flat_mask]
@@ -528,13 +597,18 @@ class SNPsExtracter:
             if ref is not None:
                 ref = ref[flat_mask]
 
-        return snpsmap, snps, diplos, ref, masks, nmissing, ntotal
+        return snpsmap, snps, diplos, ref, masks, nmissing, ntotal, depth_masked_genotypes
 
     def _masks_filter(
-        self, nsnps: int, snps: np.ndarray, genos: np.ndarray
+        self,
+        nsnps: int,
+        snps: np.ndarray,
+        genos: np.ndarray,
+        *,
+        site_qual: np.ndarray | None = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Return arrays with filter masks and diploid genotypes."""
-        masks = np.zeros((nsnps, 6), dtype=bool)
+        masks = np.zeros((nsnps, 7), dtype=bool)
 
         masks[:, 0] = np.any(snps == 45, axis=0)
         masks[:, 1] = np.sum(genos == 2, axis=2).sum(axis=0).astype(bool)
@@ -562,11 +636,18 @@ class SNPsExtracter:
             else:
                 raise ValueError("minmap dictionary malformed.")
 
+        if self.min_site_qual > 0:
+            if site_qual is None:
+                raise IPyradError(
+                    "The `--min-site-qual` filter requires the HDF5 `site_qual` dataset."
+                )
+            masks[:, 4] = np.isnan(site_qual) | (site_qual < self.min_site_qual)
+
         diplo_common = (
             genomask.sum(axis=2).mean(axis=0).round().astype(int).data
         )
         diplos = genomask.sum(axis=2).data
-        masks[:, 4] = np.all(diplo_common == diplos, axis=0)
+        masks[:, 5] = np.all(diplo_common == diplos, axis=0)
 
         called_0 = (genomask == 0).sum(axis=2).sum(axis=0).data
         called_1 = (genomask == 1).sum(axis=2).sum(axis=0).data
@@ -577,7 +658,7 @@ class SNPsExtracter:
             else:
                 freqs = called_1 / (called_0 + called_1)
                 freqs[freqs > 0.5] = 1 - freqs[freqs > 0.5]
-            masks[:, 5] = freqs < self.maf
+            masks[:, 6] = freqs < self.maf
 
         diplos[snps == _MISSING_SNP] = _MISSING_GENO
         return masks, diplos
@@ -1050,6 +1131,8 @@ def _write_snps_stats(
         out.write(f"minmap: {extracter.minmap}\n")
         out.write(f"include_reference: {extracter.include_reference}\n")
         out.write(f"max_sample_missing: {extracter.max_sample_missing}\n")
+        out.write(f"min_genotype_depth: {extracter.min_genotype_depth}\n")
+        out.write(f"min_site_qual: {extracter.min_site_qual}\n")
         out.write(f"subsample: {subsample}\n")
         out.write(f"random_seed: {random_seed}\n")
         out.write(f"impute_method: {impute_method if impute_method is not None else 'none'}\n")
@@ -1108,6 +1191,8 @@ def run_snps_extracter(
     min_minor_allele_frequency: float,
     imap: Path | str | Dict | None,
     minmap: Path | Dict | None,
+    min_genotype_depth: int = 0,
+    min_site_qual: float = 0.0,
     exclude: Path | str | List | None = None,
     include_reference: bool = False,
     cores: int = 1,
@@ -1174,6 +1259,8 @@ def run_snps_extracter(
         min_sample_coverage=min_sample_coverage,
         max_sample_missing=max_sample_missing,
         min_minor_allele_frequency=min_minor_allele_frequency,
+        min_genotype_depth=min_genotype_depth,
+        min_site_qual=min_site_qual,
         imap=imap,
         minmap=minmap,
         exclude=exclude,
@@ -1192,7 +1279,7 @@ def run_snps_extracter(
         impute_method=normalized_impute,
         random_seed=random_seed,
     )
-    log_snp_imputation_summary("snpex", prepared.imputation_summary)
+    log_snp_imputation_summary("snpex", prepared.imputation_summary, subsample=subsample)
     log_snp_view_summary(
         "snpex",
         summarize_prepared_snp_view(tool, prepared.view, subsample=subsample),
