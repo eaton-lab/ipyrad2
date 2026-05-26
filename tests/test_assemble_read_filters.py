@@ -4477,6 +4477,221 @@ def test_run_assembler_requires_at_least_one_bam_with_loci_bed(tmp_path: Path) -
         )
 
 
+def test_run_assembler_reports_missing_rad_bam_paths_cleanly(tmp_path: Path) -> None:
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    missing_bam = tmp_path / "test-data" / "MAP" / "*.bam"
+
+    with pytest.raises(
+        IPyradError,
+        match=r"No BAM files found for --rad-bams: .*test-data.*/MAP/\*\.bam\. Check the directory path or shell wildcard expansion\.",
+    ):
+        run_assembler(
+            rad_bams=[missing_bam],
+            wgs_bams=None,
+            reference=reference,
+            outdir=tmp_path / "OUT",
+            name="assembly",
+            loci_bed=None,
+            min_map_q=10,
+            max_tlen=None,
+            max_softclip=None,
+            max_nm=None,
+            min_site_q=13,
+            min_geno_q=13,
+            min_base_q=13,
+            min_sample_depth=1,
+            min_locus_sample_coverage=1,
+            min_locus_trim_sample_coverage=1,
+            min_locus_length=25,
+            min_locus_merge_distance=300,
+            max_locus_hetero_frequency=0.3,
+            max_locus_variant_frequency=1.0,
+            max_sample_hetero_frequency=0.10,
+            softclip_len_threshold=100,
+            softclip_frac_max=0.5,
+            depth_z_max=7.0,
+            third_frac_cut=0.10,
+            min_3allele_sites=2,
+            maf_threshold=0.20,
+            max_sites_above_maf=8,
+            paralog_fail_frac_max=0.10,
+            populations=None,
+            rename=None,
+            masks=None,
+            cores=2,
+            threads=1,
+            force=False,
+            log_level="WARNING",
+        )
+
+
+def test_run_assembler_reports_missing_wgs_bam_paths_cleanly_with_loci_bed(
+    tmp_path: Path,
+) -> None:
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    loci_bed = tmp_path / "loci.bed"
+    loci_bed.write_text("chr1\t0\t4\n", encoding="utf-8")
+    missing_bam = tmp_path / "test-data" / "MAP" / "*.bam"
+
+    with pytest.raises(
+        IPyradError,
+        match=r"No BAM files found for --wgs-bams: .*test-data.*/MAP/\*\.bam\. Check the directory path or shell wildcard expansion\.",
+    ):
+        run_assembler(
+            rad_bams=None,
+            wgs_bams=[missing_bam],
+            reference=reference,
+            outdir=tmp_path / "OUT",
+            name="assembly",
+            loci_bed=loci_bed,
+            min_map_q=10,
+            max_tlen=None,
+            max_softclip=None,
+            max_nm=None,
+            min_site_q=13,
+            min_geno_q=13,
+            min_base_q=13,
+            min_sample_depth=1,
+            min_locus_sample_coverage=1,
+            min_locus_trim_sample_coverage=1,
+            min_locus_length=25,
+            min_locus_merge_distance=300,
+            max_locus_hetero_frequency=0.3,
+            max_locus_variant_frequency=1.0,
+            max_sample_hetero_frequency=0.10,
+            softclip_len_threshold=100,
+            softclip_frac_max=0.5,
+            depth_z_max=7.0,
+            third_frac_cut=0.10,
+            min_3allele_sites=2,
+            maf_threshold=0.20,
+            max_sites_above_maf=8,
+            paralog_fail_frac_max=0.10,
+            populations=None,
+            rename=None,
+            masks=None,
+            cores=2,
+            threads=1,
+            force=False,
+            log_level="WARNING",
+        )
+
+
+def test_run_assembler_reports_mixed_existing_and_missing_bam_paths(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    existing_bam = tmp_path / "rad.bam"
+    existing_bam.write_text("", encoding="utf-8")
+    missing_bam = tmp_path / "missing.bam"
+
+    monkeypatch.setattr(
+        "ipyrad2.assembler.assemble.get_name_from_bam",
+        lambda _path: (_ for _ in ()).throw(AssertionError("get_name_from_bam should not be called")),
+    )
+
+    with pytest.raises(
+        IPyradError,
+        match=r"--rad-bams contains BAM paths that were not found: .*missing\.bam\. Check the directory path or shell wildcard expansion\.",
+    ):
+        run_assembler(
+            rad_bams=[existing_bam, missing_bam],
+            wgs_bams=None,
+            reference=reference,
+            outdir=tmp_path / "OUT",
+            name="assembly",
+            loci_bed=None,
+            min_map_q=10,
+            max_tlen=None,
+            max_softclip=None,
+            max_nm=None,
+            min_site_q=13,
+            min_geno_q=13,
+            min_base_q=13,
+            min_sample_depth=1,
+            min_locus_sample_coverage=1,
+            min_locus_trim_sample_coverage=1,
+            min_locus_length=25,
+            min_locus_merge_distance=300,
+            max_locus_hetero_frequency=0.3,
+            max_locus_variant_frequency=1.0,
+            max_sample_hetero_frequency=0.10,
+            softclip_len_threshold=100,
+            softclip_frac_max=0.5,
+            depth_z_max=7.0,
+            third_frac_cut=0.10,
+            min_3allele_sites=2,
+            maf_threshold=0.20,
+            max_sites_above_maf=8,
+            paralog_fail_frac_max=0.10,
+            populations=None,
+            rename=None,
+            masks=None,
+            cores=2,
+            threads=1,
+            force=False,
+            log_level="WARNING",
+        )
+
+
+def test_run_assembler_reports_missing_rad_and_wgs_bam_paths_together(
+    tmp_path: Path,
+) -> None:
+    reference = tmp_path / "ref.fa"
+    reference.write_text(">chr1\nACGT\n", encoding="utf-8")
+    rad_missing = tmp_path / "missing-rad.bam"
+    wgs_missing = tmp_path / "missing-wgs.bam"
+
+    with pytest.raises(IPyradError) as excinfo:
+        run_assembler(
+            rad_bams=[rad_missing],
+            wgs_bams=[wgs_missing],
+            reference=reference,
+            outdir=tmp_path / "OUT",
+            name="assembly",
+            loci_bed=None,
+            min_map_q=10,
+            max_tlen=None,
+            max_softclip=None,
+            max_nm=None,
+            min_site_q=13,
+            min_geno_q=13,
+            min_base_q=13,
+            min_sample_depth=1,
+            min_locus_sample_coverage=1,
+            min_locus_trim_sample_coverage=1,
+            min_locus_length=25,
+            min_locus_merge_distance=300,
+            max_locus_hetero_frequency=0.3,
+            max_locus_variant_frequency=1.0,
+            max_sample_hetero_frequency=0.10,
+            softclip_len_threshold=100,
+            softclip_frac_max=0.5,
+            depth_z_max=7.0,
+            third_frac_cut=0.10,
+            min_3allele_sites=2,
+            maf_threshold=0.20,
+            max_sites_above_maf=8,
+            paralog_fail_frac_max=0.10,
+            populations=None,
+            rename=None,
+            masks=None,
+            cores=2,
+            threads=1,
+            force=False,
+            log_level="WARNING",
+        )
+
+    message = str(excinfo.value)
+    assert "No BAM files found for --rad-bams:" in message
+    assert "No BAM files found for --wgs-bams:" in message
+    assert "\n" in message
+
+
 def test_run_assembler_rejects_negative_min_aligned_len(tmp_path: Path) -> None:
     reference = tmp_path / "ref.fa"
     reference.write_text(">chr1\nACGT\n", encoding="utf-8")
@@ -4673,6 +4888,7 @@ def test_filter_trim_locus_respects_min_locus_length() -> None:
         "s1": "A" * 20,
         "s2": "A" * 20,
         "s3": "A" * 20,
+        "s4": "A" * 20,
     }
 
     result_short = filter_trim_locus(
@@ -4698,6 +4914,59 @@ def test_filter_trim_locus_respects_min_locus_length() -> None:
 
     assert result_short[4]["min_length"] is False
     assert result_long[4]["min_length"] is True
+
+
+def test_filter_trim_locus_excludes_reference_from_final_min_sample_coverage() -> None:
+    header = "chr1:1-8"
+    locus_dict = {
+        "assembly_reference_sequence": "A" * 8,
+        "s1": "A" * 8,
+        "s2": "A" * 8,
+        "s3": "A" * 8,
+    }
+
+    _header, _names, _tseqs, _snps, filters, stats = filter_trim_locus(
+        header,
+        locus_dict,
+        min_locus_sample_coverage=4,
+        min_locus_trim_sample_coverage=4,
+        min_locus_length=1,
+        max_locus_hetero_frequency=1.0,
+        max_locus_variant_frequency=1.0,
+        max_sample_hetero_frequency=1.0,
+    )
+
+    assert filters["min_samples"] is True
+    assert stats["locus_cov"] == 3
+    assert stats["nsites_sample_cov_greater_than_3"] == 0
+    assert stats["nsites_sample_cov_greater_than_or_equal_to_min_locus_trim_sample_coverage"] == 0
+
+
+def test_filter_trim_locus_counts_only_empirical_samples_for_final_coverage_stats() -> None:
+    header = "chr1:1-8"
+    locus_dict = {
+        "assembly_reference_sequence": "A" * 8,
+        "s1": "A" * 8,
+        "s2": "A" * 8,
+        "s3": "A" * 8,
+        "s4": "A" * 8,
+    }
+
+    _header, _names, _tseqs, _snps, filters, stats = filter_trim_locus(
+        header,
+        locus_dict,
+        min_locus_sample_coverage=4,
+        min_locus_trim_sample_coverage=4,
+        min_locus_length=1,
+        max_locus_hetero_frequency=1.0,
+        max_locus_variant_frequency=1.0,
+        max_sample_hetero_frequency=1.0,
+    )
+
+    assert filters["min_samples"] is False
+    assert stats["locus_cov"] == 4
+    assert stats["nsites_sample_cov_greater_than_3"] == 8
+    assert stats["nsites_sample_cov_greater_than_or_equal_to_min_locus_trim_sample_coverage"] == 8
 
 
 def test_write_loci_and_stats_files_counts_max_variant_frequency_filter(
@@ -4746,8 +5015,8 @@ def test_write_loci_and_stats_files_writes_gzipped_loci_and_streamed_bed(
         name="assembly",
         outdir=tmp_path,
         tmpdir=tmp_path,
-        min_locus_sample_coverage=4,
-        min_locus_trim_sample_coverage=4,
+        min_locus_sample_coverage=3,
+        min_locus_trim_sample_coverage=3,
         min_locus_length=1,
         max_locus_hetero_frequency=1.0,
         max_locus_variant_frequency=1.0,
@@ -4770,13 +5039,43 @@ def test_write_loci_and_stats_files_writes_gzipped_loci_and_streamed_bed(
     assert loci_lines[3].endswith("AATA")
     assert loci_lines[4].startswith("//")
     assert loci_lines[4].endswith("|0:chr1:1-4")
-    assert (tmp_path / "assembly.bed").read_text(encoding="utf-8") == "chr1\t0\t4\t4\n"
+    assert (tmp_path / "assembly.bed").read_text(encoding="utf-8") == "chr1\t0\t4\t3\n"
     assert summary["sample_locus_counts"] == {"s1": 1, "s2": 1, "s3": 1}
     assert summary["samples_per_locus_counts"] == {3: 1}
     assert summary["locus_length_counts"] == {4: 1}
     assert not (tmp_path / "assembly.stats_counts.tsv").exists()
     assert not (tmp_path / "assembly.stats_sample_cov.txt").exists()
     assert not (tmp_path / "assembly.stats_locus_coverage.txt").exists()
+
+
+def test_write_loci_and_stats_files_does_not_let_reference_meet_min_sample_coverage(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "assembly.database.fa"
+    database.write_text(
+        ">chr1:1-4 assembly_reference_sequence\nAAAA\n"
+        ">chr1:1-4 s1\nAAAA\n"
+        ">chr1:1-4 s2\nAATA\n"
+        ">chr1:1-4 s3\nAATA\n\n",
+        encoding="utf-8",
+    )
+
+    summary = write_loci_and_stats_files(
+        snames=["s1", "s2", "s3"],
+        name="assembly",
+        outdir=tmp_path,
+        tmpdir=tmp_path,
+        min_locus_sample_coverage=4,
+        min_locus_trim_sample_coverage=4,
+        min_locus_length=1,
+        max_locus_hetero_frequency=1.0,
+        max_locus_variant_frequency=1.0,
+        max_sample_hetero_frequency=0.10,
+    )
+
+    assert summary["nloci_after_filtering"] == 0
+    assert summary["filter_counts"]["min_samples"] == 1
+    assert (tmp_path / "assembly.bed").read_text(encoding="utf-8") == ""
 
 
 def test_write_loci_and_stats_files_masks_samples_above_max_sample_hetero_frequency(
@@ -4818,7 +5117,7 @@ def test_write_loci_and_stats_files_masks_samples_above_max_sample_hetero_freque
     assert loci_lines[1].startswith("s2")
     assert loci_lines[2].startswith("s3")
     assert loci_lines[3].startswith("//")
-    assert (tmp_path / "assembly.bed").read_text(encoding="utf-8") == "chr1\t0\t4\t3\n"
+    assert (tmp_path / "assembly.bed").read_text(encoding="utf-8") == "chr1\t0\t4\t2\n"
     assert (tmp_path / "beds" / "s1.consensus_sample.mask.bed").read_text(encoding="utf-8") == "chr1\t0\t4\n"
     manifest = (tmp_path / "assembly.retained_loci.tsv").read_text(encoding="utf-8")
     assert "chr1:1-4\tchr1:1-4\ts1" in manifest
@@ -5395,10 +5694,12 @@ def _prepare_nonempty_snp_writer_inputs(tmp_path: Path) -> tuple[Path, Path]:
     plain_vcf = tmp_path / "assembly.vcf"
     with plain_vcf.open("w", encoding="utf-8") as out:
         out.write("##fileformat=VCFv4.2\n")
+        out.write("##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n")
+        out.write("##FORMAT=<ID=DP,Number=1,Type=Integer,Description=\"Depth\">\n")
         out.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ts1\ts2\n")
-        out.write("chr1\t2\t.\tA\tG\t60\tPASS\t.\tGT\t0/1\t1/1\n")
-        out.write("chr1\t4\t.\tC\tT,A\t60\tPASS\t.\tGT\t2/2\t0/1\n")
-        out.write("chr1\t12\t.\tG\tT\t60\tPASS\t.\tGT\t./.\t0/0\n")
+        out.write("chr1\t2\t.\tA\tG\t60\tPASS\t.\tGT:DP\t0/1:8\t1/1:9\n")
+        out.write("chr1\t4\t.\tC\tT,A\t50\tPASS\t.\tGT:DP\t2/2:7\t0/1:6\n")
+        out.write("chr1\t12\t.\tG\tT\t40\tPASS\t.\tGT:DP\t./.:.\t0/0:5\n")
     run_pipeline(
         [[BIN_BCF, "view", "-Oz", "-o", str(tmp_path / "assembly.vcf.gz"), str(plain_vcf)]]
     )
@@ -5458,6 +5759,14 @@ def test_write_snps_hdf5_writes_expected_nonempty_outputs(tmp_path: Path) -> Non
             io5["reference"][:],
             np.array([ord("A"), ord("C"), ord("G")], dtype=np.uint8),
         )
+        np.testing.assert_array_equal(
+            io5["sample_dp"][:],
+            np.array([[8, 7, 0], [9, 6, 5]], dtype=np.uint32),
+        )
+        np.testing.assert_allclose(
+            io5["site_qual"][:],
+            np.array([60.0, 50.0, 40.0], dtype=np.float32),
+        )
         assert list(io5["genos"].attrs["names"]) == ["s1", "s2"]
 
 
@@ -5499,6 +5808,8 @@ def test_write_snps_hdf5_matches_single_and_multi_chunk_outputs(tmp_path: Path) 
         np.testing.assert_array_equal(io5_single["snpsmap"][:], io5_multi["snpsmap"][:])
         np.testing.assert_array_equal(io5_single["genos"][:], io5_multi["genos"][:])
         np.testing.assert_array_equal(io5_single["reference"][:], io5_multi["reference"][:])
+        np.testing.assert_array_equal(io5_single["sample_dp"][:], io5_multi["sample_dp"][:])
+        np.testing.assert_allclose(io5_single["site_qual"][:], io5_multi["site_qual"][:])
 
 
 def test_write_seqs_hdf5_completes_without_tail_debug_code(tmp_path: Path) -> None:
@@ -5677,8 +5988,8 @@ def test_write_final_outputs_finalizes_hdf5_after_bed_is_complete(tmp_path: Path
 
     assert summary["nloci_after_filtering"] == 2
     assert (outdir / "assembly.bed").read_text(encoding="utf-8") == (
-        "chr2\t0\t4\t3\n"
-        "chr3\t4\t8\t3\n"
+        "chr2\t0\t4\t2\n"
+        "chr3\t4\t8\t2\n"
     )
     with h5py.File(outdir / "assembly.hdf5", "r") as io5:
         assert list(io5.attrs["scaffold_names"]) == ["chr2", "chr3"]
