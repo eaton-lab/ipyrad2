@@ -2,9 +2,7 @@ import argparse
 
 import pytest
 
-from ipyrad2.cli.cli_main import run_subcommand
 from ipyrad2.cli.cli_main import setup_parsers
-from ipyrad2.utils.exceptions import IPyradError
 
 
 def _get_top_level_subparsers() -> argparse._SubParsersAction:
@@ -179,6 +177,64 @@ def test_lex_help_groups_examples_and_logging_are_updated() -> None:
     assert "ipyrad2 analysis lex" not in help_text
     assert "--nloci" not in help_text
     assert "--length" not in help_text
+    assert help_text.index("-h, --help") > help_text.index("Logging:")
+
+
+def test_treeslider_help_groups_examples_and_tree_options_are_present() -> None:
+    help_text = _get_tool_parser("treeslider").format_help()
+
+    expected_sections = [
+        "Core inputs:",
+        "Window planning:",
+        "Filtering and samples:",
+        "Tree inference:",
+        "Logging:",
+    ]
+    positions = [help_text.index(section) for section in expected_sections]
+    assert positions == sorted(positions)
+
+    expected_order = [
+        "-d, --data",
+        "-n, --name",
+        "-o, --out",
+        "--window-size",
+        "--slide-size",
+        "--scaffolds",
+        "-P, --print-scaffold-table",
+        "-m, --min-sample-coverage",
+        "--min-sample-alignment-length",
+        "--min-alignment-length",
+        "-e, --exclude",
+        "-R, --include-reference",
+        "-i, --imap",
+        "-g, --minmap",
+        "--threads",
+        "--workers",
+        "--bs-trees",
+        "--model",
+        "--raxml-ng-binary",
+        "--seed",
+        "--redo",
+        "-f, --force",
+        "-l, --log-level",
+        "-h, --help",
+    ]
+    start = help_text.index("Core inputs:")
+    indices = []
+    for item in expected_order:
+        idx = help_text.index(item, start)
+        indices.append(idx)
+        start = idx + 1
+    assert indices == sorted(indices)
+
+    assert "ipyrad2 treeslider: extract filtered windows and infer one tree per window" in help_text
+    assert "$ ipyrad2 treeslider -d assembly.hdf5 --print-scaffold-table" in help_text
+    assert "$ ipyrad2 treeslider -d assembly.hdf5 -o OUT/ -n windows --window-size 100000 --slide-size 50000" in help_text
+    assert "one-tree-per-locus mode" in help_text
+    assert "shell-style wildcard patterns" in help_text
+    assert "assembly_reference_sequence" in help_text
+    assert "--raxml-ng-binary" in help_text
+    assert "--redo" in help_text
     assert help_text.index("-h, --help") > help_text.index("Logging:")
 
 
@@ -782,16 +838,15 @@ def test_removed_nested_analysis_command_no_longer_parses() -> None:
         parser.parse_args(["analysis", "wex", "-d", "assembly.hdf5"])
 
 
-def test_treeslider_reserved_placeholder_has_help_and_raises_at_runtime() -> None:
+def test_treeslider_is_a_real_top_level_command_parser() -> None:
     parser = setup_parsers()
 
     tool = "treeslider"
     help_text = _get_tool_parser(tool).format_help()
     assert f"ipyrad2 {tool}:" in help_text
-    assert "Reserved command placeholder." in help_text
-    assert "not implemented yet" in help_text
+    assert "Reserved command placeholder." not in help_text
+    assert "not implemented yet" not in help_text
 
-    args = parser.parse_args([tool])
+    args = parser.parse_args([tool, "-d", "assembly.hdf5"])
     assert args.subcommand == tool
-    with pytest.raises(IPyradError, match=f"`ipyrad2 {tool}` is reserved but not implemented yet."):
-        run_subcommand(args, _exit=False)
+    assert args.data.name == "assembly.hdf5"

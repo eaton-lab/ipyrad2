@@ -36,16 +36,16 @@ ANALYSIS_TOOL_NAMES = (
     "popgen",
     "baba",
     "bpp",
-)
-
-RESERVED_TOOL_NAMES = (
     "treeslider",
 )
+
+RESERVED_TOOL_NAMES = ()
 
 
 _PARSER_SPECS = {
     "wex": (".cli_wex", "_setup_wex_subparser", "ipyrad2 wex: extract one alignment from selected genomic windows"),
     "lex": (".cli_lex", "_setup_lex_subparser", "ipyrad2 lex: extract delimited loci from HDF5 database"),
+    "treeslider": (".cli_treeslider", "_setup_treeslider_subparser", "ipyrad2 treeslider: extract filtered windows and infer one tree per window"),
     "snpex": (".cli_snpex", "_setup_snpex_subparser", "ipyrad2 snpex: extract filtered SNP matrices from HDF5 database"),
     "vcf2hdf5": (".cli_vcf_to_hdf5", "_setup_vcf_to_hdf5_subparser", "ipyrad2 vcf2hdf5: convert VCF to SNP-capable HDF5 database"),
     "pca": (".cli_pca", "_setup_pca_subparser", "ipyrad2 pca: run PCA, t-SNE, or UMAP on SNP HDF5 data"),
@@ -61,6 +61,7 @@ _PARSER_SPECS = {
 _RUNTIME_RUNNERS = {
     "wex": ("..analysis.extracters.window_extracter", "run_window_extracter"),
     "lex": ("..analysis.extracters.locus_extracter", "run_locus_extracter"),
+    "treeslider": ("..analysis.methods.treeslider", "run_treeslider_method"),
     "snpex": ("..analysis.extracters.snps_extracter", "run_snps_extracter"),
     "vcf2hdf5": ("..analysis.converters.vcf_to_hdf5", "run_vcf_to_hdf5"),
     "pca": ("..analysis.methods.pca", "run_pca_method"),
@@ -154,13 +155,7 @@ def _setup_analysis_tool_subparsers(
     if "bpp" in selected:
         _setup_tool_subparser(subparsers, "bpp", header)
     if "treeslider" in selected:
-        _setup_reserved_tool_subparser(
-            subparsers,
-            name="treeslider",
-            help_text="Reserved per-locus or per-window gene-tree command.",
-            header=f"{header}\nipyrad2 treeslider: reserved per-locus or per-window gene-tree command",
-        )
-
+        _setup_tool_subparser(subparsers, "treeslider", header)
 
 def _tool_name(args) -> str:
     """Return the active top-level export or analysis command name."""
@@ -220,6 +215,41 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
             print_scaffold_table=args.print_scaffold_table,
             stdout=args.stdout,
             force=args.force,
+        )
+        if _exit:
+            sys.exit(0)
+        return
+
+    if tool == "treeslider":
+        run_treeslider_method = _load_runner(tool)
+        logger.info("-------------------------------------------------------")
+        logger.info("---- ipyrad2 treeslider: infer one tree per filtered window ----")
+        logger.info("-------------------------------------------------------")
+        logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
+        run_treeslider_method(
+            data=args.data,
+            name=args.name,
+            outdir=args.out,
+            window_size=args.window_size,
+            slide_size=args.slide_size,
+            print_scaffold_table=args.print_scaffold_table,
+            scaffolds=args.scaffolds,
+            min_sample_coverage=args.min_sample_coverage,
+            imap=args.imap,
+            minmap=args.minmap,
+            exclude=args.exclude,
+            include_reference=args.include_reference,
+            min_sample_alignment_length=args.min_sample_alignment_length,
+            min_alignment_length=args.min_alignment_length,
+            threads=args.threads,
+            workers=args.workers,
+            bs_trees=args.bs_trees,
+            model=args.model,
+            raxml_ng_binary=args.raxml_ng_binary,
+            seed=args.seed,
+            force=args.force,
+            redo=args.redo,
+            log_level=args.log_level,
         )
         if _exit:
             sys.exit(0)

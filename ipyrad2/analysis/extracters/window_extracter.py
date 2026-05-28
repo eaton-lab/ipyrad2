@@ -55,6 +55,7 @@ begin data;
   matrix
 """
 REFERENCE_SAMPLE_NAME = "assembly_reference_sequence"
+MISSING_BASE = 78
 
 
 def _format_count(value: int) -> str:
@@ -98,6 +99,22 @@ def _append_table_section(lines: list[str], title: str, headers: list[str], rows
     for row in rows:
         lines.append("  ".join(value.ljust(widths[idx]) for idx, value in enumerate(row)))
     lines.append("")
+
+
+def filter_block_by_minmap(
+    block: np.ndarray,
+    imap_row_indices: dict[str, np.ndarray],
+    minmap: dict[str, int | float],
+) -> np.ndarray:
+    """Return one block after applying the per-population coverage filter."""
+    if not block.size:
+        return block[:, 0:0]
+
+    mask = np.zeros(block.shape[1], dtype=np.bool_)
+    for pop, pop_sidxs in imap_row_indices.items():
+        pop_mincov = minmap[pop]
+        mask |= np.sum(block[pop_sidxs, :] != MISSING_BASE, axis=0) < pop_mincov
+    return block[:, np.invert(mask)]
 
 
 class WindowExtracter:
@@ -423,14 +440,7 @@ class WindowExtracter:
 
     def _filter_block_sites(self, block: np.ndarray) -> np.ndarray:
         """Apply the minmap filter to one loaded sequence block."""
-        if not block.size:
-            return block[:, 0:0]
-
-        mask = np.zeros(block.shape[1], dtype=np.bool_)
-        for pop, pop_sidxs in self._imap_row_indices.items():
-            pop_mincov = self.minmap[pop]
-            mask |= np.sum(block[pop_sidxs, :] != 78, axis=0) < pop_mincov
-        return block[:, np.invert(mask)]
+        return filter_block_by_minmap(block, self._imap_row_indices, self.minmap)
 
     def _summarize_filtered_selection(self) -> dict:
         """Return filtering decisions and stats using bounded-memory chunk scans."""
@@ -452,7 +462,7 @@ class WindowExtracter:
                     continue
                 nsites_after += int(filtered.shape[1])
                 nvariants_after += count_snps(filtered)
-                missing_counts += np.sum(filtered == 78, axis=1).astype(np.int64, copy=False)
+                missing_counts += np.sum(filtered == MISSING_BASE, axis=1).astype(np.int64, copy=False)
 
         if nsites_after == 0:
             raise IPyradError("Selected windows contain zero data after filtering for coverage.")
@@ -858,7 +868,7 @@ class WindowExtracter:
         """Write stats for the extracted windows."""
         summary = {
             "fnames": fnames,
-            "row_missing": np.sum(fseqarr == 78, axis=1) / fseqarr.shape[1],
+            "row_missing": np.sum(fseqarr == MISSING_BASE, axis=1) / fseqarr.shape[1],
             "samples_selected_initial": list(fnames),
             "samples_dropped_by_max_missing": [],
             "nsites_before": self.seqarr.shape[1],
