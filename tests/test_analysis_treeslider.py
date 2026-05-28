@@ -4,6 +4,7 @@ import h5py
 import numpy as np
 import pandas as pd
 import pytest
+from loguru import logger
 
 import ipyrad2.analysis.methods.treeslider as treeslider_mod
 
@@ -258,3 +259,81 @@ def test_run_treeslider_prints_scaffold_table_and_returns(
     assert "scaffold_name\tscaffold_length" in captured.out
     assert "chr1\t4" in captured.out
     assert not (tmp_path / "OUT" / "print.stats.tsv").exists()
+
+
+def test_run_treeslider_reports_filter_and_tree_progress(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    h5 = _write_sequence_h5(
+        tmp_path / "assembly.hdf5",
+        [
+            "AAAACCCCGGGGTTTT",
+            "AATACCCCNNNNTTTN",
+            "AACACCCCNNNNNNNN",
+        ],
+        rows=[
+            (0, 0, 4, 1, 4),
+            (0, 4, 8, 5, 8),
+            (0, 8, 12, 9, 12),
+            (0, 12, 16, 13, 16),
+        ],
+    )
+    monkeypatch.setattr(treeslider_mod, "_resolve_binary", lambda _binary: "/usr/bin/raxml-ng")
+    monkeypatch.setattr(treeslider_mod.subprocess, "run", _mock_raxml_run_success)
+
+    events: list[tuple[str, int, int, str] | tuple[str, int, int] | tuple[str, int]] = []
+
+    class _ProgressStub:
+        def __init__(self, njobs, start=None, message="") -> None:
+            self.njobs = njobs
+            self.finished = 0
+            self.message = message
+            events.append(("init", njobs, self.finished, message))
+
+        def update(self) -> None:
+            events.append(("update", self.njobs, self.finished, self.message))
+
+        def close(self) -> None:
+            events.append(("close", self.njobs, self.finished))
+
+    monkeypatch.setattr(treeslider_mod, "ProgressBar", _ProgressStub)
+    messages: list[str] = []
+    sink_id = logger.add(messages.append, format="{message}")
+    try:
+        treeslider_mod.run_treeslider_method(
+            data=h5,
+            name="progress",
+            outdir=tmp_path / "OUT",
+            window_size=None,
+            slide_size=None,
+            print_scaffold_table=False,
+            scaffolds=None,
+            min_sample_coverage=2,
+            imap=None,
+            minmap=None,
+            exclude=None,
+            include_reference=False,
+            min_sample_alignment_length=3,
+            min_alignment_length=1,
+            threads="auto",
+            workers="auto",
+            bs_trees=0,
+            model="GTR+G",
+            raxml_ng_binary=None,
+            seed=11,
+            force=True,
+            redo=False,
+            log_level="INFO",
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert ("init", 4, 0, "Filtering windows - total jobs: 4") in events
+    assert ("update", 4, 4, "Filtering windows - total jobs: 4") in events
+    assert ("close", 4, 4) in events
+    assert ("init", 2, 0, "Inferring trees - total jobs: 2") in events
+    assert ("update", 2, 2, "Inferring trees - total jobs: 2") in events
+    assert ("close", 2, 2) in events
+    assert any("filtering windows and writing alignment files" in message for message in messages)
+    assert any("inferring trees for accepted windows" in message for message in messages)
