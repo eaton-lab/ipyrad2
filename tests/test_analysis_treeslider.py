@@ -1,4 +1,10 @@
+from __future__ import annotations
+
+import multiprocessing as mp
+import os
 from pathlib import Path
+import signal
+import time
 
 import h5py
 import numpy as np
@@ -43,9 +49,9 @@ def _write_sequence_h5(
     return path
 
 
-def _mock_raxml_run_success(cmd, cwd, capture_output, text, check):
-    workdir = Path(cwd)
-    prefix = cmd[cmd.index("--prefix") + 1]
+def _mock_raxml_pipeline_success(cmds, **_kwargs):
+    cmd = cmds[0]
+    prefix = Path(cmd[cmd.index("--prefix") + 1])
     msa = Path(cmd[cmd.index("--msa") + 1])
     names = [
         line[1:].strip()
@@ -53,10 +59,64 @@ def _mock_raxml_run_success(cmd, cwd, capture_output, text, check):
         if line.startswith(">")
     ]
     tree = f"({','.join(names)});"
-    (workdir / f"{prefix}.raxml.bestTree").write_text(tree, encoding="utf-8")
+    prefix.parent.mkdir(parents=True, exist_ok=True)
+    (prefix.parent / f"{prefix.name}.raxml.bestTree").write_text(tree, encoding="utf-8")
     if "--all" in cmd:
-        (workdir / f"{prefix}.raxml.support").write_text(tree, encoding="utf-8")
-    return treeslider_mod.subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        (prefix.parent / f"{prefix.name}.raxml.support").write_text(tree, encoding="utf-8")
+    return 0, b"", b""
+
+
+def _run_pool_iter_sequential(job_iter, _log_level, **_kwargs):
+    for key, (func, kwargs) in job_iter:
+        yield key, func(**kwargs)
+
+
+def _assert_interrupted_exit(code: int) -> None:
+    assert code == -signal.SIGINT or code >= 128
+
+
+def _pid_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _run_treeslider_until_interrupted(
+    data: Path,
+    outdir: Path,
+    raxml_binary: Path,
+    pid_file: Path,
+) -> None:
+    os.environ["IPYRAD2_TEST_TREESLIDER_PID_FILE"] = str(pid_file)
+    treeslider_mod.run_treeslider_method(
+        data=data,
+        name="interrupt",
+        outdir=outdir,
+        window_size=None,
+        slide_size=None,
+        print_scaffold_table=False,
+        scaffolds=None,
+        min_sample_coverage=2,
+        imap=None,
+        minmap=None,
+        exclude=None,
+        include_reference=False,
+        min_sample_alignment_length=1,
+        min_alignment_length=1,
+        threads=1,
+        workers=2,
+        bs_trees=0,
+        model="GTR+G",
+        raxml_ng_binary=raxml_binary,
+        seed=17,
+        force=True,
+        redo=False,
+        log_level="WARNING",
+    )
 
 
 def test_run_treeslider_locus_mode_writes_manifest_trees_and_cleans_stage(
@@ -78,7 +138,8 @@ def test_run_treeslider_locus_mode_writes_manifest_trees_and_cleans_stage(
         ],
     )
     monkeypatch.setattr(treeslider_mod, "_resolve_binary", lambda _binary: "/usr/bin/raxml-ng")
-    monkeypatch.setattr(treeslider_mod.subprocess, "run", _mock_raxml_run_success)
+    monkeypatch.setattr(treeslider_mod, "run_pipeline", _mock_raxml_pipeline_success)
+    monkeypatch.setattr(treeslider_mod, "run_with_pool_iter", _run_pool_iter_sequential)
 
     treeslider_mod.run_treeslider_method(
         data=h5,
@@ -149,29 +210,26 @@ def test_run_treeslider_redo_retries_failed_windows_only(
     calls: list[str] = []
     fail_once = {"window_000001"}
 
-    def _mock_run(cmd, cwd, capture_output, text, check):
-        prefix = cmd[cmd.index("--prefix") + 1]
-        calls.append(prefix)
-        workdir = Path(cwd)
+    def _mock_run_pipeline(cmds, **_kwargs):
+        cmd = cmds[0]
+        prefix = Path(cmd[cmd.index("--prefix") + 1])
+        calls.append(prefix.name)
         msa = Path(cmd[cmd.index("--msa") + 1])
         names = [
             line[1:].strip()
             for line in msa.read_text(encoding="utf-8").splitlines()
             if line.startswith(">")
         ]
-        if prefix in fail_once:
-            fail_once.remove(prefix)
-            return treeslider_mod.subprocess.CompletedProcess(
-                cmd,
-                1,
-                stdout="",
-                stderr="resource failure",
-            )
+        if prefix.name in fail_once:
+            fail_once.remove(prefix.name)
+            raise RuntimeError("resource failure")
         tree = f"({','.join(names)});"
-        (workdir / f"{prefix}.raxml.bestTree").write_text(tree, encoding="utf-8")
-        return treeslider_mod.subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        (prefix.parent / f"{prefix.name}.raxml.bestTree").write_text(tree, encoding="utf-8")
+        return 0, b"", b""
 
-    monkeypatch.setattr(treeslider_mod.subprocess, "run", _mock_run)
+    monkeypatch.setattr(treeslider_mod, "run_pipeline", _mock_run_pipeline)
+    monkeypatch.setattr(treeslider_mod, "run_with_pool_iter", _run_pool_iter_sequential)
 
     common_kwargs = dict(
         data=h5,
@@ -280,7 +338,8 @@ def test_run_treeslider_reports_filter_and_tree_progress(
         ],
     )
     monkeypatch.setattr(treeslider_mod, "_resolve_binary", lambda _binary: "/usr/bin/raxml-ng")
-    monkeypatch.setattr(treeslider_mod.subprocess, "run", _mock_raxml_run_success)
+    monkeypatch.setattr(treeslider_mod, "run_pipeline", _mock_raxml_pipeline_success)
+    monkeypatch.setattr(treeslider_mod, "run_with_pool_iter", _run_pool_iter_sequential)
 
     events: list[tuple[str, int, int, str] | tuple[str, int, int] | tuple[str, int]] = []
 
@@ -337,3 +396,329 @@ def test_run_treeslider_reports_filter_and_tree_progress(
     assert ("close", 2, 2) in events
     assert any("filtering windows and writing alignment files" in message for message in messages)
     assert any("inferring trees for accepted windows" in message for message in messages)
+
+
+def test_run_treeslider_skips_implicit_binary_lookup_when_no_tree_jobs_remain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    h5 = _write_sequence_h5(
+        tmp_path / "assembly.hdf5",
+        ["AAAA", "AAAA", "AAAA"],
+        rows=[(0, 0, 4, 1, 4)],
+    )
+
+    def _unexpected_resolve(_binary):
+        raise AssertionError("implicit binary lookup should not be called")
+
+    monkeypatch.setattr(treeslider_mod, "_resolve_binary", _unexpected_resolve)
+
+    treeslider_mod.run_treeslider_method(
+        data=h5,
+        name="no-raxml-needed",
+        outdir=tmp_path / "OUT",
+        window_size=None,
+        slide_size=None,
+        print_scaffold_table=False,
+        scaffolds=None,
+        min_sample_coverage=2,
+        imap=None,
+        minmap=None,
+        exclude=None,
+        include_reference=False,
+        min_sample_alignment_length=1,
+        min_alignment_length=1,
+        threads="auto",
+        workers="auto",
+        bs_trees=0,
+        model="GTR+G",
+        raxml_ng_binary=None,
+        seed=None,
+        force=True,
+        redo=False,
+        log_level="INFO",
+    )
+
+    manifest = pd.read_csv(tmp_path / "OUT" / "no-raxml-needed.stats.tsv", sep="\t")
+    stats = (tmp_path / "OUT" / "no-raxml-needed.stats.txt").read_text(encoding="utf-8")
+    assert manifest["status"].tolist() == ["polytomy_written"]
+    assert "raxml_ng_binary: not_used" in stats
+
+
+def test_run_treeslider_terminal_resume_skips_implicit_binary_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    h5 = _write_sequence_h5(
+        tmp_path / "assembly.hdf5",
+        ["AAAA", "AAAA", "AAAA"],
+        rows=[(0, 0, 4, 1, 4)],
+    )
+    outdir = tmp_path / "OUT"
+    name = "terminal"
+    outdir.mkdir(parents=True, exist_ok=True)
+    phymap = treeslider_mod._load_phymap(h5)
+    specs = treeslider_mod._plan_locus_windows(phymap, ["chr1"], ["chr1"])
+    manifest = treeslider_mod._initialize_manifest(specs)
+    manifest.at[1, "status"] = "tree_completed"
+    manifest.at[1, "status_detail"] = "Tree inference completed."
+    manifest.at[1, "nsamples_before_filtering"] = 3
+    manifest.at[1, "nsites_before_filtering"] = 4
+    manifest.at[1, "nvariants_before_filtering"] = 1
+    manifest.at[1, "nsites_after_site_filter"] = 4
+    manifest.at[1, "nsamples_after_sample_length_filter"] = 3
+    manifest.at[1, "nsites_after_sample_length_filter"] = 4
+    manifest.at[1, "nsamples_after_filtering"] = 3
+    manifest.at[1, "nsites_after_filtering"] = 4
+    manifest.at[1, "nvariants_after_filtering"] = 1
+    manifest.at[1, "retained_sample_names"] = "s1,s2,s3"
+    manifest.at[1, "tree_newick"] = "(s1,s2,s3);"
+    manifest.at[1, "tree_source"] = "raxml-ng"
+    treeslider_mod._write_manifest(manifest, outdir / f"{name}.stats.tsv")
+
+    def _unexpected_resolve(_binary):
+        raise AssertionError("implicit binary lookup should not be called")
+
+    monkeypatch.setattr(treeslider_mod, "_resolve_binary", _unexpected_resolve)
+
+    treeslider_mod.run_treeslider_method(
+        data=h5,
+        name=name,
+        outdir=outdir,
+        window_size=None,
+        slide_size=None,
+        print_scaffold_table=False,
+        scaffolds=None,
+        min_sample_coverage=2,
+        imap=None,
+        minmap=None,
+        exclude=None,
+        include_reference=False,
+        min_sample_alignment_length=1,
+        min_alignment_length=1,
+        threads="auto",
+        workers="auto",
+        bs_trees=0,
+        model="GTR+G",
+        raxml_ng_binary=None,
+        seed=None,
+        force=False,
+        redo=False,
+        log_level="INFO",
+    )
+
+    stats = (outdir / f"{name}.stats.txt").read_text(encoding="utf-8")
+    trees = (outdir / f"{name}.trees.nex").read_text(encoding="utf-8")
+    assert "raxml_ng_binary: not_used" in stats
+    assert "Tree window_000001" in trees
+
+
+def test_run_treeslider_still_validates_explicit_binary_when_unused(
+    tmp_path: Path,
+) -> None:
+    h5 = _write_sequence_h5(
+        tmp_path / "assembly.hdf5",
+        ["AAAA", "AAAA", "AAAA"],
+        rows=[(0, 0, 4, 1, 4)],
+    )
+
+    with pytest.raises(treeslider_mod.IPyradError, match="Could not find the requested raxml-ng binary"):
+        treeslider_mod.run_treeslider_method(
+            data=h5,
+            name="explicit-invalid",
+            outdir=tmp_path / "OUT",
+            window_size=None,
+            slide_size=None,
+            print_scaffold_table=False,
+            scaffolds=None,
+            min_sample_coverage=2,
+            imap=None,
+            minmap=None,
+            exclude=None,
+            include_reference=False,
+            min_sample_alignment_length=1,
+            min_alignment_length=1,
+            threads="auto",
+            workers="auto",
+            bs_trees=0,
+            model="GTR+G",
+            raxml_ng_binary=tmp_path / "missing-raxml-ng",
+            seed=None,
+            force=True,
+            redo=False,
+            log_level="INFO",
+        )
+
+
+def test_run_treeslider_cleans_stale_pending_tree_workdirs_before_resume(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    h5 = _write_sequence_h5(
+        tmp_path / "assembly.hdf5",
+        ["AAAA", "AATA", "AACA"],
+        rows=[(0, 0, 4, 1, 4)],
+    )
+    outdir = tmp_path / "OUT"
+    name = "resume"
+    stage_dir = outdir / f".{name}.stage"
+    align_dir = stage_dir / "alignments"
+    align_dir.mkdir(parents=True, exist_ok=True)
+    alignment_path = align_dir / "window_000001.fa"
+    alignment_path.write_text(">s1\nAAAA\n>s2\nAATA\n>s3\nAACA\n", encoding="utf-8")
+
+    phymap = treeslider_mod._load_phymap(h5)
+    specs = treeslider_mod._plan_locus_windows(phymap, ["chr1"], ["chr1"])
+    manifest = treeslider_mod._initialize_manifest(specs)
+    manifest.at[1, "status"] = "accepted_pending_tree"
+    manifest.at[1, "status_detail"] = "Alignment staged for tree inference."
+    manifest.at[1, "nsamples_before_filtering"] = 3
+    manifest.at[1, "nsites_before_filtering"] = 4
+    manifest.at[1, "nvariants_before_filtering"] = 1
+    manifest.at[1, "nsites_after_site_filter"] = 4
+    manifest.at[1, "nsamples_after_sample_length_filter"] = 3
+    manifest.at[1, "nsites_after_sample_length_filter"] = 4
+    manifest.at[1, "nsamples_after_filtering"] = 3
+    manifest.at[1, "nsites_after_filtering"] = 4
+    manifest.at[1, "nvariants_after_filtering"] = 1
+    manifest.at[1, "retained_sample_names"] = "s1,s2,s3"
+    manifest.at[1, "alignment_path"] = str(alignment_path)
+    treeslider_mod._write_manifest(manifest, outdir / f"{name}.stats.tsv")
+
+    stale_dir = stage_dir / "raxml" / "window_000001"
+    stale_dir.mkdir(parents=True, exist_ok=True)
+    stale_marker = stale_dir / "stale.txt"
+    stale_marker.write_text("stale", encoding="utf-8")
+
+    def _mock_run_pipeline_assert_clean(cmds, **_kwargs):
+        prefix = Path(cmds[0][cmds[0].index("--prefix") + 1])
+        assert not (prefix.parent / "stale.txt").exists()
+        (prefix.parent / f"{prefix.name}.raxml.bestTree").write_text("(s1,s2,s3);", encoding="utf-8")
+        return 0, b"", b""
+
+    monkeypatch.setattr(treeslider_mod, "_resolve_binary", lambda _binary: "/usr/bin/raxml-ng")
+    monkeypatch.setattr(treeslider_mod, "run_pipeline", _mock_run_pipeline_assert_clean)
+    monkeypatch.setattr(treeslider_mod, "run_with_pool_iter", _run_pool_iter_sequential)
+
+    treeslider_mod.run_treeslider_method(
+        data=h5,
+        name=name,
+        outdir=outdir,
+        window_size=None,
+        slide_size=None,
+        print_scaffold_table=False,
+        scaffolds=None,
+        min_sample_coverage=2,
+        imap=None,
+        minmap=None,
+        exclude=None,
+        include_reference=False,
+        min_sample_alignment_length=1,
+        min_alignment_length=1,
+        threads=1,
+        workers=1,
+        bs_trees=0,
+        model="GTR+G",
+        raxml_ng_binary=None,
+        seed=9,
+        force=False,
+        redo=False,
+        log_level="INFO",
+    )
+
+    manifest = pd.read_csv(outdir / f"{name}.stats.tsv", sep="\t")
+    assert manifest["status"].tolist() == ["tree_completed"]
+    assert not stage_dir.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Ctrl-C tests require POSIX")
+def test_run_treeslider_interrupt_cleans_children_and_leaves_resumable_manifest(
+    tmp_path: Path,
+) -> None:
+    h5 = _write_sequence_h5(
+        tmp_path / "assembly.hdf5",
+        ["ACGTACGT", "AGGAAGGA", "ATGCATGC"],
+        rows=[
+            (0, 0, 2, 1, 2),
+            (0, 2, 4, 3, 4),
+            (0, 4, 6, 5, 6),
+            (0, 6, 8, 7, 8),
+        ],
+    )
+    outdir = tmp_path / "OUT"
+    pid_file = tmp_path / "raxml_pids.txt"
+    raxml = tmp_path / "raxml-ng"
+    raxml.write_text(
+        "#!/bin/sh\n"
+        "echo $$ >> \"$IPYRAD2_TEST_TREESLIDER_PID_FILE\"\n"
+        "sleep 10\n"
+        "prefix=\"\"\n"
+        "while [ $# -gt 0 ]; do\n"
+        "  if [ \"$1\" = \"--prefix\" ]; then\n"
+        "    prefix=\"$2\"\n"
+        "    shift 2\n"
+        "    continue\n"
+        "  fi\n"
+        "  shift\n"
+        "done\n"
+        "printf '(s1,s2,s3);\\n' > \"${prefix}.raxml.bestTree\"\n",
+        encoding="utf-8",
+    )
+    raxml.chmod(0o755)
+
+    ctx = mp.get_context("spawn")
+    proc = ctx.Process(
+        target=_run_treeslider_until_interrupted,
+        args=(h5, outdir, raxml, pid_file),
+    )
+    proc.start()
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and not pid_file.exists():
+        time.sleep(0.05)
+    assert pid_file.exists()
+
+    try:
+        os.kill(proc.pid, signal.SIGINT)
+        time.sleep(0.05)
+        os.kill(proc.pid, signal.SIGINT)
+    except ProcessLookupError:
+        pass
+
+    start = time.time()
+    proc.join(timeout=2.15)
+    elapsed = time.time() - start
+    if proc.is_alive():
+        try:
+            os.kill(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.join(0.5)
+        raise AssertionError(
+            f"child did not exit within 2.00s (+0.15s epsilon); elapsed={elapsed:.3f}s"
+        )
+
+    _assert_interrupted_exit(proc.exitcode)
+
+    for line in pid_file.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        pid = int(line.strip())
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline and _pid_is_alive(pid):
+            time.sleep(0.05)
+        assert not _pid_is_alive(pid)
+
+    manifest = pd.read_csv(outdir / "interrupt.stats.tsv", sep="\t")
+    stage_dir = outdir / ".interrupt.stage"
+    align_dir = stage_dir / "alignments"
+    raxml_root = stage_dir / "raxml"
+
+    assert "accepted_pending_tree" in manifest["status"].tolist()
+    assert "tree_completed" not in manifest["status"].tolist()
+    assert align_dir.exists()
+    assert any(align_dir.glob("window_*.fa"))
+    if raxml_root.exists():
+        assert not any(raxml_root.glob("window_*"))
+    assert (outdir / "interrupt.stats.txt").exists()
+    assert (outdir / "interrupt.trees.nex").exists()

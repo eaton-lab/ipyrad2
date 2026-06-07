@@ -4,13 +4,11 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from pathlib import Path
 import os
 import shutil
-import subprocess
 import sys
 
 import h5py
@@ -26,6 +24,8 @@ from ..extracters.window_extracter import (
 )
 from ..extracters.sequence_common import load_sequence_chunk_from_phy
 from ...utils.exceptions import IPyradError
+from ...utils.parallel import run_pipeline
+from ...utils.parallel import run_with_pool_iter
 from ...utils.progress import ProgressBar
 
 
@@ -540,6 +540,11 @@ def _resolve_parallelism(
     return max(1, resolved_threads), max(1, min(resolved_workers, pending_jobs))
 
 
+def _tree_workdir(stage_dir: Path, window_id: int) -> Path:
+    """Return the per-window RAxML working directory."""
+    return stage_dir / "raxml" / f"window_{window_id:06d}"
+
+
 def _run_tree_job(
     *,
     binary: str,
@@ -554,8 +559,9 @@ def _run_tree_job(
 ) -> dict[str, object]:
     """Run one raxml-ng tree job and return one terminal result record."""
     prefix = f"window_{spec.window_id:06d}"
-    workdir = stage_dir / "raxml" / prefix
+    workdir = _tree_workdir(stage_dir, spec.window_id)
     workdir.mkdir(parents=True, exist_ok=True)
+    output_prefix = workdir / prefix
 
     cmd = [binary]
     if bs_trees > 0:
@@ -566,7 +572,7 @@ def _run_tree_job(
         [
             "--msa", str(alignment_path),
             "--model", model,
-            "--prefix", prefix,
+            "--prefix", str(output_prefix),
             "--threads", str(threads),
             "--log", "INFO",
         ]
@@ -577,14 +583,8 @@ def _run_tree_job(
         cmd.append("--redo")
 
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=workdir,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except Exception as exc:  # pragma: no cover - defensive
+        _rc, out, err = run_pipeline([cmd])
+    except Exception as exc:
         return {
             "window_id": spec.window_id,
             "status": "tree_failed",
@@ -595,20 +595,12 @@ def _run_tree_job(
             "alignment_path": alignment_path,
         }
 
-    combined = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
+    combined = "\n".join(
+        part for part in (out.decode(errors="replace"), err.decode(errors="replace")) if part
+    ).strip()
     best_tree = workdir / f"{prefix}.raxml.bestTree"
     support_tree = workdir / f"{prefix}.raxml.support"
     final_tree_path = support_tree if bs_trees > 0 and support_tree.exists() else best_tree
-    if result.returncode != 0:
-        return {
-            "window_id": spec.window_id,
-            "status": "tree_failed",
-            "tree_newick": "",
-            "tree_source": "",
-            "tree_error": combined or f"raxml-ng exited with code {result.returncode}.",
-            "workdir": workdir,
-            "alignment_path": alignment_path,
-        }
     if not final_tree_path.exists():
         return {
             "window_id": spec.window_id,
@@ -630,6 +622,38 @@ def _run_tree_job(
         "workdir": workdir,
         "alignment_path": alignment_path,
     }
+
+
+def _tree_jobs_iter(
+    manifest: pd.DataFrame,
+    spec_map: dict[int, TreeSliderWindowSpec],
+    *,
+    binary: str,
+    stage_dir: Path,
+    threads: int,
+    model: str,
+    bs_trees: int,
+    seed: int | None,
+    redo: bool,
+):
+    """Yield managed-pool jobs for accepted pending tree windows."""
+    for window_id in manifest.index.tolist():
+        if manifest.at[window_id, "status"] != "accepted_pending_tree":
+            continue
+        yield int(window_id), (
+            _run_tree_job,
+            {
+                "binary": binary,
+                "spec": spec_map[int(window_id)],
+                "alignment_path": Path(manifest.at[window_id, "alignment_path"]),
+                "stage_dir": stage_dir,
+                "threads": threads,
+                "model": model,
+                "bs_trees": bs_trees,
+                "seed": seed,
+                "redo": redo,
+            },
+        )
 
 
 def _cleanup_window_stage(alignment_path: Path | str, workdir: Path | str) -> None:
@@ -654,6 +678,62 @@ def _prune_empty_dirs(root: Path) -> None:
         root.rmdir()
     except OSError:
         pass
+
+
+def _cleanup_pending_tree_workdirs(manifest: pd.DataFrame, stage_dir: Path) -> None:
+    """Remove stale per-window RAxML workdirs for pending tree jobs."""
+    for window_id in manifest.index.tolist():
+        if manifest.at[window_id, "status"] != "accepted_pending_tree":
+            continue
+        shutil.rmtree(_tree_workdir(stage_dir, int(window_id)), ignore_errors=True)
+
+
+def _finalize_outputs(
+    *,
+    manifest: pd.DataFrame,
+    trees_path: Path,
+    stats_path: Path,
+    data: Path,
+    name: str,
+    outdir: Path,
+    mode: str,
+    selected_scaffolds: list[str],
+    binary: str,
+    threads: int | str,
+    workers: int | str,
+    resolved_threads: int,
+    resolved_workers: int,
+    bs_trees: int,
+    model: str,
+    min_sample_coverage: int,
+    min_sample_alignment_length: int,
+    min_alignment_length: int,
+    redo: bool,
+    force: bool,
+) -> None:
+    """Write the current final trees and summary text from the manifest."""
+    _write_trees_nexus(manifest, trees_path)
+    _write_stats_text(
+        path=stats_path,
+        data=data,
+        name=name,
+        outdir=outdir,
+        mode=mode,
+        selected_scaffolds=selected_scaffolds,
+        binary=binary,
+        threads=threads,
+        workers=workers,
+        resolved_threads=resolved_threads,
+        resolved_workers=resolved_workers,
+        bs_trees=bs_trees,
+        model=model,
+        min_sample_coverage=min_sample_coverage,
+        min_sample_alignment_length=min_sample_alignment_length,
+        min_alignment_length=min_alignment_length,
+        redo=redo,
+        force=force,
+        manifest=manifest,
+    )
 
 
 def _write_trees_nexus(manifest: pd.DataFrame, path: Path) -> None:
@@ -907,7 +987,7 @@ def run_treeslider_method(
         workers=workers,
         pending_jobs=len(pending),
     )
-    binary = _resolve_binary(raxml_ng_binary)
+    binary = _resolve_binary(raxml_ng_binary) if raxml_ng_binary is not None else "not_used"
 
     logger.info("inferring trees for accepted windows")
     tree_phase_statuses = {"accepted_pending_tree", "polytomy_written", "tree_completed", "tree_failed"}
@@ -922,90 +1002,118 @@ def run_treeslider_method(
         tree_progress.finished = int(np.sum(manifest["status"].isin({"polytomy_written", "tree_completed", "tree_failed"})))
         tree_progress.update()
 
-    for window_id in pending.index.tolist():
-        spec = spec_map[int(window_id)]
-        alignment_path = Path(manifest.at[window_id, "alignment_path"])
-        if not alignment_path.exists():
-            result = _extract_window_alignment(
-                data=data,
-                extracter=extracter,
-                spec=spec,
-                min_sample_alignment_length=min_sample_alignment_length,
-                min_alignment_length=min_alignment_length,
-                alignment_path=alignment_path,
-            )
-            for key, value in result.items():
-                if key in {"filtered_names", "filtered_alignment"}:
-                    continue
-                manifest.at[window_id, key] = value
-            _write_manifest(manifest, manifest_path)
-
-        if manifest.at[window_id, "status"] != "accepted_pending_tree":
-            continue
-
-        nvariants = int(manifest.at[window_id, "nvariants_after_filtering"])
-        if nvariants == 0:
-            names = [
-                value
-                for value in str(manifest.at[window_id, "retained_sample_names"]).split(",")
-                if value
-            ]
-            manifest.at[window_id, "status"] = "polytomy_written"
-            manifest.at[window_id, "status_detail"] = "No variable sites remained after filtering."
-            manifest.at[window_id, "tree_newick"] = _build_polytomy(names)
-            manifest.at[window_id, "tree_source"] = "polytomy"
-            manifest.at[window_id, "tree_error"] = ""
-            _cleanup_window_stage(manifest.at[window_id, "alignment_path"], "")
-            manifest.at[window_id, "alignment_path"] = ""
-            _write_manifest(manifest, manifest_path)
-            if tree_progress is not None:
-                tree_progress.finished += 1
-                tree_progress.update()
-
-    runnable = manifest[manifest["status"] == "accepted_pending_tree"].copy()
     try:
+        for window_id in pending.index.tolist():
+            spec = spec_map[int(window_id)]
+            alignment_path = Path(manifest.at[window_id, "alignment_path"])
+            if not alignment_path.exists():
+                result = _extract_window_alignment(
+                    data=data,
+                    extracter=extracter,
+                    spec=spec,
+                    min_sample_alignment_length=min_sample_alignment_length,
+                    min_alignment_length=min_alignment_length,
+                    alignment_path=alignment_path,
+                )
+                for key, value in result.items():
+                    if key in {"filtered_names", "filtered_alignment"}:
+                        continue
+                    manifest.at[window_id, key] = value
+                _write_manifest(manifest, manifest_path)
+
+            if manifest.at[window_id, "status"] != "accepted_pending_tree":
+                continue
+
+            nvariants = int(manifest.at[window_id, "nvariants_after_filtering"])
+            if nvariants == 0:
+                names = [
+                    value
+                    for value in str(manifest.at[window_id, "retained_sample_names"]).split(",")
+                    if value
+                ]
+                manifest.at[window_id, "status"] = "polytomy_written"
+                manifest.at[window_id, "status_detail"] = "No variable sites remained after filtering."
+                manifest.at[window_id, "tree_newick"] = _build_polytomy(names)
+                manifest.at[window_id, "tree_source"] = "polytomy"
+                manifest.at[window_id, "tree_error"] = ""
+                _cleanup_window_stage(manifest.at[window_id, "alignment_path"], "")
+                manifest.at[window_id, "alignment_path"] = ""
+                _write_manifest(manifest, manifest_path)
+                if tree_progress is not None:
+                    tree_progress.finished += 1
+                    tree_progress.update()
+
+        runnable = manifest[manifest["status"] == "accepted_pending_tree"].copy()
+        _cleanup_pending_tree_workdirs(runnable, stage_dir)
         if len(runnable):
-            with ThreadPoolExecutor(max_workers=resolved_workers) as pool:
-                futures = {
-                    pool.submit(
-                        _run_tree_job,
-                        binary=binary,
-                        spec=spec_map[int(window_id)],
-                        alignment_path=Path(manifest.at[window_id, "alignment_path"]),
-                        stage_dir=stage_dir,
-                        threads=resolved_threads,
-                        model=model,
-                        bs_trees=bs_trees,
-                        seed=seed,
-                        redo=redo,
-                    ): int(window_id)
-                    for window_id in runnable.index
-                }
-                for future in as_completed(futures):
-                    result = future.result()
-                    window_id = int(result["window_id"])
-                    manifest.at[window_id, "status"] = result["status"]
-                    manifest.at[window_id, "status_detail"] = (
-                        "Tree inference completed."
-                        if result["status"] == "tree_completed"
-                        else "Tree inference failed."
-                    )
-                    manifest.at[window_id, "tree_newick"] = result["tree_newick"]
-                    manifest.at[window_id, "tree_source"] = result["tree_source"]
-                    manifest.at[window_id, "tree_error"] = result["tree_error"]
-                    _cleanup_window_stage(result["alignment_path"], result["workdir"])
-                    manifest.at[window_id, "alignment_path"] = ""
-                    _write_manifest(manifest, manifest_path)
-                    if tree_progress is not None:
-                        tree_progress.finished += 1
-                        tree_progress.update()
+            if raxml_ng_binary is None:
+                binary = _resolve_binary(None)
+            for _key, result in run_with_pool_iter(
+                _tree_jobs_iter(
+                    runnable,
+                    spec_map,
+                    binary=binary,
+                    stage_dir=stage_dir,
+                    threads=resolved_threads,
+                    model=model,
+                    bs_trees=bs_trees,
+                    seed=seed,
+                    redo=redo,
+                ),
+                log_level,
+                max_workers=resolved_workers,
+                max_inflight=resolved_workers,
+            ):
+                window_id = int(result["window_id"])
+                manifest.at[window_id, "status"] = result["status"]
+                manifest.at[window_id, "status_detail"] = (
+                    "Tree inference completed."
+                    if result["status"] == "tree_completed"
+                    else "Tree inference failed."
+                )
+                manifest.at[window_id, "tree_newick"] = result["tree_newick"]
+                manifest.at[window_id, "tree_source"] = result["tree_source"]
+                manifest.at[window_id, "tree_error"] = result["tree_error"]
+                _cleanup_window_stage(result["alignment_path"], result["workdir"])
+                manifest.at[window_id, "alignment_path"] = ""
+                _write_manifest(manifest, manifest_path)
+                if tree_progress is not None:
+                    tree_progress.finished += 1
+                    tree_progress.update()
+    except SystemExit as exc:
+        _cleanup_pending_tree_workdirs(manifest, stage_dir)
+        _write_manifest(manifest, manifest_path)
+        _finalize_outputs(
+            manifest=manifest,
+            trees_path=trees_path,
+            stats_path=stats_path,
+            data=data,
+            name=name,
+            outdir=outdir,
+            mode=mode,
+            selected_scaffolds=selected_scaffolds,
+            binary=binary,
+            threads=threads,
+            workers=workers,
+            resolved_threads=resolved_threads,
+            resolved_workers=resolved_workers,
+            bs_trees=bs_trees,
+            model=model,
+            min_sample_coverage=min_sample_coverage,
+            min_sample_alignment_length=min_sample_alignment_length,
+            min_alignment_length=min_alignment_length,
+            redo=redo,
+            force=force,
+        )
+        raise exc
     finally:
         if tree_progress is not None:
             tree_progress.close()
 
-    _write_trees_nexus(manifest, trees_path)
-    _write_stats_text(
-        path=stats_path,
+    _finalize_outputs(
+        manifest=manifest,
+        trees_path=trees_path,
+        stats_path=stats_path,
         data=data,
         name=name,
         outdir=outdir,
@@ -1023,7 +1131,6 @@ def run_treeslider_method(
         min_alignment_length=min_alignment_length,
         redo=redo,
         force=force,
-        manifest=manifest,
     )
 
     _prune_empty_dirs(stage_dir)
