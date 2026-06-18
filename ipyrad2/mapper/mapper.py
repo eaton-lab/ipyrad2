@@ -16,6 +16,8 @@ from ..utils.exceptions import IPyradError
 from ..utils.names import expand_path
 from ..utils.parallel import run_pipeline
 from ..utils.parallel import run_with_pool
+from .map_samples_prep import MapperSamplePlan
+from .map_samples_prep import materialize_sample_plan
 from .map_samples_prep import prepare_map_samples
 from .map_stats import MappingJobResult
 from .map_stats import build_map_stats_payload
@@ -280,11 +282,12 @@ def _markdup_cmd(
 
 def _map_sample(
     sname: str,
-    fastqs: Tuple[Path, Path | None],
+    sample_plan: MapperSamplePlan,
     reference: Path,
     outdir: Path,
     threads: int,
     is_paired: bool,
+    unmate: bool,
     mark_dups_by_coords: bool,
     mark_dups_by_umis: bool,
 ) -> MappingJobResult:
@@ -299,6 +302,8 @@ def _map_sample(
     bam_namesort = tmpdir / f"{sname}.tmp.namesort.bam"
     bam_fixmate = tmpdir / f"{sname}.tmp.fixmate.bam"
     bam_coordsort = tmpdir / f"{sname}.tmp.coordsort.bam"
+    merged_r1, merged_r2 = _merged_fastq_paths(sname, outdir)
+    unmated_fastq = _unmated_fastq_path(sname, outdir)
     temp_paths = [
         out_bam_tmp,
         _output_index_path(out_bam_tmp),
@@ -309,6 +314,9 @@ def _map_sample(
         bam_fixmate,
         bam_coordsort,
         _output_index_path(bam_coordsort),
+        merged_r1,
+        merged_r2,
+        unmated_fastq,
     ]
 
     bwa_threads = max(1, int(threads * 0.75))
@@ -316,7 +324,14 @@ def _map_sample(
     duplicate_stats: dict[str, int] = {}
 
     try:
-        cmd1 = _bwa_mem_cmd(sname, fastqs, reference, bwa_threads)
+        effective_fastqs, _created_temp_fastqs = materialize_sample_plan(
+            sname,
+            sample_plan,
+            tmpdir,
+            unmate=unmate,
+        )
+
+        cmd1 = _bwa_mem_cmd(sname, effective_fastqs, reference, bwa_threads)
         cmd2 = _structural_filter_cmd(structural_counts_path)
         filter_pipeline = [cmd1, cmd2]
         if is_paired:
@@ -382,24 +397,24 @@ def _map_sample(
 
 
 def _select_output_samples(
-    fastq_dict: Dict[str, Tuple[Path, Path | None]],
+    sample_plans: Dict[str, MapperSamplePlan],
     outdir: Path,
     force: bool,
-) -> Dict[str, Tuple[Path, Path | None]]:
+) -> Dict[str, MapperSamplePlan]:
     """Apply overwrite policy and return the samples that should be processed."""
-    selected: Dict[str, Tuple[Path, Path | None]] = {}
+    selected: Dict[str, MapperSamplePlan] = {}
     skipped = []
 
-    for sname, fastq_tuple in fastq_dict.items():
+    for sname, sample_plan in sample_plans.items():
         bam_path = _output_bam_path(sname, outdir)
         index_path = _output_index_path(bam_path)
         if not bam_path.exists() and not index_path.exists():
-            selected[sname] = fastq_tuple
+            selected[sname] = sample_plan
             continue
 
         if force:
             _remove_output_artifacts(bam_path)
-            selected[sname] = fastq_tuple
+            selected[sname] = sample_plan
             logger.debug(f"removing existing bam outputs for sample: {sname}")
             continue
 
@@ -409,7 +424,7 @@ def _select_output_samples(
         logger.warning(
             "skipping {}/{} samples that already have results (.bam/.bam.csi) in outdir. Use --force to overwrite.",
             len(skipped),
-            len(fastq_dict),
+            len(sample_plans),
         )
     return selected
 
@@ -423,6 +438,30 @@ def _next_stats_paths(outdir: Path) -> tuple[Path, Path]:
         if not outstats_txt.exists() and not outstats_json.exists():
             return outstats_txt, outstats_json
         idx += 1
+
+
+def _unmated_fastq_path(sname: str, outdir: Path) -> Path:
+    """Return the deterministic temporary unmated FASTQ path for one sample."""
+    return outdir / "tmpdir" / f"{sname}.tmp.unmated.fastq.gz"
+
+
+def _merged_fastq_paths(sname: str, outdir: Path) -> tuple[Path, Path]:
+    """Return the deterministic temporary merged R1/R2 FASTQ paths for one sample."""
+    tmpdir = outdir / "tmpdir"
+    return (
+        tmpdir / f"{sname}.tmp.R1.fastq.gz",
+        tmpdir / f"{sname}.tmp.R2.fastq.gz",
+    )
+
+
+def _cleanup_stale_materialized_fastqs(sample_names: list[str], outdir: Path) -> None:
+    """Remove stale merged and unmated FASTQs for selected samples before mapping starts."""
+    for sname in sample_names:
+        for path in (*_merged_fastq_paths(sname, outdir), _unmated_fastq_path(sname, outdir)):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def run_mapper(
@@ -450,7 +489,7 @@ def run_mapper(
     tmpdir.mkdir(parents=True, exist_ok=True)
     imap = expand_path(imap) if imap is not None else None
 
-    fastq_dict, is_paired = prepare_map_samples(
+    sample_plans, input_is_paired = prepare_map_samples(
         fastqs=fastqs,
         delim_str=delim_str,
         delim_idx=delim_idx,
@@ -459,13 +498,14 @@ def run_mapper(
         unmate=unmate,
     )
     if unmate:
-        logger.info("treating paired FASTQ inputs as single-end by concatenating mates per sample")
+        logger.info("treating paired FASTQ inputs as single-end by concatenating mates on demand per sample")
+    effective_is_paired = input_is_paired and not unmate
 
     _check_mapper_dependencies()
     _validate_runtime_settings(
         cores=cores,
         threads=threads,
-        is_paired=is_paired,
+        is_paired=effective_is_paired,
         mark_dups_by_coords=mark_dups_by_coords,
         mark_dups_by_umis=mark_dups_by_umis,
     )
@@ -474,17 +514,19 @@ def run_mapper(
         mark_dups_by_umis=mark_dups_by_umis,
     )
 
-    fastq_dict = _select_output_samples(fastq_dict, outdir, force)
-    if not fastq_dict:
+    sample_plans = _select_output_samples(sample_plans, outdir, force)
+    if not sample_plans:
         logger.info("all samples are completed.")
         raise SystemExit(0)
+    if imap is not None or unmate:
+        _cleanup_stale_materialized_fastqs(list(sample_plans), outdir)
 
     _index_ref_with_bwa(reference, force_reindex=reindex_reference)
 
     workers = max(1, cores // threads)
     logger.info(
         "mapping {} samples to coordinate-sorted BAMs in {}",
-        len(fastq_dict),
+        len(sample_plans),
         outdir,
     )
     logger.info(
@@ -499,16 +541,17 @@ def run_mapper(
             _map_sample,
             {
                 "sname": sname,
-                "fastqs": fastq_tuple,
+                "sample_plan": sample_plan,
                 "reference": reference,
                 "outdir": outdir,
                 "threads": threads,
-                "is_paired": is_paired,
+                "is_paired": effective_is_paired,
+                "unmate": unmate,
                 "mark_dups_by_coords": mark_dups_by_coords,
                 "mark_dups_by_umis": mark_dups_by_umis,
             },
         )
-        for sname, fastq_tuple in fastq_dict.items()
+        for sname, sample_plan in sample_plans.items()
     }
     map_results = run_with_pool(
         map_jobs,
@@ -517,7 +560,7 @@ def run_mapper(
         msg="Mapping",
     )
 
-    stats_func = collect_paired_bam_stats if is_paired else collect_single_end_bam_stats
+    stats_func = collect_paired_bam_stats if effective_is_paired else collect_single_end_bam_stats
     stats_jobs = {
         sname: (
             stats_func,
@@ -536,14 +579,14 @@ def run_mapper(
 
     stats_payload = build_map_stats_payload(
         stats,
-        is_paired,
+        effective_is_paired,
         logged_command=logged_command,
     )
     outstats_txt, outstats_json = _next_stats_paths(outdir)
     outstats_txt.write_text(
         render_map_stats_report(
             stats,
-            is_paired,
+            effective_is_paired,
             logged_command=logged_command,
         ),
         encoding="utf-8",
