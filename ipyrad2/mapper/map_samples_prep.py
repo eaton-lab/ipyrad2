@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 import gzip
 import shutil
 from pathlib import Path
@@ -16,6 +17,16 @@ from ..utils.exceptions import IPyradError
 from ..utils.names import get_name_to_fastq_dict
 from ..utils.names import normalize_parsed_fastq_sample_names
 from ..utils.pops import expand_imap_patterns
+
+
+@dataclass(frozen=True)
+class MapperSamplePlan:
+    """One output mapper sample and the source FASTQs that feed it."""
+
+    output_name: str
+    source_names: tuple[str, ...]
+    source_fastqs: tuple[Tuple[Path, Path | None], ...]
+    is_paired_input: bool
 
 
 def _require(condition: bool, message: str) -> None:
@@ -88,12 +99,38 @@ def detect_is_paired(
     return next(iter(paired_states))
 
 
-def apply_imap_to_samples(
-    imap: Path,
-    tmpdir: Path,
+def detect_plan_is_paired(
+    sample_plans: Dict[str, MapperSamplePlan],
+) -> bool:
+    """Validate pairedness consistency across mapper sample plans."""
+    paired_states = {plan.is_paired_input for plan in sample_plans.values()}
+    if not paired_states:
+        return False
+    if len(paired_states) != 1:
+        raise IPyradError("some but not all files have R1 and R2 pairs. Check inputs.")
+    return next(iter(paired_states))
+
+
+def _plan_identity_samples(
     fastq_dict: Dict[str, Tuple[Path, Path | None]],
-) -> Dict[str, Tuple[Path, Path | None]]:
-    """Return a new fastq_dict after applying subset, rename, and merge rules."""
+) -> Dict[str, MapperSamplePlan]:
+    """Return one per-sample mapper plan without any IMAP transformation."""
+    return {
+        sname: MapperSamplePlan(
+            output_name=sname,
+            source_names=(sname,),
+            source_fastqs=(fastq_tuple,),
+            is_paired_input=fastq_tuple[1] is not None,
+        )
+        for sname, fastq_tuple in fastq_dict.items()
+    }
+
+
+def plan_imap_samples(
+    imap: Path,
+    fastq_dict: Dict[str, Tuple[Path, Path | None]],
+) -> Dict[str, MapperSamplePlan]:
+    """Return per-output-sample plans after applying IMAP subset/rename/merge rules."""
     source_fastqs = dict(fastq_dict)
     original_total = len(source_fastqs)
     pname_to_path_tuples: dict[str, list[Tuple[Path, Path | None]]] = defaultdict(list)
@@ -147,34 +184,89 @@ def apply_imap_to_samples(
         imap.name,
     )
 
-    result: Dict[str, Tuple[Path, Path | None]] = {}
+    result: Dict[str, MapperSamplePlan] = {}
     maxlen = max(len(i) for i in pname_to_snamelist)
     for pname, path_tuples in pname_to_path_tuples.items():
         snames = pname_to_snamelist[pname]
         logger.info(f"{pname}{' ' * (maxlen - len(pname))} <- {' + '.join(snames)}")
-
-        if len(path_tuples) == 1:
-            result[pname] = path_tuples[0]
-            continue
 
         paired_states = {fastq_tuple[1] is not None for fastq_tuple in path_tuples}
         if len(paired_states) != 1:
             raise IPyradError(
                 f"Cannot merge technical replicates with mixed SE and PE inputs for sample '{pname}'."
             )
-
-        out1 = tmpdir / f"{pname}.tmp.R1.fastq.gz"
-        _concat_fastqs([fastq_tuple[0] for fastq_tuple in path_tuples], out1)
-        if path_tuples[0][1] is not None:
-            out2 = tmpdir / f"{pname}.tmp.R2.fastq.gz"
-            _concat_fastqs(
-                [fastq_tuple[1] for fastq_tuple in path_tuples if fastq_tuple[1] is not None],
-                out2,
-            )
-            result[pname] = (out1, out2)
-        else:
-            result[pname] = (out1, None)
+        result[pname] = MapperSamplePlan(
+            output_name=pname,
+            source_names=tuple(snames),
+            source_fastqs=tuple(path_tuples),
+            is_paired_input=next(iter(paired_states)),
+        )
     return result
+
+
+def materialize_sample_plan(
+    sname: str,
+    plan: MapperSamplePlan,
+    tmpdir: Path,
+    *,
+    unmate: bool = False,
+) -> tuple[Tuple[Path, Path | None], list[Path]]:
+    """Return concrete FASTQ paths and any temp files created for one sample plan."""
+    if unmate:
+        if not plan.is_paired_input:
+            raise IPyradError(
+                f"--unmate can only be used with paired-end FASTQ inputs; sample '{sname}' is single-end."
+            )
+        out = tmpdir / f"{sname}.tmp.unmated.fastq.gz"
+        _concat_fastqs(
+            [fastq_tuple[0] for fastq_tuple in plan.source_fastqs]
+            + [fastq_tuple[1] for fastq_tuple in plan.source_fastqs if fastq_tuple[1] is not None],
+            out,
+        )
+        return (out, None), [out]
+
+    if len(plan.source_fastqs) == 1:
+        return plan.source_fastqs[0], []
+
+    out1 = tmpdir / f"{sname}.tmp.R1.fastq.gz"
+    _concat_fastqs([fastq_tuple[0] for fastq_tuple in plan.source_fastqs], out1)
+    if plan.is_paired_input:
+        out2 = tmpdir / f"{sname}.tmp.R2.fastq.gz"
+        _concat_fastqs(
+            [fastq_tuple[1] for fastq_tuple in plan.source_fastqs if fastq_tuple[1] is not None],
+            out2,
+        )
+        return (out1, out2), [out1, out2]
+    return (out1, None), [out1]
+
+
+def apply_imap_to_samples(
+    imap: Path,
+    tmpdir: Path,
+    fastq_dict: Dict[str, Tuple[Path, Path | None]],
+) -> Dict[str, Tuple[Path, Path | None]]:
+    """Return a new fastq_dict after applying subset, rename, and merge rules."""
+    sample_plans = plan_imap_samples(imap, fastq_dict)
+    return {
+        sname: materialize_sample_plan(sname, plan, tmpdir, unmate=False)[0]
+        for sname, plan in sample_plans.items()
+    }
+
+
+def unmate_paired_sample(
+    sname: str,
+    fastqs: Tuple[Path, Path | None],
+    tmpdir: Path,
+) -> Tuple[Path, None]:
+    """Return one temporary SE FASTQ for a paired sample by concatenating R1 then R2."""
+    r1, r2 = fastqs
+    if r2 is None:
+        raise IPyradError(
+            f"--unmate can only be used with paired-end FASTQ inputs; sample '{sname}' is single-end."
+        )
+    out = tmpdir / f"{sname}.tmp.unmated.fastq.gz"
+    _concat_fastqs([r1, r2], out)
+    return out, None
 
 
 def unmate_paired_samples(
@@ -182,16 +274,10 @@ def unmate_paired_samples(
     tmpdir: Path,
 ) -> Dict[str, Tuple[Path, Path | None]]:
     """Return one effective SE FASTQ per paired sample by concatenating R1 then R2."""
-    result: Dict[str, Tuple[Path, Path | None]] = {}
-    for sname, (r1, r2) in fastq_dict.items():
-        if r2 is None:
-            raise IPyradError(
-                f"--unmate can only be used with paired-end FASTQ inputs; sample '{sname}' is single-end."
-            )
-        out = tmpdir / f"{sname}.tmp.unmated.fastq.gz"
-        _concat_fastqs([r1, r2], out)
-        result[sname] = (out, None)
-    return result
+    return {
+        sname: unmate_paired_sample(sname, fastqs, tmpdir)
+        for sname, fastqs in fastq_dict.items()
+    }
 
 
 def prepare_map_samples(
@@ -201,17 +287,18 @@ def prepare_map_samples(
     imap: Path | None,
     tmpdir: Path,
     unmate: bool = False,
-) -> Tuple[Dict[str, Tuple[Path, Path | None]], bool]:
-    """Parse, optionally materialize, and validate mapper samples."""
+) -> Tuple[Dict[str, MapperSamplePlan], bool]:
+    """Parse, optionally plan IMAP merges, and validate mapper samples."""
     fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx)
     fastq_dict = normalize_parsed_fastq_sample_names(fastq_dict)
-    if imap is not None:
-        fastq_dict = apply_imap_to_samples(imap, tmpdir, fastq_dict)
     validate_fastq_inputs(fastq_dict)
-    is_paired = detect_is_paired(fastq_dict)
+    sample_plans = (
+        plan_imap_samples(imap, fastq_dict)
+        if imap is not None
+        else _plan_identity_samples(fastq_dict)
+    )
+    is_paired = detect_plan_is_paired(sample_plans)
     if unmate:
         if not is_paired:
             raise IPyradError("--unmate can only be used with paired-end FASTQ inputs.")
-        fastq_dict = unmate_paired_samples(fastq_dict, tmpdir)
-        is_paired = False
-    return fastq_dict, is_paired
+    return sample_plans, is_paired

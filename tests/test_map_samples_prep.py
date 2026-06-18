@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from ipyrad2.mapper.map_samples_prep import apply_imap_to_samples
+from ipyrad2.mapper.map_samples_prep import materialize_sample_plan
 from ipyrad2.mapper.map_samples_prep import prepare_map_samples
 from ipyrad2.mapper.map_samples_prep import unmate_paired_samples
 from ipyrad2.utils.exceptions import IPyradError
@@ -49,13 +50,14 @@ def test_prepare_map_samples_merges_plain_and_gz_replicates(tmp_path: Path) -> N
 
     assert is_paired is True
     assert list(fastq_dict) == ["merged"]
-    merged_r1, merged_r2 = fastq_dict["merged"]
-    assert merged_r1.suffix == ".gz"
-    assert merged_r2 is not None and merged_r2.suffix == ".gz"
-    with gzip.open(merged_r1, "rb") as infile:
-        assert infile.read() == b"@a1\nAAAA\n+\n!!!!\n@b1\nCCCC\n+\n!!!!\n"
-    with gzip.open(merged_r2, "rb") as infile:
-        assert infile.read() == b"@a1\nTTTT\n+\n!!!!\n@b1\nGGGG\n+\n!!!!\n"
+    plan = fastq_dict["merged"]
+    assert plan.output_name == "merged"
+    assert plan.source_names == ("sampleA", "sampleB")
+    assert plan.is_paired_input is True
+    assert plan.source_fastqs == (
+        (fastqs[0], fastqs[1]),
+        (fastqs[2], fastqs[3]),
+    )
 
 
 def test_prepare_map_samples_rejects_mixed_se_pe_merge(tmp_path: Path) -> None:
@@ -195,9 +197,17 @@ def test_prepare_map_samples_unmates_after_imap_merge(tmp_path: Path) -> None:
         unmate=True,
     )
 
-    assert is_paired is False
-    merged_fastq, merged_r2 = fastq_dict["merged"]
+    assert is_paired is True
+    plan = fastq_dict["merged"]
+    materialized, temp_paths = materialize_sample_plan(
+        "merged",
+        plan,
+        tmp_path / "tmpdir",
+        unmate=True,
+    )
+    merged_fastq, merged_r2 = materialized
     assert merged_r2 is None
+    assert temp_paths == [merged_fastq]
     with gzip.open(merged_fastq, "rb") as infile:
         assert infile.read() == (
             b"@a1\nAAAA\n+\n!!!!\n"
@@ -236,7 +246,11 @@ def test_prepare_map_samples_normalizes_trimmed_single_end_name(tmp_path: Path) 
     )
 
     assert is_paired is False
-    assert fastq_dict == {"sample": (fastq, None)}
+    plan = fastq_dict["sample"]
+    assert plan.output_name == "sample"
+    assert plan.source_names == ("sample",)
+    assert plan.source_fastqs == ((fastq, None),)
+    assert plan.is_paired_input is False
 
 
 def test_prepare_map_samples_matches_imap_against_normalized_trimmed_name(tmp_path: Path) -> None:
@@ -255,7 +269,11 @@ def test_prepare_map_samples_matches_imap_against_normalized_trimmed_name(tmp_pa
     )
 
     assert is_paired is False
-    assert fastq_dict == {"sample": (fastq, None)}
+    plan = fastq_dict["sample"]
+    assert plan.output_name == "sample"
+    assert plan.source_names == ("sample",)
+    assert plan.source_fastqs == ((fastq, None),)
+    assert plan.is_paired_input is False
 
 
 def test_prepare_map_samples_rejects_trimmed_name_collision(tmp_path: Path) -> None:
