@@ -14,7 +14,7 @@ from argparse import Namespace
 from loguru import logger
 from pathlib import Path
 
-from ipyrad2.cli.make_wide import make_wide
+from ..cli.common import RAW_HELP_FORMATTER
 from ..utils.logger import set_log_level
 from ..utils.exceptions import IPyradError
 from ..utils.params import read_params, new_params
@@ -47,7 +47,7 @@ def setup_parsers() -> argparse.ArgumentParser:
         prog="ipyrad",
         description=f"{HEADER}\n{DESCRIPTION}",
         epilog=EPILOG,
-        formatter_class=make_wide(argparse.RawDescriptionHelpFormatter),
+        formatter_class=RAW_HELP_FORMATTER,
         add_help=False,
     )
     parser.add_argument("-n", action='store', dest='new', help="create new file 'params-{new}.txt' in current directory")
