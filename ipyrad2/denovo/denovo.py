@@ -91,7 +91,7 @@ def _validate_required_binaries() -> str:
     for binary, name in [(BIN_VSEARCH, "vsearch"), (BIN_MAFFT, "mafft")]:
         path = Path(binary)
         if not path.exists():
-            raise IPyradError(f"{name} binary not installed. Try `conda install -c conda-forge {name}`")
+            raise IPyradError(f"{name} binary not installed. Try `conda install -c conda-forge -c bioconda {name}`")
         if not (path.exists() and path.is_file() and os.access(path, os.X_OK)):
             raise IPyradError(f"{name} binary is not executable: {path}")
 
