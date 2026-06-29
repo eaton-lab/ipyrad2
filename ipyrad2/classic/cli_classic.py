@@ -103,6 +103,10 @@ def command_line():
     if hasattr(args, "log_level"):
         set_log_level(args.log_level)
 
+    if not (set(args.steps) <= set("12345")):
+        sys.exit("Reqested invalid step, must be a value (or list of values) "
+                  f"between 1-5. You put: {args.steps}")
+
     # DEMUX: -------------------------------------------------------
     if "1" in args.steps:
         s1_args = params.demux
