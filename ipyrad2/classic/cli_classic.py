@@ -107,6 +107,8 @@ def command_line():
         sys.exit("Reqested invalid step, must be a value (or list of values) "
                   f"between 1-5. You put: {args.steps}")
 
+    logger.success(HEADER)
+
     # DEMUX: -------------------------------------------------------
     if "1" in args.steps:
         s1_args = params.demux

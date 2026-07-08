@@ -34,8 +34,8 @@ class ProgressBar(object):
         ])
 
     def update(self):
-        """Emit the current progress bar at INFO level with log-style prefix."""
-        if not is_log_level_enabled("INFO"):
+        """Emit the current progress bar at SUCCESS level with log-style prefix."""
+        if not is_log_level_enabled("SUCCESS"):
             return
         rendered = self.render()
         if rendered == self._last_render:
@@ -43,9 +43,9 @@ class ProgressBar(object):
         self._last_render = rendered
         self._visible = True
         if self._tty:
-            logger.bind(end="\r").opt(depth=1).info(rendered)
-            return
-        logger.opt(depth=1).info(rendered)
+            logger.bind(progress=True, end="\r").opt(depth=1).success(rendered)
+        else:
+            logger.bind(progress=True).opt(depth=1).success(rendered)
 
     def close(self) -> None:
         """Finish the transient progress bar line if it was visible."""

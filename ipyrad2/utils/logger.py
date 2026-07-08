@@ -11,8 +11,8 @@ ERROR: sometimes printed along with raised errors.
 
 Examples
 --------
->>> import ipyrad as ip
->>> ip.set_log_level("DEBUG")
+>>> import ipyrad2 as ip2
+>>> ip2.set_log_level("DEBUG")
 """
 
 from __future__ import annotations
@@ -26,6 +26,10 @@ _CURRENT_LOG_LEVEL = "INFO"
 def formatter(record):
     """Custom formatter that allows for progress bar."""
     end = record["extra"].get("end", "\n")
+
+    if record["extra"].get("progress", False):
+        return "{message}" + end
+
     fmessage = (
         "{time:YYYY-MM-DD HH:mm:ss} | "
         "<level>{level:<8}</level> <white>|</white> "

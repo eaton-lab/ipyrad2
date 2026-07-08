@@ -666,7 +666,7 @@ class Demux:
         managed_set = set(managed_artifacts)
         existing_stats = sorted(self.outdir.glob(f"{DEMUX_STATS_PREFIX}*.txt"))
         if existing_stats:
-            logger.warning(
+            logger.info(
                 "existing demux stats files are present in {} and will not be overwritten ({} total): {}",
                 self.outdir,
                 len(existing_stats),
