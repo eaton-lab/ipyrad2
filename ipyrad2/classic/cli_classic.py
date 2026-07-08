@@ -231,7 +231,7 @@ def command_line():
 
         s5_args.out = Path(params.main.project_dir) / (params.main.name + "_outfiles")
 
-        msg = "Step 5 (assemble): Delimit loci, call variants, and write outputs")
+        msg = "Step 5 (assemble): Delimit loci, call variants, and write outputs"
         logger.bind(progress=True, end="\n").opt(depth=1).success(msg)
         ip.cli.cli_main.run_subcommand(s5_args, _exit=False)
 
