@@ -1,6 +1,6 @@
 [project]
 site_name = "ipyrad2 Documentation"
-site_url = "https://ipyrad2.github.io"
+#site_url = "https://ipyrad2.github.io"
 site_description = "ipyrad2 assembly and analysis of RAD-seq data"
 docs_dir = "docs"
 nav = [
