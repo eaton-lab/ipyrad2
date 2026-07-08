@@ -91,6 +91,17 @@ def test_shared_trailing_suffix_after_mate_token_is_still_paired(tmp_path: Path)
     assert result == {"iTru7_301_01b_S13_L008": (fastq1, fastq2)}
 
 
+def test_bare_trailing_separator_after_mate_token_is_still_paired(tmp_path: Path) -> None:
+    fastq1 = tmp_path / "pairddrad_example_R1_.fastq.gz"
+    fastq2 = tmp_path / "pairddrad_example_R2_.fastq.gz"
+    fastq1.touch()
+    fastq2.touch()
+
+    result = get_name_to_fastq_dict([fastq2, fastq1], None, None)
+
+    assert result == {"pairddrad_example": (fastq1, fastq2)}
+
+
 def test_split_pair_suffixes_are_grouped_by_secondary_mate_fallback(tmp_path: Path) -> None:
     fastq1a = tmp_path / "iTru7_301_01b_S13_L008_R1_001-sub.fastq.gz"
     fastq2a = tmp_path / "iTru7_301_01b_S13_L008_R2_001-sub.fastq.gz"

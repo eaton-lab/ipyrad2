@@ -148,7 +148,13 @@ def _group_paths_by_delim(
 def _parse_mate_token(path: Path) -> tuple[str, int, str] | None:
     """Extract a sample name and mate orientation from common PE filenames."""
     stem = _strip_known_suffix(path.name)
-    return _parse_mate_token_from_stem(stem)
+    parsed = _parse_mate_token_from_stem(stem)
+    if parsed is not None:
+        return parsed
+    trimmed_stem = stem.rstrip("._-")
+    if trimmed_stem == stem:
+        return None
+    return _parse_mate_token_from_stem(trimmed_stem)
 
 
 def _parse_mate_token_from_stem(stem: str) -> tuple[str, int, str] | None:
