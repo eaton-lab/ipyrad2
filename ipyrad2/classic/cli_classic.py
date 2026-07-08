@@ -127,13 +127,16 @@ def command_line():
             fq_files = []
         # If the glob succeeds then fq_files will be len > 1, and all *.gz files should exist
         if len(fq_files) and all([x.exists() for x in fq_files]):
-            logger.info("Skipping step 1: sorted_fastq_files is set and fq files exist.")
+            msg = "Skipping step 1: `sorted_fastq_files` is set and fq files exist."
+            logger.bind(progress=True, end="\n").opt(depth=1).success(msg)
         else:
             # Update demux params from the params file
             s1_args.fastqs = params.main.raw_fastq_path
             s1_args.barcodes = params.main.barcodes_path
 
             s1_args.out = Path(params.main.project_dir) / (params.main.name + "_fastqs")
+            msg = "Step 1 (demux): Demultiplexing fastq data to Samples"
+            logger.bind(progress=True, end="\n").opt(depth=1).success(msg)
             ip.cli.cli_main.run_subcommand(s1_args, _exit=False)
 
     # TRIM: -------------------------------------------------------
@@ -158,6 +161,8 @@ def command_line():
             s2_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_fastqs/*.gz")
 
         s2_args.out = Path(params.main.project_dir) / (params.main.name + "_edits")
+        msg = "Step 2 (trim): Filtering and trimming reads"
+        logger.bind(progress=True, end="\n").opt(depth=1).success(msg)
         ip.cli.cli_main.run_subcommand(s2_args, _exit=False)
 
     # DENOVO: --------------------------------------------------------
@@ -166,7 +171,8 @@ def command_line():
         # Ensure ref_seq doesn't exist. If reference_sequence parameter is blank in params file it
         # will be created as '.', so guard against this as well.
         if ref_seq.exists() and not (str(ref_seq) == '.'):
-            logger.success("Reference sequence exists, skipping denovo reference assembly.")
+            msg = "Reference sequence exists, skipping denovo reference assembly."
+            logger.bind(progress=True, end="\n").opt(depth=1).success(msg)
         else:
             s3_args = params.denovo
             s3_args.subcommand = "denovo"
@@ -175,7 +181,8 @@ def command_line():
             # Try to parse pops file to subsample fastqs for building pseudo-reference
             pops_file = Path(params.main.pop_assign_file)
             if pops_file.exists() and not (str(pops_file) == '.'):
-                logger.info("pop_assign_file does not exist, skipping subsample selection.")
+                msg = "pop_assign_file does not exist, skipping subsample selection."
+                logger.bind(progress=True, end="\n").opt(depth=1).success(msg)
                 # Defaults to using all sample edits files
                 # TODO: Could be better to randomly select a handful, but this might be
                 #       better to implement inside the denovo.py code, so it works for CLI as well
@@ -185,6 +192,8 @@ def command_line():
                 s3_args.fastqs = Path(params.main.project_dir) / (params.main.name + "_edits/*.gz")
             # TODO: Add something to test the number of .gz files and complain if there are too many.
             #       Might be good to recommend using an imap file, and then sampling 2-3 individuals per pop
+            msg = "Step 3 (denovo): Construct denovo locus reference library"
+            logger.bind(progress=True, end="\n").opt(depth=1).success(msg)
             ip.cli.cli_main.run_subcommand(s3_args, _exit=False)
 
     # MAP: --------------------------------------------------------
@@ -199,6 +208,9 @@ def command_line():
         else:
             s4_args.reference = Path(params.main.project_dir) / (params.main.name + "_reference/denovo_reference.fa")
         s4_args.out = Path(params.main.project_dir) / (params.main.name + "_mapped")
+
+        msg = "Step 4 (map): Map reads to reference assembly"
+        logger.bind(progress=True, end="\n").opt(depth=1).success(msg)
         ip.cli.cli_main.run_subcommand(s4_args, _exit=False)
 
     # ASSEMBLE: ---------------------------------------------------
@@ -218,6 +230,9 @@ def command_line():
             s5_args.reference = Path(params.main.project_dir) / (params.main.name + "_reference/denovo_reference.fa")
 
         s5_args.out = Path(params.main.project_dir) / (params.main.name + "_outfiles")
+
+        msg = "Step 5 (assemble): Delimit loci, call variants, and write outputs")
+        logger.bind(progress=True, end="\n").opt(depth=1).success(msg)
         ip.cli.cli_main.run_subcommand(s5_args, _exit=False)
 
     sys.exit(0)
