@@ -12,7 +12,7 @@ from .common import RAW_HELP_FORMATTER
 EPILOG = """\
 Examples
 --------
-$ ipyrad2 inspect OUT/ip2-pe_outfiles
+$ ipyrad2 inspect ./myassembly_outfiles
 """
 
 
