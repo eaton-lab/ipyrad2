@@ -37,6 +37,8 @@ analysis = [
     "umap-learn",
     "toyplot",
     "toytree >= 3.0.1",
+    "streamlit",
+    "plotly",
 ]
 test = [
     "pytest",

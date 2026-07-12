@@ -28,17 +28,18 @@ TOP_LEVEL_HELP = f"""{HEADER}
 {DESCRIPTION}
 
 assembly subcommands
-    demux                                    Demultiplex pooled data to samples by index or barcode.
-    trim                                     Trim reads for quality, adapters, and cutsite motifs using 'fastp'.
-    denovo                                   Optionally construct a reference library by de novo clustering reads.
-    map                                      Map reads to a reference with 'bwa-mem2' and 'samtools' to write coordinate-sorted BAMs.
+    demux                                    Demultiplex pooled data to samples by index or barcode
+    trim                                     Trim reads for quality, adapters, and cutsite motifs using 'fastp'
+    denovo                                   Optionally construct a reference library by de novo clustering reads
+    map                                      Map reads to a reference with 'bwa-mem2' and 'samtools' to write coordinate-sorted BAMs
     assemble                                 Delimit loci, call variants, and write assembled outputs, stats, and database (HDF5)
 
 data export/conversion subcommands
+    inspect                                  Launch the interactive assembly browser for an output directory
     wex                                      Extract loci from HDF5 file, filter, and write as concatenated matrix to various formats
     lex                                      Extract loci from HDF5 file, filter, and write as multi-locus data to various formats
     snpex                                    Extract SNPs from HDF5 file, filter, optionally impute, and write to various formats
-    vcf2hdf5                                 Convert an external VCF to HDF5 for use in analysis tools below.
+    vcf2hdf5                                 Convert an external VCF to HDF5 for use in analysis tools below
 
 analysis subcommands
     pca                                      Infer population structure from pca, tsne, or umap on filtered SNPs
@@ -107,6 +108,12 @@ _CORE_SUBCOMMAND_SPECS = {
         "setup": "_setup_assemble_subparser",
         "validator": None,
         "header": "ipyrad2 assemble: delimit loci, call variants, and write outputs",
+    },
+    "inspect": {
+        "module": ".cli_inspect",
+        "setup": "_setup_inspect_subparser",
+        "validator": "validate_inspect_args",
+        "header": "ipyrad2 inspect: launch the interactive assembly browser",
     },
 }
 
@@ -464,6 +471,16 @@ def run_subcommand(args, _exit=True):
             log_level=args.log_level,
             logged_command=logged_command,
         )
+        if _exit: sys.exit(0)  # noqa: E701
+
+    # INSPECT: ----------------------------------------------------
+    if args.subcommand == "inspect":
+        module = importlib.import_module(
+            "..apps.assembly_browser.launch",
+            package=__package__,
+        )
+        launch_assembly_browser = getattr(module, "launch_assembly_browser")
+        launch_assembly_browser(args.assembly_dir)
         if _exit: sys.exit(0)  # noqa: E701
 
     # EXPORT / ANALYSIS: -----------------------------------------
