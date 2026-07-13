@@ -557,6 +557,167 @@ def test_run_pca_method_writes_svg_plot_when_requested(tmp_path: Path) -> None:
     assert (tmp_path / "OUT" / "phase2.variance.tsv").exists()
 
 
+def test_run_pca_method_writes_svg_plot_with_population_colors(tmp_path: Path) -> None:
+    pytest.importorskip("toyplot")
+    h5 = _write_phase2_snps_h5(tmp_path / "snps.hdf5")
+    colors = tmp_path / "colors.tsv"
+    colors.write_text("popA    #123456\npopB    #abcdef\n", encoding="utf-8")
+
+    run_pca_method(
+        data=h5,
+        name="phase2",
+        outdir=tmp_path / "OUT",
+        method="pca",
+        min_sample_coverage=2,
+        max_sample_missing=1.0,
+        min_minor_allele_frequency=0.0,
+        imap={"popA": ["a1", "a2", "a3"], "popB": ["b1", "b2", "b3"]},
+        minmap=None,
+        exclude=None,
+        include_reference=False,
+        impute_method="sample",
+        subsample=True,
+        random_seed=7,
+        replicates=1,
+        perplexity=5.0,
+        max_iter=1000,
+        n_neighbors=15,
+        plot=True,
+        colors=colors,
+        cores=1,
+        force=True,
+        log_level="INFO",
+    )
+
+    plot_text = (tmp_path / "OUT" / "phase2.plot.svg").read_text(encoding="utf-8")
+    assert plot_text.lstrip().startswith("<svg")
+
+
+def test_pca_marker_styles_use_population_colors() -> None:
+    from ipyrad2.analysis.methods.pca_drawing import _build_marker_styles
+
+    class FakeBrewer:
+        @staticmethod
+        def map(name):
+            return name
+
+    class FakeColor:
+        brewer = FakeBrewer()
+
+        @staticmethod
+        def broadcast(palette, *, shape):
+            return ["default"] * shape
+
+        @staticmethod
+        def to_css(color):
+            return color
+
+    class FakeMarker:
+        @staticmethod
+        def create(**kwargs):
+            return kwargs
+
+    fake_toyplot = SimpleNamespace(color=FakeColor(), marker=FakeMarker())
+    centroid_styles, replicate_styles, legend_items = _build_marker_styles(
+        fake_toyplot,
+        groups=["popA", "popB"],
+        nreplicates=1,
+        population_colors={"popA": "#123456", "popB": "firebrick"},
+    )
+
+    assert centroid_styles["popA"]["mstyle"]["fill"] == "#123456"
+    assert replicate_styles["popB"]["mstyle"]["fill"] == "firebrick"
+    assert [label for label, _ in legend_items] == ["popA", "popB"]
+
+
+def test_run_pca_method_rejects_colors_without_plot_or_imap(tmp_path: Path) -> None:
+    h5 = _write_phase2_snps_h5(tmp_path / "snps.hdf5")
+    colors = tmp_path / "colors.tsv"
+    colors.write_text("population\tcolor\npopA\t#123456\n", encoding="utf-8")
+
+    with pytest.raises(IPyradError, match="can only be used with --plot"):
+        run_pca_method(
+            data=h5,
+            name="phase2",
+            outdir=tmp_path / "OUT",
+            method="pca",
+            min_sample_coverage=2,
+            max_sample_missing=1.0,
+            min_minor_allele_frequency=0.0,
+            imap={"popA": ["a1", "a2", "a3"], "popB": ["b1", "b2", "b3"]},
+            minmap=None,
+            exclude=None,
+            include_reference=False,
+            impute_method="sample",
+            subsample=True,
+            random_seed=7,
+            replicates=1,
+            perplexity=5.0,
+            max_iter=1000,
+            n_neighbors=15,
+            plot=False,
+            colors=colors,
+            cores=1,
+            force=True,
+            log_level="INFO",
+        )
+
+    with pytest.raises(IPyradError, match="requires --imap"):
+        run_pca_method(
+            data=h5,
+            name="phase2",
+            outdir=tmp_path / "OUT",
+            method="pca",
+            min_sample_coverage=2,
+            max_sample_missing=1.0,
+            min_minor_allele_frequency=0.0,
+            imap=None,
+            minmap=None,
+            exclude=None,
+            include_reference=False,
+            impute_method="sample",
+            subsample=True,
+            random_seed=7,
+            replicates=1,
+            perplexity=5.0,
+            max_iter=1000,
+            n_neighbors=15,
+            plot=True,
+            colors=colors,
+            cores=1,
+            force=True,
+            log_level="INFO",
+        )
+
+
+def test_pca_population_colors_file_validation(tmp_path: Path) -> None:
+    from ipyrad2.analysis.methods.pca_drawing import read_population_colors
+
+    too_many_columns = tmp_path / "too_many_columns.tsv"
+    too_many_columns.write_text("popA #123456 extra\n", encoding="utf-8")
+    with pytest.raises(IPyradError, match="two whitespace-delimited columns"):
+        read_population_colors(too_many_columns)
+
+    duplicate = tmp_path / "duplicate.tsv"
+    duplicate.write_text(
+        "population color\npopA #123456\npopA #abcdef\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(IPyradError, match="duplicate populations"):
+        read_population_colors(duplicate)
+
+    valid = tmp_path / "valid.tsv"
+    valid.write_text("popA    #123456\npopB firebrick\n", encoding="utf-8")
+    assert read_population_colors(valid) == {
+        "popA": "#123456",
+        "popB": "firebrick",
+    }
+
+    valid_with_header = tmp_path / "valid_with_header.tsv"
+    valid_with_header.write_text("population color\npopA firebrick\n", encoding="utf-8")
+    assert read_population_colors(valid_with_header) == {"popA": "firebrick"}
+
+
 def test_run_pca_method_accepts_assembly_style_hdf5_names(tmp_path: Path) -> None:
     h5 = _write_assembly_style_phase2_snps_h5(tmp_path / "assembly_snps.hdf5")
 

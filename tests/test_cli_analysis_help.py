@@ -41,6 +41,7 @@ def test_top_level_help_groups_commands_and_examples_are_updated() -> None:
         "denovo",
         "map",
         "assemble",
+        "inspect",
         "wex",
         "lex",
         "snpex",
@@ -357,13 +358,15 @@ def test_pca_help_groups_examples_and_imputation_are_present() -> None:
     assert "zero-fill" not in help_text
     assert "deprecated alias" not in help_text
     assert "--no-subsample" in help_text
-    assert "-M, --method" in help_text
+    assert "-M str, --method str" in help_text
     assert "Method to run: pca, tsne, or umap." in help_text
     assert "serial method initialization" in help_text
     assert "--plot" in help_text
     assert "--plot-width" in help_text
     assert "--plot-height" in help_text
     assert "--plot-marker-size" in help_text
+    assert "--plot-colors" in help_text
+    assert "population color file" in help_text
     assert "Population-to-minimum-coverage mapping file" in help_text
     assert "`population<TAB>min`" in help_text
     assert "--min-genotype-depth" in help_text

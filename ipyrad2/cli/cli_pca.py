@@ -14,6 +14,7 @@ Examples
 $ ipyrad2 pca -d snps.hdf5 -o OUT/
 $ ipyrad2 pca -d snps.hdf5 -o OUT/ --plot
 $ ipyrad2 pca -d snps.hdf5 -o OUT/ --plot --plot-width 520 --plot-height 360
+$ ipyrad2 pca -d snps.hdf5 -o OUT/ --plot -i imap.tsv --plot-colors colors.tsv
 $ ipyrad2 pca -d snps.hdf5 -o OUT/ -M tsne --perplexity 8
 $ ipyrad2 pca -d snps.hdf5 -o OUT/ -M umap --n-neighbors 10
 $ ipyrad2 pca -d snps.hdf5 -o OUT/ --no-subsample --impute-method zero
@@ -94,6 +95,10 @@ def _setup_pca_subparser(
     plotting.add_argument(
         "--plot-marker-size", metavar="int", type=int, default=10,
         help="Marker size for `--plot`. [default=10]",
+    )
+    plotting.add_argument(
+        "--plot-colors", metavar="Path", type=Path,
+        help="Whitespace-delimited population color file for PCA plot marker colors.",
     )
 
     filtering = tool.add_argument_group("Filtering and samples")

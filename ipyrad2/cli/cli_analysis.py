@@ -339,6 +339,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
             plot_width=args.plot_width,
             plot_height=args.plot_height,
             plot_marker_size=args.plot_marker_size,
+            colors=args.plot_colors,
             cores=args.cores,
             force=args.force,
             log_level=args.log_level,

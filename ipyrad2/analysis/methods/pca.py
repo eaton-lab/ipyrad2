@@ -627,6 +627,7 @@ def run_pca_method(
     plot_width: int = 400,
     plot_height: int = 300,
     plot_marker_size: int = 10,
+    colors: Path | str | None = None,
     cores: int = 1,
     force: bool = False,
     log_level: str = "INFO",
@@ -643,6 +644,10 @@ def run_pca_method(
     )
     if plot and method != "pca":
         raise IPyradError("PCA plotting is currently supported only with `-M pca`.")
+    if colors is not None and not plot:
+        raise IPyradError("PCA --plot-colors can only be used with --plot.")
+    if colors is not None and imap is None:
+        raise IPyradError("PCA --plot-colors requires --imap population assignments.")
     if plot:
         _validate_plot_args(
             plot_width=plot_width,
@@ -762,6 +767,7 @@ def run_pca_method(
             width=plot_width,
             height=plot_height,
             marker_size=plot_marker_size,
+            colors=colors,
         )
     write_stats_file(
         paths["stats"],

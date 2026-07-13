@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pandas as pd
 
 from ...utils.exceptions import IPyradError
 from .common import require_toyplot
@@ -77,6 +78,7 @@ def _build_marker_styles(
     groups: list[str],
     nreplicates: int,
     size: int = 10,
+    population_colors: dict[str, str] | None = None,
 ) -> tuple[dict[str, object], dict[str, object], list[tuple[str, object]]]:
     """Return centroid and replicate marker styles plus legend items."""
     cycle = max(1, min(8, len(groups)))
@@ -104,7 +106,7 @@ def _build_marker_styles(
     replicate_styles = {}
     legend_items = []
     for group in groups:
-        color = next(colors)
+        color = population_colors[group] if population_colors else next(colors)
         shape = next(shapes)
         try:
             css_color = toyplot.color.to_css(color)
@@ -132,6 +134,54 @@ def _build_marker_styles(
         )
         legend_items.append((group, centroid_styles[group]))
     return centroid_styles, replicate_styles, legend_items
+
+
+def read_population_colors(path: Path | str) -> dict[str, str]:
+    """Read a population-to-color whitespace-delimited file for PCA plotting."""
+    path = Path(path).expanduser()
+    if not path.exists():
+        raise IPyradError(f"PCA colors file does not exist: {path}")
+    data = pd.read_csv(path, sep=r"\s+", header=None, dtype="string")
+    if data.empty:
+        raise IPyradError("PCA colors file is empty.")
+    if data.shape[1] != 2:
+        raise IPyradError(
+            "PCA colors file must contain two whitespace-delimited columns: "
+            "population and color."
+        )
+    data.columns = ["population", "color"]
+    header = data.iloc[0].str.lower().tolist()
+    if header == ["population", "color"]:
+        data = data.iloc[1:].reset_index(drop=True)
+    if data.empty:
+        raise IPyradError("PCA colors file contains no population color rows.")
+    bad_rows = data.isna().any(axis=1) | data.eq("").any(axis=1)
+    if bad_rows.any():
+        raise IPyradError("PCA colors file contains empty population or color values.")
+    duplicated = data["population"][data["population"].duplicated()].unique().tolist()
+    if duplicated:
+        raise IPyradError(
+            "PCA colors file contains duplicate populations: "
+            + ", ".join(str(i) for i in duplicated)
+        )
+    return dict(zip(data["population"].astype(str), data["color"].astype(str)))
+
+
+def _resolve_population_colors(
+    result: "PCAFamilyResult",
+    colors: Path | str | None,
+) -> dict[str, str] | None:
+    """Return colors aligned to retained populations, or None for defaults."""
+    if colors is None:
+        return None
+    population_colors = read_population_colors(colors)
+    missing = [group for group in result.extracter.imap if group not in population_colors]
+    if missing:
+        raise IPyradError(
+            "PCA colors file is missing colors for populations: "
+            + ", ".join(missing)
+        )
+    return population_colors
 
 
 def _stroke_width(style: dict[str, object]) -> float:
@@ -209,6 +259,7 @@ def write_pca_svg_plot(
     width: int = 400,
     height: int = 300,
     marker_size: int = 10,
+    colors: Path | str | None = None,
 ) -> None:
     """Write a default SVG PCA plot using the first two principal components."""
     _require_pca_plot_axes(result)
@@ -219,12 +270,14 @@ def write_pca_svg_plot(
     sample_to_group = _sample_to_group(result)
     groups = list(result.extracter.imap)
     nreplicates = len(aligned)
+    population_colors = _resolve_population_colors(result, colors)
 
     centroid_styles, replicate_styles, legend_items = _build_marker_styles(
         toyplot,
         groups=groups,
         nreplicates=nreplicates,
         size=marker_size,
+        population_colors=population_colors,
     )
     centroid_markers = [centroid_styles[sample_to_group[name]] for name in result.samples]
     replicate_markers = [replicate_styles[sample_to_group[name]] for name in result.samples]
