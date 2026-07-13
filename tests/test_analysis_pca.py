@@ -593,6 +593,55 @@ def test_run_pca_method_writes_svg_plot_with_population_colors(tmp_path: Path) -
     assert plot_text.lstrip().startswith("<svg")
 
 
+def test_run_pca_method_plots_imap_subset_with_colors_and_replicates(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("toyplot")
+    h5 = _write_phase2_snps_h5(tmp_path / "snps.hdf5")
+    colors = tmp_path / "colors.tsv"
+    colors.write_text("popA    #123456\npopB    firebrick\n", encoding="utf-8")
+
+    run_pca_method(
+        data=h5,
+        name="subset",
+        outdir=tmp_path / "OUT",
+        method="pca",
+        min_sample_coverage=2,
+        max_sample_missing=1.0,
+        min_minor_allele_frequency=0.0,
+        imap={"popA": ["a1", "a2"], "popB": ["b1", "b2"]},
+        minmap=None,
+        exclude=None,
+        include_reference=False,
+        impute_method="sample",
+        subsample=True,
+        random_seed=7,
+        replicates=2,
+        perplexity=5.0,
+        max_iter=1000,
+        n_neighbors=15,
+        plot=True,
+        colors=colors,
+        cores=1,
+        force=True,
+        log_level="INFO",
+    )
+
+    coords = pd.read_csv(tmp_path / "OUT" / "subset.coords.tsv", sep="\t")
+    sample_summary = pd.read_csv(
+        tmp_path / "OUT" / "subset.sample_data_summary.tsv",
+        sep="\t",
+    )
+    plot_text = (tmp_path / "OUT" / "subset.plot.svg").read_text(encoding="utf-8")
+
+    assert sorted(coords["sample"].unique().tolist()) == ["a1", "a2", "b1", "b2"]
+    assert coords["replicate"].tolist().count(0) == 4
+    assert coords["replicate"].tolist().count(1) == 4
+    assert sample_summary["sample"].tolist() == ["a1", "a2", "b1", "b2"]
+    assert sample_summary["population"].tolist() == ["popA", "popA", "popB", "popB"]
+    assert plot_text.lstrip().startswith("<svg")
+
+
 def test_pca_marker_styles_use_population_colors() -> None:
     from ipyrad2.analysis.methods.pca_drawing import _build_marker_styles
 
@@ -621,12 +670,13 @@ def test_pca_marker_styles_use_population_colors() -> None:
     centroid_styles, replicate_styles, legend_items = _build_marker_styles(
         fake_toyplot,
         groups=["popA", "popB"],
-        nreplicates=1,
+        nreplicates=3,
         population_colors={"popA": "#123456", "popB": "firebrick"},
     )
 
     assert centroid_styles["popA"]["mstyle"]["fill"] == "#123456"
     assert replicate_styles["popB"]["mstyle"]["fill"] == "firebrick"
+    assert replicate_styles["popB"]["mstyle"]["fill-opacity"] == pytest.approx(0.3)
     assert [label for label, _ in legend_items] == ["popA", "popB"]
 
 

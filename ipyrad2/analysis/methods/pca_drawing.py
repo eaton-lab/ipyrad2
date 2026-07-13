@@ -72,6 +72,15 @@ def _sample_to_group(result: "PCAFamilyResult") -> dict[str, str]:
     return mapping
 
 
+def _retained_groups(
+    result: "PCAFamilyResult",
+    sample_to_group: dict[str, str],
+) -> list[str]:
+    """Return populations represented by retained samples in IMAP order."""
+    retained = {sample_to_group[name] for name in result.samples}
+    return [group for group in result.extracter.imap if group in retained]
+
+
 def _build_marker_styles(
     toyplot,
     *,
@@ -168,14 +177,14 @@ def read_population_colors(path: Path | str) -> dict[str, str]:
 
 
 def _resolve_population_colors(
-    result: "PCAFamilyResult",
+    groups: list[str],
     colors: Path | str | None,
 ) -> dict[str, str] | None:
     """Return colors aligned to retained populations, or None for defaults."""
     if colors is None:
         return None
     population_colors = read_population_colors(colors)
-    missing = [group for group in result.extracter.imap if group not in population_colors]
+    missing = [group for group in groups if group not in population_colors]
     if missing:
         raise IPyradError(
             "PCA colors file is missing colors for populations: "
@@ -268,9 +277,9 @@ def write_pca_svg_plot(
     aligned = _align_replicate_coords(result)
     variances = _mean_variances(result)
     sample_to_group = _sample_to_group(result)
-    groups = list(result.extracter.imap)
+    groups = _retained_groups(result, sample_to_group)
     nreplicates = len(aligned)
-    population_colors = _resolve_population_colors(result, colors)
+    population_colors = _resolve_population_colors(groups, colors)
 
     centroid_styles, replicate_styles, legend_items = _build_marker_styles(
         toyplot,
