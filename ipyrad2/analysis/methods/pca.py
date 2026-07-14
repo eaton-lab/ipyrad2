@@ -84,6 +84,9 @@ class PCA:
         log_level: str = "SUCCESS",
     ) -> "PCA":
         """Run PCA and keep the in-memory result for interactive use."""
+        from ...utils.logger import set_api_log_level
+        set_api_log_level(log_level) 
+        
         result = run_pca_analysis(
             data=data,
             min_sample_coverage=min_sample_coverage,

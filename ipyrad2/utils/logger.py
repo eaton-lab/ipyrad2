@@ -89,6 +89,23 @@ def set_log_level(log_level: str = "DEBUG"):
     return logger
 
 
+def set_api_log_level(log_level: str = "SUCCESS"):
+    """Set a minimal logger within API mode.
+    """
+    global _CURRENT_LOG_LEVEL
+    _CURRENT_LOG_LEVEL = normalize_log_level(log_level)
+    logger.remove()
+
+    logger.add(
+        sink=sys.stderr,
+        level=_CURRENT_LOG_LEVEL,
+        colorize=color_support(),
+        format="  {message}",
+        enqueue=False,
+    )
+    return logger
+
+
 def setup_loguru_worker(log_level: str) -> None:
     """initialized on parallel Worker processes."""
     global _CURRENT_LOG_LEVEL
