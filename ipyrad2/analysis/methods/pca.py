@@ -129,6 +129,7 @@ class PCA:
             width=width,
             height=height,
             marker_size=marker_size,
+            label=label,
             colors=colors,
         )
 
