@@ -267,6 +267,7 @@ def draw_pca_plot(
     width: int = 400,
     height: int = 300,
     marker_size: int = 10,
+    label = str | None = None,
     colors: Path | str | None = None,
 ) -> object:
     """Return a Toyplot canvas using the first two principal components."""
@@ -311,6 +312,10 @@ def draw_pca_plot(
     axes.y.ticks.locator = toyplot.locator.Extended(only_inside=True)
     _set_axes_ticks_external(axes)
     _add_axes_box_outline(canvas, axes)
+
+    if label:
+        axes.label.text = label
+        axes.label.style['font-size'] = "20px"
 
     reps = sorted(aligned)
     if nreplicates == 1:
