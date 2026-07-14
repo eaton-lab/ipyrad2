@@ -33,16 +33,20 @@ def _require_pca_plot_axes(result: "PCAFamilyResult") -> None:
         raise IPyradError("PCA plotting requires at least two PCA axes.")
 
 
-def _align_replicate_coords(result: "PCAFamilyResult") -> dict[int, np.ndarray]:
+def _align_replicate_coords(
+    result: "PCAFamilyResult",
+    PC0: int = 0,
+    PC1: int = 1,
+) -> dict[int, np.ndarray]:
     """Return the first two PCA axes for each replicate with signs aligned."""
     reps = sorted(result.coords_by_replicate)
     aligned = {}
-    base = result.coords_by_replicate[reps[0]][:, :2].astype(np.float64, copy=True)
+    base = result.coords_by_replicate[reps[0]][:, [PC0, PC1]].astype(np.float64, copy=True)
     aligned[reps[0]] = base
 
     for rep in reps[1:]:
-        current = result.coords_by_replicate[rep][:, :2].astype(np.float64, copy=True)
-        for axis in (0, 1):
+        current = result.coords_by_replicate[rep][:, [PC0, PC1]].astype(np.float64, copy=True)
+        for axis in (PC0, PC1):
             if np.dot(base[:, axis], current[:, axis]) < 0:
                 current[:, axis] *= -1.0
         aligned[rep] = current
@@ -264,6 +268,8 @@ def _add_axes_box_outline(canvas, axes) -> object:
 def draw_pca_plot(
     result: "PCAFamilyResult",
     *,
+    PC0: int = 0,
+    PC1: int = 1,
     width: int = 400,
     height: int = 300,
     marker_size: int = 10,
@@ -274,7 +280,7 @@ def draw_pca_plot(
     _require_pca_plot_axes(result)
     toyplot, _toyplot_svg = require_toyplot()
 
-    aligned = _align_replicate_coords(result)
+    aligned = _align_replicate_coords(result, PC0, PC1)
     variances = _mean_variances(result)
     sample_to_group = _sample_to_group(result)
     groups = _retained_groups(result, sample_to_group)
@@ -291,8 +297,8 @@ def draw_pca_plot(
     centroid_markers = [centroid_styles[sample_to_group[name]] for name in result.samples]
     replicate_markers = [replicate_styles[sample_to_group[name]] for name in result.samples]
 
-    xlab = f"PC1 ({variances[0] * 100:.1f}% explained)"
-    ylab = f"PC2 ({variances[1] * 100:.1f}% explained)"
+    xlab = f"PC{PC0+1} ({variances[PC0] * 100:.1f}% explained)"
+    ylab = f"PC{PC1+1} ({variances[PC1] * 100:.1f}% explained)"
 
     legend_width = min(140, max(90, width // 4))
     canvas = toyplot.Canvas(width, height)

@@ -110,6 +110,8 @@ class PCA:
     def draw(
         self,
         *,
+        PC0: int = 0,
+        PC1: int = 1,
         width: int = 400,
         height: int = 300,
         marker_size: int = 10,
@@ -126,6 +128,8 @@ class PCA:
 
         return draw_pca_plot(
             self.result,
+            PC0=PC0,
+            PC1=PC1,
             width=width,
             height=height,
             marker_size=marker_size,
