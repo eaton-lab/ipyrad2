@@ -46,7 +46,7 @@ def _align_replicate_coords(
 
     for rep in reps[1:]:
         current = result.coords_by_replicate[rep][:, [PC0, PC1]].astype(np.float64, copy=True)
-        for axis in (PC0, PC1):
+        for axis in (0, 1):
             if np.dot(base[:, axis], current[:, axis]) < 0:
                 current[:, axis] *= -1.0
         aligned[rep] = current
