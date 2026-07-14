@@ -56,6 +56,79 @@ class PCAFamilyResult:
         return self.prepared_inputs_by_replicate[min(self.prepared_inputs_by_replicate)]
 
 
+@dataclass
+class PCA:
+    """Notebook-friendly wrapper around the PCA analysis runner."""
+
+    result: PCAFamilyResult
+
+    @classmethod
+    def run(
+        cls,
+        *,
+        data: Path | str,
+        min_sample_coverage: float = 4,
+        max_sample_missing: float = 1.0,
+        min_minor_allele_frequency: float = 0.0,
+        min_genotype_depth: int = 0,
+        min_site_qual: float = 0.0,
+        imap=None,
+        minmap=None,
+        exclude=None,
+        include_reference: bool = False,
+        impute_method: str | None = "sample",
+        subsample: bool = True,
+        random_seed: int | None = None,
+        replicates: int = 1,
+        cores: int = 1,
+        log_level: str = "INFO",
+    ) -> "PCA":
+        """Run PCA and keep the in-memory result for interactive use."""
+        result = run_pca_analysis(
+            data=data,
+            min_sample_coverage=min_sample_coverage,
+            max_sample_missing=max_sample_missing,
+            min_minor_allele_frequency=min_minor_allele_frequency,
+            min_genotype_depth=min_genotype_depth,
+            min_site_qual=min_site_qual,
+            imap=imap,
+            minmap=minmap,
+            exclude=exclude,
+            include_reference=include_reference,
+            impute_method=impute_method,
+            subsample=subsample,
+            random_seed=random_seed,
+            replicates=replicates,
+            cores=cores,
+            log_level=log_level,
+        )
+        return cls(result=result)
+
+    def draw(
+        self,
+        *,
+        width: int = 400,
+        height: int = 300,
+        marker_size: int = 10,
+        colors: Path | str | None = None,
+    ):
+        """Return a Toyplot canvas for display in a notebook."""
+        _validate_plot_args(
+            plot_width=width,
+            plot_height=height,
+            plot_marker_size=marker_size,
+        )
+        from .pca_drawing import draw_pca_plot
+
+        return draw_pca_plot(
+            self.result,
+            width=width,
+            height=height,
+            marker_size=marker_size,
+            colors=colors,
+        )
+
+
 def _require_matrix(matrix: np.ndarray, label: str) -> tuple[int, int]:
     """Validate a 2D genotype matrix before running a numerical method."""
     if matrix.ndim != 2:
@@ -798,6 +871,7 @@ def run_pca_method(
 
 
 __all__ = [
+    "PCA",
     "PCAFamilyResult",
     "run_pca_analysis",
     "run_pca_method",

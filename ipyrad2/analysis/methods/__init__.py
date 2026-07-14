@@ -4,6 +4,7 @@ from importlib import import_module
 
 __all__ = [
     "Bpp",
+    "PCA",
     "PCAFamilyResult",
     "SNPsImputer",
     "run_admixture_method",
@@ -28,6 +29,7 @@ _LAZY_EXPORTS = {
     "run_dapc_method": (".dapc", "run_dapc_method"),
     "run_popgen_method": (".popgen", "run_popgen_method"),
     "run_snmf_method": (".snmf", "run_snmf_method"),
+    "PCA": (".pca", "PCA"),
     "PCAFamilyResult": (".pca", "PCAFamilyResult"),
     "run_pca_analysis": (".pca", "run_pca_analysis"),
     "run_pca_method": (".pca", "run_pca_method"),

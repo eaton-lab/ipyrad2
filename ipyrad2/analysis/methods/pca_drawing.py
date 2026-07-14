@@ -261,18 +261,17 @@ def _add_axes_box_outline(canvas, axes) -> object:
     return overlay
 
 
-def write_pca_svg_plot(
+def draw_pca_plot(
     result: "PCAFamilyResult",
-    outfile: Path | str,
     *,
     width: int = 400,
     height: int = 300,
     marker_size: int = 10,
     colors: Path | str | None = None,
-) -> None:
-    """Write a default SVG PCA plot using the first two principal components."""
+) -> object:
+    """Return a Toyplot canvas using the first two principal components."""
     _require_pca_plot_axes(result)
-    toyplot, toyplot_svg = require_toyplot()
+    toyplot, _toyplot_svg = require_toyplot()
 
     aligned = _align_replicate_coords(result)
     variances = _mean_variances(result)
@@ -344,5 +343,26 @@ def write_pca_svg_plot(
     canvas.legend(
         legend_items,
         bounds=(-legend_width - 60, -60, 60, -60),
+    )
+    return canvas
+
+
+def write_pca_svg_plot(
+    result: "PCAFamilyResult",
+    outfile: Path | str,
+    *,
+    width: int = 400,
+    height: int = 300,
+    marker_size: int = 10,
+    colors: Path | str | None = None,
+) -> None:
+    """Write a default SVG PCA plot using the first two principal components."""
+    _toyplot, toyplot_svg = require_toyplot()
+    canvas = draw_pca_plot(
+        result,
+        width=width,
+        height=height,
+        marker_size=marker_size,
+        colors=colors,
     )
     toyplot_svg.render(canvas, str(outfile))

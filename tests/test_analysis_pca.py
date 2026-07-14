@@ -9,7 +9,7 @@ from loguru import logger
 
 from ipyrad2.analysis.methods import pca as pca_methods
 from ipyrad2.analysis.methods.common import NumericalInput
-from ipyrad2.analysis.methods.pca import run_pca_analysis, run_pca_method
+from ipyrad2.analysis.methods.pca import PCA, run_pca_analysis, run_pca_method
 from ipyrad2.utils.exceptions import IPyradError
 
 
@@ -868,6 +868,36 @@ def test_run_pca_analysis_public_api_returns_prepared_result(tmp_path: Path) -> 
     assert result.primary_input.imputation.imputed_snp_count == 1
     assert result.primary_input.imputation.total_snps == 3
     assert result.primary_input.matrix.shape == (6, 3)
+
+
+def test_pca_class_run_and_draw_returns_toyplot_canvas(tmp_path: Path) -> None:
+    pytest.importorskip("toyplot")
+    h5 = _write_phase2_snps_h5(tmp_path / "snps.hdf5")
+    colors = tmp_path / "colors.tsv"
+    colors.write_text("popA #123456\npopB firebrick\n", encoding="utf-8")
+
+    pca = PCA.run(
+        data=h5,
+        min_sample_coverage=2,
+        max_sample_missing=1.0,
+        min_minor_allele_frequency=0.0,
+        imap={"popA": ["a1", "a2"], "popB": ["b1", "b2"]},
+        minmap=None,
+        exclude=None,
+        include_reference=False,
+        impute_method="none",
+        subsample=True,
+        random_seed=7,
+        replicates=2,
+        cores=1,
+        log_level="INFO",
+    )
+    canvas = pca.draw(width=420, height=320, marker_size=8, colors=colors)
+
+    assert pca.result.samples == ["a1", "a2", "b1", "b2"]
+    assert sorted(pca.result.coords_by_replicate) == [0, 1]
+    assert canvas.width == 420
+    assert canvas.height == 320
 
 
 def test_run_pca_method_logs_linewise_filter_stats_and_imputation_summary(tmp_path: Path) -> None:
