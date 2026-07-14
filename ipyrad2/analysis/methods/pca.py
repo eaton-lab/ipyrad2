@@ -81,7 +81,7 @@ class PCA:
         random_seed: int | None = None,
         replicates: int = 1,
         cores: int = 1,
-        log_level: str = "INFO",
+        log_level: str = "SUCCESS",
     ) -> "PCA":
         """Run PCA and keep the in-memory result for interactive use."""
         result = run_pca_analysis(
