@@ -90,14 +90,14 @@ def set_log_level(log_level: str = "DEBUG"):
 
 
 def set_api_log_level(log_level: str = "SUCCESS"):
-    """Set a minimal logger within API mode.
+    """Set a minimal stdout logger within API mode.
     """
     global _CURRENT_LOG_LEVEL
     _CURRENT_LOG_LEVEL = normalize_log_level(log_level)
     logger.remove()
 
     logger.add(
-        sink=sys.stderr,
+        sink=sys.stdout,
         level=_CURRENT_LOG_LEVEL,
         colorize=color_support(),
         format="  {message}",
