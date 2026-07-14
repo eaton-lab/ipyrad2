@@ -186,7 +186,7 @@ class SNPsExtracter:
             try:
                 imap, parsed_minmap = parse_pops_file(imap)
             except IPyradError:
-                logger.info(
+                logger.debug(
                     "imap file doesn't include minmap info, parsing standard imap file format."
                 )
                 imap = parse_imap(imap)
@@ -256,7 +256,7 @@ class SNPsExtracter:
             self.minmap = {"all": self.mincov}
         else:
             if not minmap:
-                logger.info(
+                logger.debug(
                     "No minmap specified. The global `-m` filter still applies; "
                     "defaulting per-population minimums to 0 so `-g` has no effect "
                     "unless it is provided."
