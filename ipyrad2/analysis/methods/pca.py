@@ -113,6 +113,7 @@ class PCA:
         width: int = 400,
         height: int = 300,
         marker_size: int = 10,
+        label: str | None = None,
         colors: Path | str | None = None,
     ):
         """Return a Toyplot canvas for display in a notebook."""
