@@ -107,6 +107,7 @@ class PCA:
         )
         return cls(result=result)
 
+
     def draw(
         self,
         *,
@@ -136,6 +137,27 @@ class PCA:
             label=label,
             colors=colors,
         )
+
+
+    def filter_summary(self):
+        return self.result.extracter.stats.map('{:.3f}'.format)
+
+
+    def sample_summary(self, impute_method: str = "sample"):
+        canonical_impute = _normalize_pca_impute_method(impute_method)
+        sample_summary = aggregate_sample_data_summaries(
+            build_imputed_sample_data_summary(
+                samples=self.result.samples,
+                matrix=prepared.view.genos,
+                impute_method=canonical_impute,
+            )
+            for prepared in self.result.prepared_inputs_by_replicate.values()
+        )
+        sample_summary = _add_population_assignments(
+            sample_summary,
+            extracter=self.result.extracter,
+        )
+        return sample_summary
 
 
 def _require_matrix(matrix: np.ndarray, label: str) -> tuple[int, int]:
