@@ -12,7 +12,14 @@ dependencies = [
     "numpy",
     "pandas",
     "h5py",
-    "tomlkit"
+    "tomlkit",
+    "fastp",
+    "vsearch",
+    "mafft",
+    "bwa-mem2",
+    "samtools",
+    "bedtools",
+    "bcftools",
 ]
 description = "Interactive assembly and analysis of RAD-seq data sets"
 readme = {file = "README.md", content-type = "text/markdown"}
@@ -56,6 +63,9 @@ ipyrad2-classic = "ipyrad2.classic:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.package-data]
+ipyrad2 = ["trimmer/adapters.fa"]
 
 [tool.setuptools.packages.find]
 where = ["."]
