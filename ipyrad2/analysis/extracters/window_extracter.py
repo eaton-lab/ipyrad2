@@ -32,6 +32,7 @@ outfile: alignment.phy
 """
 
 from typing import Dict, List, Tuple
+import os
 import sys
 from pathlib import Path
 import numpy as np
@@ -136,6 +137,7 @@ class WindowExtracter:
         minmap: Dict[str, int | float] | None = None,
         stdout: bool = False,
         force: bool = False,
+        logged_command: str | None = None,
     ):
         # store params
         imap, minmap = normalize_sequence_population_inputs(imap, minmap)
@@ -150,6 +152,7 @@ class WindowExtracter:
         self.max_sample_missing = min(1.0, max(0, max_sample_missing))
         self.stdout = stdout
         self.force = force
+        self.logged_command = logged_command
 
         # data parsed from h5
         self.scaffold_table: pd.DataFrame = None
@@ -682,8 +685,11 @@ class WindowExtracter:
             ["sample", "population", "percent_missing", "dropped_by_max_missing"],
             sample_rows,
         )
+        report_text = "\n".join(lines).rstrip() + "\n"
+        if self.logged_command:
+            report_text = f"CMD: {self.logged_command}\n\n{report_text}"
         with open(stats_path, "w", encoding="utf-8") as out:
-            out.write("\n".join(lines).rstrip() + "\n")
+            out.write(report_text)
         logger.info(f"wrote stats/log to: {stats_path}")
 
     def _write_to_phy(self, 
@@ -938,7 +944,11 @@ def run_window_extracter(**kwargs):
     tool = WindowExtracter(**kwargs)
 
     if request_table:
-        tool.scaffold_table.to_csv(sys.stdout, sep="\t")
+        try:
+            tool.scaffold_table.to_csv(sys.stdout, sep="\t")
+            sys.stdout.flush()
+        except BrokenPipeError:
+            sys.stdout = open(os.devnull, "w", encoding="utf-8")
         sys.exit(0)
 
     if tool.out_format == "phy":

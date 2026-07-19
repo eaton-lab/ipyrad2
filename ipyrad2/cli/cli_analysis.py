@@ -168,10 +168,11 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
 
     if tool == "wex":
         run_window_extracter = _load_runner(tool)
+        logged_command = format_logged_command(sys.argv[1:])
         logger.info("-------------------------------------------------------")
         logger.info("----- ipyrad2 wex: extract alignments from windows -----")
         logger.info("-------------------------------------------------------")
-        logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
+        logger.info(f"CMD: {logged_command}")
         run_window_extracter(
             data=args.data,
             name=args.name,
@@ -187,6 +188,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
             print_scaffold_table=args.print_scaffold_table,
             stdout=args.stdout,
             force=args.force,
+            logged_command=logged_command,
         )
         if _exit:
             sys.exit(0)

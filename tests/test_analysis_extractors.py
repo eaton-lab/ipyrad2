@@ -65,6 +65,7 @@ def _make_wex(
     imap=None,
     minmap=None,
     max_sample_missing: float = 1.0,
+    logged_command: str | None = None,
 ) -> WindowExtracter:
     return WindowExtracter(
         data=h5,
@@ -80,6 +81,7 @@ def _make_wex(
         minmap=minmap,
         stdout=stdout,
         force=force,
+        logged_command=logged_command,
     )
 
 
@@ -198,6 +200,7 @@ def test_wex_phy_output_writes_stats_and_keeps_filtered_rows_aligned(
         windows=["chr1:1-4"],
         force=True,
         max_sample_missing=0.5,
+        logged_command="ipyrad2 wex -d assembly.hdf5 -w chr1:1-4",
     )
 
     tool._write_to_phy()
@@ -213,6 +216,7 @@ def test_wex_phy_output_writes_stats_and_keeps_filtered_rows_aligned(
     assert lines[0] == "2 4"
     assert lines[1].strip().endswith("ACGT")
     assert lines[2].strip().endswith("TCGT")
+    assert stats.startswith("CMD: ipyrad2 wex -d assembly.hdf5 -w chr1:1-4\n\n")
     assert "# Extract Summary" in stats
     assert "# Filtering Summary" in stats
     assert "# Alignment Summary" in stats
@@ -296,7 +300,69 @@ def test_wex_phy_stdout_writes_stats_without_crashing(
     )
 
     assert captured.out.startswith("3 4\n")
+    assert stats.startswith("# Extract Summary\n")
     assert extract["outfile"] == "STDOUT"
+
+
+def test_wex_print_scaffold_table_writes_tabular_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class ScaffoldTable:
+        def to_csv(self, out, sep: str) -> None:
+            assert sep == "\t"
+            out.write("\tscaffold_name\tscaffold_length\n0\tchr1\t8\n")
+
+    class Tool:
+        scaffold_table = ScaffoldTable()
+
+    monkeypatch.setattr(
+        window_extracter_module, "WindowExtracter", lambda **kwargs: Tool()
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        window_extracter_module.run_window_extracter(print_scaffold_table=True)
+
+    assert exc_info.value.code == 0
+    assert (
+        capsys.readouterr().out
+        == "\tscaffold_name\tscaffold_length\n0\tchr1\t8\n"
+    )
+
+
+def test_wex_print_scaffold_table_handles_broken_pipe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ClosedScaffoldTable:
+        def to_csv(self, out, sep: str) -> None:
+            out.write("scaffold_name\n")
+
+    class ClosedStdout:
+        def write(self, value: str) -> int:
+            return len(value)
+
+        def flush(self) -> None:
+            raise BrokenPipeError
+
+    class Tool:
+        scaffold_table = ClosedScaffoldTable()
+
+    monkeypatch.setattr(
+        window_extracter_module, "WindowExtracter", lambda **kwargs: Tool()
+    )
+    original_stdout = window_extracter_module.sys.stdout
+    window_extracter_module.sys.stdout = ClosedStdout()
+    replacement_stdout = None
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            window_extracter_module.run_window_extracter(print_scaffold_table=True)
+        replacement_stdout = window_extracter_module.sys.stdout
+    finally:
+        window_extracter_module.sys.stdout = original_stdout
+        if replacement_stdout is not None and replacement_stdout is not original_stdout:
+            replacement_stdout.close()
+
+    assert exc_info.value.code == 0
 
 
 def test_wex_fasta_output_and_force_handling(tmp_path: Path) -> None:

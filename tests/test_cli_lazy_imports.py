@@ -126,6 +126,7 @@ def test_run_subcommand_lazily_imports_analysis_runner(monkeypatch) -> None:
 
     assert len(calls) == 1
     assert calls[0]["data"] == Path("assembly.hdf5")
+    assert calls[0]["logged_command"] == "ipyrad2 wex -d assembly.hdf5"
 
 
 def test_run_subcommand_passes_logged_command_to_baba_runner(monkeypatch) -> None:

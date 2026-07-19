@@ -68,7 +68,11 @@ That table contains:
 - `scaffold_name`
 - `scaffold_length`
 
-Use it to decide which scaffold names to pass to `-w`.
+Use it to decide which scaffold names to pass to `-w`. The table can be piped through short consumers without emitting a broken-pipe error:
+
+```bash
+ipyrad2 analysis wex -d assembly.hdf5 -P | head
+```
 
 ## Filtering and Sample Selection
 
@@ -104,9 +108,9 @@ Depending on `-O`, the main alignment file is:
 
 The stats file is always:
 
-- `PREFIX.stats.tsv`
+- `PREFIX.stats.txt`
 
-The stats file records:
+The stats file starts with the `CMD:` invocation used for the run and records:
 
 - samples before filtering
 - sites in the selected windows before filtering
@@ -161,7 +165,7 @@ If all samples are dropped by `-r`, no alignment is written.
 
 ### Existing outputs already exist
 
-If `PREFIX.phy`/`.nex`/`.fa` or `PREFIX.stats.tsv` already exists, `wex` stops unless `--force` is set.
+If `PREFIX.phy`/`.nex`/`.fa` or `PREFIX.stats.txt` already exists, `wex` stops unless `--force` is set.
 
 ## Examples
 
@@ -181,7 +185,7 @@ This writes one genome-wide concatenated PHYLIP alignment:
 
 ```text
 WEX/genome.phy
-WEX/genome.stats.tsv
+WEX/genome.stats.txt
 ```
 
 ### One concatenation per chromosome
@@ -207,7 +211,7 @@ This produces:
 
 ```text
 WEX/by_chrom/Chr1.phy
-WEX/by_chrom/Chr1.stats.tsv
+WEX/by_chrom/Chr1.stats.txt
 ```
 
 To do this for every scaffold in the table:
