@@ -19,6 +19,7 @@ dependencies:
   - bwa-mem2
   - vsearch =2.29
   - mafft
+  - jupyter
   - toytree >=3.0.1
   - scikit-learn
   - umap-learn
