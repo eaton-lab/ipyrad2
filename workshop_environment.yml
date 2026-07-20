@@ -26,5 +26,5 @@ dependencies:
   - toyplot
   - streamlit
   - plotly
-  - aster
+  - aster =1.23
   - raxml-ng
