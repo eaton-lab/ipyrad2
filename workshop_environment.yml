@@ -1,0 +1,27 @@
+# This file can be used to create a fresh conda env
+# which includes both core and analysis tools dependencies:
+# `conda env create -f workshop_environmental.yml -n ipyrad2`
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python>=3.8
+  - pytest
+  - loguru
+  - numpy
+  - pandas
+  - h5py
+  - tomlkit
+  - samtools
+  - bedtools
+  - bcftools
+  - fastp
+  - bwa-mem2
+  - vsearch =2.29
+  - mafft
+  - toytree >=3.0.1
+  - scikit-learn
+  - umap-learn
+  - toyplot
+  - streamlit
+  - plotly
