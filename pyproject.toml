@@ -46,6 +46,7 @@ analysis = [
     "toytree >= 3.0.1",
     "streamlit",
     "plotly",
+    "jupyter",
 ]
 test = [
     "pytest",
