@@ -20,17 +20,40 @@ nav = [
     "assembly/assemble.md",
   ]},
   {"Writing Outputs" = [
-    "writing-outputs/index.md",
+    {"Quick Guide" = "writing-outputs/index.md"},
     "writing-outputs/wex.md",
     "writing-outputs/lex.md",
     "writing-outputs/snpex.md",
   ]},
-  {"Recipes" = [
-    "recipes/index.md",
-    "recipes/sample-name-parsing.md",
+  {"Analysis" = [
+    {"Quick Guide" = "analyses/index.md"},
+    {"wex + raxml-ng" = "analyses/wex_raxml.md"},
+    "analyses/pca.md",
+    # "analyses/baba.md",
+    "analyses/popgen.md",
+    "analyses/dapc.md",
+    # "analyses/snmf.md",
+    # "analyses/admixture.md",
+    {"treeslider + astral" = "analysis/treeslider.md"},
+    {"bpp-MSC" = "analysis/bpp-msc"},
+    {"bpp-MSC-i" = "analysis/bpp-msc-i"},
+    {"bpp-MSC-m" = "analysis/bpp-msc-m"},
+    {"bpp-MSC-tree" = "analysis/bpp-msc-tree"},
+    {"bpp-MSC-delim" = "analysis/bpp-msc-delim"},
+    # {"snpex + feems" = "..."},
+    # {"snpex + ..." = "..."},
+
   ]},
-  {"Analysis Guide" = [
-    "analyses/index.md",
+  {"Tutorials/Recipes" = [
+    {"empirical SE denovo assembly" = "assembly/tutorial-pedic.md"},
+    # {"empirical PE reference assembly" = "assembly/tutorial-amaranthus.md"},
+    "recipes/wex-recipes.md",
+    "recipes/sample-name-parsing.md",
+
   ]},
 ]
 extra_css = ["css/notebook-markdown.css"]
+
+[project.markdown_extensions.admonition]
+[project.markdown_extensions.pymdownx.details]
+[project.markdown_extensions.pymdownx.superfences]

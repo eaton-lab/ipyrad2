@@ -20,18 +20,6 @@ This is the default path for most ipyrad2 workflows because it is aware of the r
 
 Sample-level FASTQ files. These can come from [`demux`](./demux.md) or an external demultiplexer.
 
-## Inputs and Naming
-
-Use `-d/--fastqs` with one or more FASTQ paths or shell-expanded globs. Inputs can be single-end or paired-end, and ipyrad2 will try to group them into samples automatically.
-
-Sample names are parsed from filenames. In many datasets the default parsing is enough, but if filenames contain repeated delimiters or custom suffixes you can control parsing using explicit delimiter-based pairing and sample naming, see [Using -dx and -di to pair and name samples](../recipes/sample-name-parsing.md).
-
-- `-dx, --delim-str`: delimiter substring used to split the filename
-- `-di, --delim-idx`: which side of the delimiter to keep, default `1`
-- `-s, --suffix`: suffix to append to the parsed sample name before writing outputs
-
-`trim` also accepts optional controls for quality thresholds, minimum read length, cutsite motifs, phred64 input, UMI placement, and parallelism. Those are described below in grouped command patterns.
-
 
 ## Command Patterns
 
@@ -107,6 +95,20 @@ Use these options when filenames do not follow the default naming assumptions or
 
 At normal verbosity, ipyrad2 reports how many usable samples were found, which samples were skipped as empty, which cutsite motifs were selected, and where trim outputs were written.
 
+
+## Inputs and Naming
+
+Use `-d/--fastqs` with one or more FASTQ paths or shell-expanded globs. Inputs can be single-end or paired-end, and ipyrad2 will try to group them into samples automatically.
+
+Sample names are parsed from filenames. In many datasets the default parsing is enough, but if filenames contain repeated delimiters or custom suffixes you can control parsing using explicit delimiter-based pairing and sample naming, see [Using -dx and -di to pair and name samples](../recipes/sample-name-parsing.md).
+
+- `-dx, --delim-str`: delimiter substring used to split the filename
+- `-di, --delim-idx`: which side of the delimiter to keep, default `1`
+- `-s, --suffix`: suffix to append to the parsed sample name before writing outputs
+
+`trim` also accepts optional controls for quality thresholds, minimum read length, cutsite motifs, phred64 input, UMI placement, and parallelism. Those are described below in grouped command patterns.
+
+
 ## Outputs
 
 For each sample, `trim` writes:
@@ -121,6 +123,9 @@ For the run as a whole, it also writes:
 - `ipyrad_trim_stats_N.txt`
 
 The summary text file is numbered so repeated trim runs in the same output directory do not overwrite older summaries. It includes per-sample before-and-after read totals, mean read lengths, Q20/Q30 rates, reads filtered for low quality, too many `N` bases, low complexity, reads filtered for being too short, and adapter-trimming counts where available.
+
+
+
 
 
 ## Why This Is Not Just a Plain `fastp` Run

@@ -27,32 +27,6 @@ If you already have mapped BAM files, you do not need this step. Start directly 
 
 `map` supports plain FASTQ and `.gz`-compressed FASTQ input. `.bz2` is not supported.
 
-## Inputs and Sample Grouping
-
-Use `-d/--fastqs` with one or more FASTQ paths or shell-expanded globs. Inputs can be single-end or paired-end, but all samples in one run must be consistent. Mixed single-end and paired-end inputs are rejected.
-
-Sample names are parsed from FASTQ filenames. If the default parsing is not right for your filenames, use:
-
-- `-dx, --delim-str`: delimiter substring used to split the filename
-- `-di, --delim-idx`: which side of the delimiter to keep, default `1`
-
-After parsing, `map` strips a terminal `.trimmed` from the sample key when present. This keeps names from the normal `trim -> map` workflow canonical internally while still allowing later pipeline entry from externally named FASTQs.
-
-You can also provide `-i/--imap` to subset, rename, or merge samples before mapping. The `imap` file is a whitespace-delimited two-column table:
-
-```text
-sample  group
-```
-
-This table can do three things:
-
-- keep only a subset of parsed samples
-- rename samples before BAM writing
-- merge multiple parsed samples into one mapping target by concatenating their FASTQs
-
-If some `imap` names do not match the canonical parsed sample names, ipyrad2 warns and skips them. If none match, the run stops.
-
-For a worked example of explicit delimiter-based pairing and sample naming, see [Using -dx and -di to pair and name samples](../recipes/sample-name-parsing.md).
 
 ## Command Patterns
 
@@ -106,6 +80,35 @@ Without `--force`, samples that already have BAM outputs are skipped instead of 
 - `-l, --log-level`: logging verbosity, default `INFO`
 
 At normal verbosity, ipyrad2 reports parsed sample names, duplicate-removal warnings, reference indexing, mapping progress, and where the map stats file was written.
+
+
+## Inputs and Sample Grouping
+
+Use `-d/--fastqs` with one or more FASTQ paths or shell-expanded globs. Inputs can be single-end or paired-end, but all samples in one run must be consistent. Mixed single-end and paired-end inputs are rejected.
+
+Sample names are parsed from FASTQ filenames. If the default parsing is not right for your filenames, use:
+
+- `-dx, --delim-str`: delimiter substring used to split the filename
+- `-di, --delim-idx`: which side of the delimiter to keep, default `1`
+
+After parsing, `map` strips a terminal `.trimmed` from the sample key when present. This keeps names from the normal `trim -> map` workflow canonical internally while still allowing later pipeline entry from externally named FASTQs.
+
+You can also provide `-i/--imap` to subset, rename, or merge samples before mapping. The `imap` file is a whitespace-delimited two-column table:
+
+```text
+sample  group
+```
+
+This table can do three things:
+
+- keep only a subset of parsed samples
+- rename samples before BAM writing
+- merge multiple parsed samples into one mapping target by concatenating their FASTQs
+
+If some `imap` names do not match the canonical parsed sample names, ipyrad2 warns and skips them. If none match, the run stops.
+
+For a worked example of explicit delimiter-based pairing and sample naming, see [Using -dx and -di to pair and name samples](../recipes/sample-name-parsing.md).
+
 
 ## Outputs and Stats
 
