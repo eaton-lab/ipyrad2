@@ -450,7 +450,11 @@ def test_snps_extracter_logs_default_minmap_message_without_claiming_override(
         cores=1,
     )
     messages: list[str] = []
-    sink_id = logger.add(messages.append, format="{message}", level="INFO")
+    sink_id = logger.add(
+        messages.append,
+        format="{level.name}:{message}",
+        level="DEBUG",
+    )
     try:
         tool._get_imap_minmap(tool.imap, {})
     finally:
@@ -458,7 +462,8 @@ def test_snps_extracter_logs_default_minmap_message_without_claiming_override(
 
     assert tool.minmap == {"pop1": 0, "pop2": 0}
     assert any(
-        "global `-m` filter still applies" in msg
+        msg.startswith("DEBUG:")
+        and "global `-m` filter still applies" in msg
         and "defaulting per-population minimums to 0" in msg
         and "`-g` has no effect" in msg
         for msg in messages
