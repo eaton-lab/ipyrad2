@@ -44,6 +44,7 @@ def test_top_level_help_groups_commands_and_examples_are_updated() -> None:
         "inspect",
         "wex",
         "lex",
+        "seqex",
         "snpex",
         "vcf2hdf5",
         "pca",

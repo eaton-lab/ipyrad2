@@ -163,6 +163,37 @@ def test_run_subcommand_passes_lex_concatenation_options(monkeypatch) -> None:
     assert calls[0]["concatenate"] is True
 
 
+def test_run_subcommand_passes_seqex_parallel_options(monkeypatch) -> None:
+    argv = [
+        "seqex",
+        "-d",
+        "assembly.hdf5",
+        "-i",
+        "imap.tsv",
+        "-a",
+        "-c",
+        "3",
+    ]
+    args = cli_main.setup_parsers().parse_args(argv)
+    calls: list[dict] = []
+    real_import_module = cli_analysis.importlib.import_module
+
+    def fake_import_module(name, package=None):
+        if name == "..analysis.extracters.seqex":
+            return SimpleNamespace(run_seqex=lambda **kwargs: calls.append(kwargs))
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(cli_analysis.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(cli_main.sys, "argv", ["ipyrad2", *argv])
+
+    cli_main.run_subcommand(args, _exit=False)
+
+    assert len(calls) == 1
+    assert calls[0]["cores"] == 3
+    assert calls[0]["append_population"] is True
+    assert calls[0]["log_level"] == "INFO"
+
+
 def test_run_subcommand_passes_treeslider_filter_jobs(monkeypatch) -> None:
     argv = ["treeslider", "-d", "assembly.hdf5", "-j", "7"]
     args = cli_main.setup_parsers().parse_args(argv)

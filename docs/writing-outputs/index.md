@@ -1,8 +1,18 @@
 # Writing Outputs
 
-Writing Outputs is the export layer for workflows that need files for software outside ipyrad2. The commands in this section are `ipyrad2 analysis wex`, `ipyrad2 analysis lex`, and `ipyrad2 analysis snpex`. Together they let you turn assembled HDF5 data into sequence alignments, locus alignments, or filtered SNP matrices that match the needs of a particular downstream tool.
+The export tools in `ipyrad2` are designed to allow you to assemble a dataset just once, and to
+use the generated HDF5 database file to export many curated datasets for downstream analyses.
+These export tools, `wex`, `lex`, and `snpex`, allow you to filter the dataset by scaffold,
+sample or population names, and critically, by patterns of missing data, and to write the
+resulting data to output files formatted for various external tools.
 
-This design is especially useful for RAD-seq data because missing data usually needs to be handled explicitly rather than hidden. Different downstream methods tolerate different patterns of missing samples, missing sites, linked SNPs, and genotype imputation. The export layer makes those choices easy to control for each target analysis instead of forcing one global preprocessing decision on every output.
+This design is especially useful for RAD-seq data because missing data usually needs to be handled explicitly rather than hidden. Different downstream methods tolerate different patterns of missing
+samples, missing sites, linked SNPs, and genotype imputation. The export layer makes those choices
+easy to control for each target analysis instead of forcing one global preprocessing decision on
+every output.
+
+Similar data filtering patterns are also implemented in the `ipyrad2` [Analysis](Analysis) tools,
+but these cover only a subset of downstream analyses for RAD-seq data. Using the export tools, you can create formatted datasets for most common downstream sequence- and SNP-based software.
 
 ## Why This Layer Exists
 
@@ -16,23 +26,57 @@ RAD-seq datasets often need different filtering choices depending on the softwar
 - whether linked SNPs should be subsampled to one SNP per RAD locus
 - whether missing genotypes should stay missing or be imputed for a specific file format
 
-That is the main point of `wex`, `lex`, and `snpex`: they let you tailor the exported dataset to the assumptions of a particular external program.
-
 ## The Three Export Tools
 
-- [`wex`](./wex.md): writes one alignment from selected genomic windows in an assembly HDF5 file.
-- [`lex`](./lex.md): writes sampled whole-locus alignments from an assembly HDF5 file.
-- [`snpex`](./snpex.md): writes filtered SNP matrices from an SNP-capable HDF5 file, with optional PLINK, phylogenetic, TreeMix, and EEMS exports.
+- [`wex`](./wex.md): writes one concatenated alignment from selected genomic windows in an assembly HDF5 file after applying site-wise filters.
+- [`lex`](./lex.md): writes per-locus or concatenated alignments of selected whole-locus alignments after applying locus-wise filters.
+- [`snpex`](./snpex.md): writes filtered SNP matrices after applying site-wise filters, with options for subsampling unlinked SNPs and exporting to various formats including PLINK, GENO, PHYLIP, TreeMix, and EEMS.
 
-By combining these three tools, their filtering controls, and their output-format options, ipyrad2 can stage data for most common downstream sequence- and SNP-based software.
+The experimental [seqex](./seqex.md) command combines locus filtering with
+multi-locus, concatenated, or split sequence output while lex and wex remain
+available for established workflows.
 
+
+## Command examples
+
+```bash
+# write concatenated alignment of chromosome 1 in a reference assembly
+ipyrad2 wex \
+    -d DATA.hdf5 \
+    -o ALIGNMENTS/ \
+    -n Chr01 \
+    -w Chr01 \
+    --min-sample-coverage 10
+
+# select 1000 random denovo loci and concatenate into an alignment
+ipyrad2 lex \
+    -d DATA.hdf5 \
+    -o ALIGNMENTS/ \
+    -n loci_10K \
+    -N 1000 \
+    --min-sample-coverage 10 \
+    --concatenate
+
+# select 1000 unlinked SNPs random denovo loci and concatenate into an alignment
+ipyrad2 snpex \
+    -d DATA.hdf5 \
+    -o ALIGNMENTS/ \
+    -n snps_10K \
+    -N 1000 \
+    --min-sample-coverage 10
+
+```
+
+<!--
 ## Comparison
 
-| Command | Input data | Output unit | Main filtering controls | Missing-data handling | Imputation availability | Typical downstream use |
+| Command | Input | Output | Main filtering controls | Missing-data handling | Imputation availability | Typical downstream use |
 | --- | --- | --- | --- | --- | --- | --- |
-| `analysis wex` | assembly HDF5 | one alignment from selected windows | windows, `-m`, `-r`, `-e`, `-R`, `imap`, `minmap` | explicit sample and site filtering before export | none | sequence-based tools that need one alignment over chosen regions |
-| `analysis lex` | assembly HDF5 | many delimited locus alignments | windows, number of loci, minimum locus length, `-m`, `-r`, `-e`, `-R`, `imap`, `minmap` | explicit sample and site filtering before locus export | none | multilocus sequence analyses and locus-based phylogenetic workflows |
-| `analysis snpex` | SNP-capable HDF5 | filtered SNP matrices plus optional PLINK, phylogenetic, TreeMix, and EEMS files | `-m`, `-r`, `-a`, `-e`, `-R`, `imap`, `minmap`, linked vs unlinked SNPs | explicit sample and SNP filtering before export | optional, and applied to every written output in that run | SNP-based external tools such as PLINK, TreeMix, EEMS, or SNP-alignment workflows |
+| `wex` | HDF5 | one alignment from selected windows | windows, `-m`, `-r`, `-e`, `-R`, `imap`, `minmap` | explicit sample and site filtering before export | none | sequence-based tools that need one alignment over chosen regions |
+| `lex` | HDF5 | one or many locus alignments | windows, number of loci, minimum locus length, `-m`, `-r`, `-e`, `-R`, `imap`, `minmap` | explicit sample and site filtering before locus export | none | multilocus sequence analyses and locus-based phylogenetic workflows |
+| `snpex` | HDF5 | filtered SNP matrices or supported formatted  | `-m`, `-r`, `-a`, `-e`, `-R`, `imap`, `minmap`, linked vs unlinked SNPs | explicit sample and SNP filtering before export | optional, and applied to every written output in that run | SNP-based external tools such as PLINK, TreeMix, EEMS, or SNP-alignment workflows |
+-->
+
 
 ## Missing Data, Linkage, and Imputation
 
