@@ -3,6 +3,10 @@
 The `ipyrad2 popgen` tool makes it easy to compute population-genetic summary statistics from an
 assembled RAD-seq dataset while addressing the impacts of missing data.
 
+Currently supported metrics include:
+`pi`, `dxy`, `fst`, `tajima_d`, `theta_w`, `heterozygosity`, `fis`, and `sfs`.
+Most metrics can be computed either genome-wide or in sliding windows on reference-based assemblies.
+
 
 ## When to Use
 
