@@ -196,8 +196,10 @@ def test_get_sample_paralog_tables_uses_callable_bed_only_for_variant_call(
         out_tsv.write_text("", encoding="utf-8")
         return out_tsv
 
-    def _fake_all_reads_by_region(*, bam, regions_bed, out_tsv):
-        del bam
+    def _fake_all_reads_by_region(
+        *, bam, regions_bed, out_tsv, reference_sort_order=None
+    ):
+        del bam, reference_sort_order
         calls["coverage_regions_bed"] = regions_bed
         df = pd.DataFrame(
             {
@@ -288,6 +290,11 @@ def test_run_paralog_stage_passes_callable_bed_to_sample_jobs(
     monkeypatch.setattr(
         assemble_module, "write_callable_regions_bed", _fake_write_callable_regions_bed
     )
+    monkeypatch.setattr(
+        assemble_module,
+        "_prepare_paralog_bams",
+        lambda **kwargs: sample_bams,
+    )
     monkeypatch.setattr(assemble_module, "run_with_pool", _fake_run_with_pool)
     monkeypatch.setattr(
         assemble_module, "aggregate_across_samples", _fake_aggregate_across_samples
@@ -319,6 +326,7 @@ def test_run_paralog_stage_passes_callable_bed_to_sample_jobs(
         maf_threshold=0.2,
         max_sites_above_maf=8,
         paralog_fail_frac_max=0.5,
+        threads=1,
         workers=1,
         log_level="WARNING",
     )

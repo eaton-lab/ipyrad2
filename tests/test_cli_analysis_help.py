@@ -365,7 +365,7 @@ def test_pca_help_groups_examples_and_imputation_are_present() -> None:
     assert "zero-fill" not in help_text
     assert "deprecated alias" not in help_text
     assert "--no-subsample" in help_text
-    assert "-M str, --method str" in help_text
+    assert "-M, --method str" in help_text
     assert "Method to run: pca, tsne, or umap." in help_text
     assert "serial method initialization" in help_text
     assert "--plot" in help_text
