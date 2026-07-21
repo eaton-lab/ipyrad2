@@ -1,6 +1,8 @@
 # snpex
 
-`ipyrad2 analysis snpex` exports filtered SNP datasets from an SNP-capable HDF5 file. It always writes the core filtered matrices used inside ipyrad2, and it can also write external-tool formats such as PLINK, PHYLIP, NEXUS, FASTA, TreeMix, and EEMS from the same selected SNP view.
+`ipyrad2 snpex` exports filtered SNP datasets. It always writes the core filtered matrices
+used inside `ipyrad2`, and it can also write external-tool formats such as PLINK, PHYLIP,
+NEXUS, FASTA, TreeMix, and EEMS from the same selected SNP view.
 
 This is the SNP export command to use when you need explicit control over missing-data handling, linked versus unlinked SNPs, population-aware filtering with `imap` and `minmap`, or files for software outside the built-in `analysis` commands.
 
