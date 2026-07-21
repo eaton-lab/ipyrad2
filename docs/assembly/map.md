@@ -1,32 +1,18 @@
 # map
 
-## Summary
+`ipyrad2 map` aligns sample FASTQ files to a reference or denovo pseudoreference and writes coordinate-sorted, indexed BAM files. It uses `bwa-mem2` for alignment and `samtools` for
+filtering, sorting, indexing, duplicate removal, and stats reporting.
 
-`ipyrad2 map` aligns sample FASTQ files to a reference or denovo pseudoreference and writes coordinate-sorted, indexed BAM files. It uses `bwa-mem2` for alignment and `samtools` for filtering, sorting, indexing, duplicate removal, and stats reporting.
-
-In the normal assembly workflow, `map` comes after [`trim`](./trim.md) and before [`Assemble`](./assemble.md). Its main job is to convert trimmed reads into final BAMs that are ready for locus assembly.
+In the normal assembly workflow, `map` comes after [`trim`](./trim.md) and before [`assemble`](./assemble.md). Its main job is to convert trimmed reads into final BAMs that are ready for locus assembly.
 
 ## When to Use
 
-Use `map` when you have sample-level FASTQ files and a reference sequence to align against.
-
-That reference can be:
-
-- an external reference genome
-- a denovo pseudoreference from [`denovo`](./denovo.md)
-
-If you already have mapped BAM files, you do not need this step. Start directly at [`Assemble`](./assemble.md).
+Use `map` when you have sample-level FASTQ files and a reference or denovo pseudoreference sequence (e.g., from [`denovo`](./denovo.md)) to align against. If you already have mapped BAM files, you do not need this step. Start directly at [`assemble`](./assemble.md).
 
 ## Prerequisites
 
-- Sample-level FASTQ files, usually from [`trim`](./trim.md)
+- Sample-level FASTQ or FASTQ.gz files, usually from [`trim`](./trim.md)
 - A reference or pseudoreference FASTA supplied with `-r/--reference`
-- An activated ipyrad2 environment with executable `bwa-mem2` and `samtools`
-- Read access to the FASTQ files and reference FASTA
-- Write access to the reference directory if the reference still needs to be indexed
-
-`map` supports plain FASTQ and `.gz`-compressed FASTQ input. `.bz2` is not supported.
-
 
 ## Command Patterns
 
@@ -36,7 +22,7 @@ The smallest useful run is:
 ipyrad2 map -d TRIMMED/*.fastq.gz -r REF.fa -o MAPPED/
 ```
 
-That tells ipyrad2 to parse sample names from the FASTQ filenames, index the reference if needed, map reads with `bwa-mem2`, filter and sort alignments with `samtools`, and write final BAMs into `MAPPED/`.
+That tells ipyrad2 to examine the files for pairs, parse sample names from the filenames, index the reference if needed, map reads with `bwa-mem2`, filter and sort alignments with `samtools`, and write final BAMs into `MAPPED/`.
 
 ### Core Inputs
 
@@ -48,14 +34,10 @@ If the reference is not already indexed for `bwa-mem2`, `map` indexes it automat
 
 ### Duplicate Removal
 
-- `-m, --mark-dups-by-coords`: remove PCR duplicates by coordinates; intended for WGS-style data
-- `-u, --mark-dups-by-umis`: remove PCR duplicates using UMI tags written by `ipyrad2 trim -U`
+- `-m, --mark-dups-by-coords`: remove PCR duplicates by coordinates (for WGS-style data only)
+- `-u, --mark-dups-by-umis`: remove PCR duplicates using UMI tags (for *some* RAD data only)
 
-These modes are mutually exclusive, and duplicate removal is allowed only for paired-end data.
-
-Coordinate-based duplicate removal is not the normal RAD setting. The mapper warns about that explicitly because RAD data naturally share start coordinates within loci. Use `-m` only when the run really contains WGS-style data, not ordinary RAD samples.
-
-UMI-based duplicate removal is appropriate only when your reads were prepared with [`trim`](./trim.md) using `-U` so the i5/index2 value was stored in the read name as a UMI tag.
+Removal of PCR duplicates can improve variant calling accuracy. For WGS samples these can be detected and removed based on the mapping position of read pairs, which we support using the `-m` option. RAD-seq data cannot use position information because they start at fixed positions due to their dependence on restriction cut sites. Some RAD-seq libraries address this by incorporating random i5 UMIs. See the [i5 UMI recipe](i5 UMI recipe) for how to use this option if it is appropriate for your data.
 
 ### Sample Naming and Grouping
 
@@ -63,7 +45,7 @@ UMI-based duplicate removal is appropriate only when your reads were prepared wi
 - `-dx, --delim-str`: delimiter used to parse sample names from FASTQ filenames
 - `-di, --delim-idx`: index of the retained token when splitting names
 
-Use these when FASTQ filenames do not follow the default parser assumptions or when technical replicates should be merged before mapping.
+Use these when FASTQ filenames do not follow the default parser assumptions or when technical replicates should be merged before mapping. To merge sample's assign them to the same destination name in the IMAP. To split names from filenames use `-di` and `-dx` as described in the [name parsing recipe](name-parsing-recipe).
 
 ### Performance and Overwrite
 
@@ -72,7 +54,6 @@ Use these when FASTQ filenames do not follow the default parser assumptions or w
 - `-f, --force`: overwrite existing `.bam` and `.bam.csi` outputs for matching sample names
 
 ipyrad2 runs up to `cores // threads` mapping jobs in parallel. `--threads` cannot exceed `--cores`.
-
 Without `--force`, samples that already have BAM outputs are skipped instead of being remapped.
 
 ### Logging
@@ -86,12 +67,7 @@ At normal verbosity, ipyrad2 reports parsed sample names, duplicate-removal warn
 
 Use `-d/--fastqs` with one or more FASTQ paths or shell-expanded globs. Inputs can be single-end or paired-end, but all samples in one run must be consistent. Mixed single-end and paired-end inputs are rejected.
 
-Sample names are parsed from FASTQ filenames. If the default parsing is not right for your filenames, use:
-
-- `-dx, --delim-str`: delimiter substring used to split the filename
-- `-di, --delim-idx`: which side of the delimiter to keep, default `1`
-
-After parsing, `map` strips a terminal `.trimmed` from the sample key when present. This keeps names from the normal `trim -> map` workflow canonical internally while still allowing later pipeline entry from externally named FASTQs.
+Sample names are parsed from FASTQ filenames. If the default parsing is not right for your filenames, use the `-dx, --delim-str` and `-di, --delim-idx` options. See [ Using -dx and -di to pair and name samples ]( Using -dx and -di to pair and name samples ) for more details.
 
 You can also provide `-i/--imap` to subset, rename, or merge samples before mapping. The `imap` file is a whitespace-delimited two-column table:
 
