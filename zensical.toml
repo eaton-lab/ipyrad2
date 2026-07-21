@@ -23,6 +23,7 @@ nav = [
     {"Quick Guide" = "writing-outputs/index.md"},
     "writing-outputs/wex.md",
     "writing-outputs/lex.md",
+    "writing-outputs/seqex.md",
     "writing-outputs/snpex.md",
   ]},
   {"Analysis" = [

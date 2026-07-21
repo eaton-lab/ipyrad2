@@ -38,6 +38,7 @@ data export/conversion subcommands
     inspect                                  Launch the interactive assembly browser for an output directory
     wex                                      Extract loci from HDF5 file, filter, and write as concatenated matrix to various formats
     lex                                      Extract loci from HDF5 file, filter, and write as multi-locus data to various formats
+    seqex                                    Experimentally filter and export complete delimited loci
     snpex                                    Extract SNPs from HDF5 file, filter, optionally impute, and write to various formats
     vcf2hdf5                                 Convert an external VCF to HDF5 for use in analysis tools below
 
@@ -70,6 +71,7 @@ Export/Conversion examples
 --------------------------
 $ ipyrad2 wex -d OUT/HDF5 -m 10
 $ ipyrad2 lex -d OUT/HDF5 -N 1000 -L 100 -m 10
+$ ipyrad2 seqex -d OUT/HDF5 -N 1000 -L 100 -m 10
 
 Analysis examples
 -----------------
@@ -121,6 +123,7 @@ _CORE_TOOL_NAMES = tuple(_CORE_SUBCOMMAND_SPECS)
 ANALYSIS_TOOL_NAMES = (
     "wex",
     "lex",
+    "seqex",
     "snpex",
     "vcf2hdf5",
     "pca",
@@ -272,7 +275,6 @@ def command_line(argv: Optional[Sequence[str]] = None):
         sys.exit(0)
     else:
         run_subcommand(args)
-
 
 
 def run_subcommand(args, _exit=True):
