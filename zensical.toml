@@ -54,6 +54,7 @@ nav = [
 ]
 extra_css = ["css/notebook-markdown.css"]
 
+[project.markdown_extensions.attr_list]
 [project.markdown_extensions.admonition]
 [project.markdown_extensions.pymdownx.details]
 [project.markdown_extensions.pymdownx.superfences]

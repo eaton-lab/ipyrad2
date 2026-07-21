@@ -2,7 +2,7 @@
 
 The ipyrad2 assembly workflow involves running a sequence of subcommands, as shown below.
 
-![ipyrad2 assembly workflow from input reads to assembled outputs](../Fig1-assembly.png){ width="100%" }
+![ipyrad2 assembly workflow from input reads to assembled outputs](../images/Fig1-assembly.png){ width="100%" }
 
 ## Standard Example
 
