@@ -129,6 +129,62 @@ def test_run_subcommand_lazily_imports_analysis_runner(monkeypatch) -> None:
     assert calls[0]["logged_command"] == "ipyrad2 wex -d assembly.hdf5"
 
 
+def test_run_subcommand_passes_lex_concatenation_options(monkeypatch) -> None:
+    argv = [
+        "lex",
+        "-d",
+        "assembly.hdf5",
+        "-n",
+        "dataset",
+        "-N",
+        "25",
+        "-s",
+        "123",
+        "-C",
+    ]
+    args = cli_main.setup_parsers().parse_args(argv)
+    calls: list[dict] = []
+    real_import_module = cli_analysis.importlib.import_module
+
+    def fake_import_module(name, package=None):
+        if name == "..analysis.extracters.locus_extracter":
+            return SimpleNamespace(run_locus_extracter=lambda **kwargs: calls.append(kwargs))
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(cli_analysis.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(cli_main.sys, "argv", ["ipyrad2", *argv])
+
+    cli_main.run_subcommand(args, _exit=False)
+
+    assert len(calls) == 1
+    assert calls[0]["name"] == "dataset"
+    assert calls[0]["nloci"] == 25
+    assert calls[0]["random_seed"] == 123
+    assert calls[0]["concatenate"] is True
+
+
+def test_run_subcommand_passes_treeslider_filter_jobs(monkeypatch) -> None:
+    argv = ["treeslider", "-d", "assembly.hdf5", "-j", "7"]
+    args = cli_main.setup_parsers().parse_args(argv)
+    calls: list[dict] = []
+    real_import_module = cli_analysis.importlib.import_module
+
+    def fake_import_module(name, package=None):
+        if name == "..analysis.methods.treeslider":
+            return SimpleNamespace(
+                run_treeslider_method=lambda **kwargs: calls.append(kwargs)
+            )
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(cli_analysis.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(cli_main.sys, "argv", ["ipyrad2", *argv])
+
+    cli_main.run_subcommand(args, _exit=False)
+
+    assert len(calls) == 1
+    assert calls[0]["jobs"] == 7
+
+
 def test_run_subcommand_passes_logged_command_to_baba_runner(monkeypatch) -> None:
     argv = ["baba", "-d", "snps.hdf5", "-o", "OUT", "--tests", "quartets.tsv"]
     args = cli_main.setup_parsers().parse_args(argv)

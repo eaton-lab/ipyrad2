@@ -107,6 +107,10 @@ def _setup_treeslider_subparser(
         "-g", "--minmap", metavar="Path", type=Path,
         help="Population-to-minimum-coverage mapping file with `population<TAB>min` on each line. Overrides `-m`.",
     )
+    filtering.add_argument(
+        "-j", "--jobs", metavar="int", type=int, default=4,
+        help="Number of filtering and alignment-writing jobs to run in parallel. [default=4]",
+    )
 
     inference = tool.add_argument_group("Tree inference")
     inference.add_argument(
@@ -133,11 +137,12 @@ def _setup_treeslider_subparser(
         "--seed", metavar="int", type=int,
         help="Random seed for raxml-ng and any deterministic restart ordering.",
     )
-    inference.add_argument(
+    restart = inference.add_mutually_exclusive_group()
+    restart.add_argument(
         "--redo", action="store_true",
         help="Retry windows that previously failed tree inference while preserving completed windows.",
     )
-    inference.add_argument(
+    restart.add_argument(
         "-f", "--force", action="store_true",
         help="Restart the treeslider run from scratch and overwrite any existing outputs.",
     )

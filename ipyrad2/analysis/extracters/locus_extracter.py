@@ -40,13 +40,11 @@ from typing import Dict
 from loguru import logger
 
 from ...utils.exceptions import IPyradError
-from .window_extracter import WindowExtracter
+from .window_extracter import NEXHEADER, WindowExtracter
 
 
 class LocusExtracter:
-    """Tool to extract sequences from one or more loci and write to a
-    concatenated sequence file in phylip or nexus format.
-    """
+    """Extract whole loci to individual files or one concatenated alignment."""
     def __init__(
         self,
          **kwargs: Dict[str, int | float | str | Path | None]
@@ -58,7 +56,10 @@ class LocusExtracter:
         self.outdir = Path(kwargs["outdir"]).expanduser().absolute()
         self.out_format = kwargs["out_format"]
         self.force = kwargs["force"]
+        self.concatenate = bool(kwargs.pop("concatenate", False))
         self.random_seed = kwargs.pop("random_seed", None)
+        if self.random_seed is not None and self.random_seed < 0:
+            raise IPyradError("Random seed must be a non-negative integer.")
         # Wex doesn't care about nloci or length so pop them
         self.nloci = kwargs.pop("nloci")
         self.min_length = kwargs.pop("min_length", kwargs.pop("length", None))
@@ -78,6 +79,7 @@ class LocusExtracter:
         self.loci = None
         self.eligible_loci_before_filtering = 0
         self.rejected_after_filtering = 0
+        self.concatenated_sites = 0
 
         # Sample name delimiter (optional)
         self._DELIM = ""
@@ -125,10 +127,19 @@ class LocusExtracter:
 
     def _write_stats_summary(self, stats_records: list[dict]) -> None:
         stats_path = self._get_stats_path()
+        if self.concatenate or self.out_format == "bpp":
+            summary_outfile = stats_records[0]["outfile"]
+        else:
+            summary_outfile = "multiple"
         header = {
             "tool": "lex",
+            "name": self.name,
             "infile": self.data,
             "out_format": self.out_format,
+            "concatenate": self.concatenate,
+            "random_seed": self.random_seed,
+            "outfile": summary_outfile,
+            "concatenated_sites": self.concatenated_sites if self.concatenate else 0,
             "nloci_requested": self.nloci,
             "nloci_written": len(stats_records),
             "min_length_requested": self.min_length,
@@ -219,6 +230,80 @@ class LocusExtracter:
         order = np.random.default_rng(self.random_seed).permutation(len(loci))
         return loci.iloc[order].reset_index(drop=True)
 
+    def _get_concatenated_output_path(self) -> Path:
+        suffix = {"phy": "phy", "nex": "nex", "bpp": "bpp"}[self.out_format]
+        return self.outdir / f"{self.name}.{suffix}"
+
+    def _get_individual_output_stem(self, locus_name: str) -> str:
+        scaff, start, end = self._parse_window_label(locus_name)
+        return f"{self.name}.{scaff}_{start}-{end}"
+
+    @staticmethod
+    def _as_sequence_bytes(sequence: bytes | bytearray | np.ndarray) -> bytes:
+        if isinstance(sequence, np.ndarray):
+            return sequence.tobytes()
+        return bytes(sequence)
+
+    @classmethod
+    def _format_phylip_alignment(
+        cls,
+        names: list[str],
+        sequences: list[bytes | bytearray | np.ndarray],
+        *,
+        prefix: str = "",
+        bpp_format: bool = False,
+    ) -> str:
+        sequence_bytes = [cls._as_sequence_bytes(seq) for seq in sequences]
+        nsites = len(sequence_bytes[0])
+        longname = max(len(name) for name in names)
+        padded_names = [name.ljust(longname + 5) for name in names]
+        rows = [
+            f"{prefix}{padded_names[idx]} {sequence_bytes[idx].decode('utf-8')}"
+            for idx in range(len(names))
+        ]
+        separator = "\n" if bpp_format else ""
+        return f"{len(names)} {nsites}\n{separator}{chr(10).join(rows)}\n"
+
+    @classmethod
+    def _format_nexus_alignment(
+        cls,
+        names: list[str],
+        sequences: list[bytes | bytearray | np.ndarray],
+    ) -> str:
+        sequence_bytes = [cls._as_sequence_bytes(seq) for seq in sequences]
+        nsites = len(sequence_bytes[0])
+        longname = max(len(name) for name in names)
+        padded_names = [name.ljust(longname + 5) for name in names]
+        lines = [NEXHEADER.format(len(names), nsites)]
+        for block in range(0, nsites, 100):
+            stop = min(block + 100, nsites)
+            for idx, name in enumerate(padded_names):
+                seq = sequence_bytes[idx][block:stop].decode("utf-8")
+                lines.append(f"  {name}{seq}\n")
+            lines.append("\n")
+        lines.append("  ;\nend;")
+        return "".join(lines)
+
+    def _write_concatenated_alignment(
+        self,
+        names: list[str],
+        sequences: list[bytearray],
+    ) -> None:
+        if self.out_format == "nex":
+            contents = self._format_nexus_alignment(names, sequences)
+        else:
+            contents = self._format_phylip_alignment(
+                names,
+                sequences,
+                prefix=self._DELIM if self.out_format == "bpp" else "",
+                bpp_format=self.out_format == "bpp",
+            )
+
+        if self.wex.stdout:
+            sys.stdout.write(contents)
+        else:
+            with open(self.outfile, "w", encoding="utf-8") as out:
+                out.write(contents)
 
     def _run(self, postfix: str = None):
         self._get_loci()
@@ -233,7 +318,6 @@ class LocusExtracter:
 
 
     def _write_loci(self, postfix: str = None) -> None:
-
         if self.loci is None:
             msg = "No loci selected, run _get_loci() first"
             logger.info(msg)
@@ -242,11 +326,28 @@ class LocusExtracter:
         if not self.eligible_loci_before_filtering:
             self.eligible_loci_before_filtering = len(self.loci)
 
-        locus_data = []
-        stats_records = []
+        locus_data: list[str] = []
+        stats_records: list[dict] = []
+        concat_buffers = {name: bytearray() for name in self.wex.snames}
+        concat_present: set[str] = set()
         self.rejected_after_filtering = 0
+        self.concatenated_sites = 0
         self._prepare_stats_path()
-        if self.out_format == "bpp":
+
+        shared_outfile: Path | str | None = None
+        if self.concatenate:
+            self.outfile = self._get_concatenated_output_path()
+            shared_outfile = "STDOUT" if self.wex.stdout else self.outfile
+            if not self.wex.stdout and self.outfile.exists() and not self.force:
+                raise IPyradError(
+                    f"Output file already exists: {self.outfile}. Use --force to overwrite."
+                )
+            if self.out_format == "bpp":
+                logger.warning(
+                    "BPP is intended for multi-locus analyses; --concatenate writes "
+                    "one locus and is likely unsuitable for BPP analysis."
+                )
+        elif self.out_format == "bpp":
             fpost = f"-{postfix}" if postfix else ""
             self.outfile = self.outdir / f"{self.name}{fpost}.phy"
             if self.outfile.exists() and not self.force:
@@ -267,9 +368,37 @@ class LocusExtracter:
             window_end = int(row["pos0"]) + endpos - 1
             window = [f"{scaff_name}:{window_start}-{window_end}"]
             self.wex.windows = window
-            self.wex.name = window[0]
             locus_label = window[0]
+            self.wex.name = self._get_individual_output_stem(locus_label)
             locus_index = len(stats_records) + 1
+
+            if self.concatenate:
+                fnames, fseqarr, stats_dict = self.wex._get_filtered_alignment_data(
+                    shared_outfile
+                )
+                block_length = stats_dict["nsites_in_windows_after_filtering"]
+                if block_length < self.min_length:
+                    self.rejected_after_filtering += 1
+                    continue
+
+                seq_by_name = {
+                    name: fseqarr[idx].tobytes() for idx, name in enumerate(fnames)
+                }
+                missing_block = b"N" * block_length
+                for name, buffer in concat_buffers.items():
+                    buffer.extend(seq_by_name.get(name, missing_block))
+                concat_present.update(fnames)
+                self.concatenated_sites += block_length
+                stats_records.append(
+                    self._build_locus_stats_record(
+                        locus_index,
+                        locus_label,
+                        shared_outfile,
+                        stats_dict,
+                    )
+                )
+                continue
+
             if self.out_format == "phy":
                 alignment, stats_dict = self.wex._write_to_phy(
                     write_stats=False,
@@ -360,7 +489,19 @@ class LocusExtracter:
                 "Try reducing --min-length or relaxing the locus filters."
             )
 
-        if self.out_format == "bpp":
+        if self.concatenate:
+            concat_names = [name for name in self.wex.snames if name in concat_present]
+            concat_sequences = [concat_buffers[name] for name in concat_names]
+            self._write_concatenated_alignment(concat_names, concat_sequences)
+            destination = "stdout" if self.wex.stdout else self.outfile
+            logger.info(
+                "wrote concatenated alignment ({}, {}) from {} loci to: {}",
+                len(concat_names),
+                self.concatenated_sites,
+                len(stats_records),
+                destination,
+            )
+        elif self.out_format == "bpp":
             contents = "\n".join(locus_data)
             if self.wex.stdout:
                 sys.stdout.write(contents)
@@ -431,6 +572,8 @@ def run_locus_extracter(**kwargs):
         # pop args wex doesn't care about
         _ = kwargs.pop("nloci")
         _ = kwargs.pop("min_length", kwargs.pop("length", None))
+        _ = kwargs.pop("random_seed", None)
+        _ = kwargs.pop("concatenate", None)
         tool = WindowExtracter(**kwargs)
         tool.scaffold_table.to_csv(sys.stdout, sep="\t")
         sys.exit(0)

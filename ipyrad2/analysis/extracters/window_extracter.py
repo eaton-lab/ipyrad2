@@ -521,6 +521,16 @@ class WindowExtracter:
         self.seqarr = fseqarr
         return summary, summary["fnames"], fseqarr
 
+    def _get_filtered_alignment_data(
+        self,
+        outfile: Path | str,
+    ) -> tuple[list[str], np.ndarray, dict]:
+        """Return filtered names, sequences, and stats without writing output."""
+        self._get_phymap_windows()
+        self._get_phymap()
+        summary, fnames, fseqarr = self._extract_filtered_alignment()
+        return fnames, fseqarr, self._build_stats_dict(summary, outfile)
+
     def _get_output_path(self, suffix: str) -> Path:
         return self.outdir / f"{self.name}.{suffix}"
 
