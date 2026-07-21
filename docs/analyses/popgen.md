@@ -1,15 +1,8 @@
 # popgen
 
-## Summary
+The `ipyrad2 popgen` tool makes it easy to compute population-genetic summary statistics from an
+assembled RAD-seq dataset while addressing the impacts of missing data.
 
-`ipyrad2 analysis popgen` computes built-in population-genetic summary statistics from assembled sequence HDF5 or SNP-capable HDF5 inputs.
-
-It supports two backends:
-
-- Sequence-backed HDF5: `pi`, `dxy`, `fst`, `tajima_d`, `theta_w`, `heterozygosity`, `fis`, `sfs`
-- SNP-backed HDF5: `fst`, `heterozygosity`, `fis`, `sfs`
-
-Windowed analyses are currently sequence-only.
 
 ## When to Use
 
@@ -24,20 +17,13 @@ This command is most useful when you want:
 
 ## Prerequisites
 
-- An input HDF5 that contains either sequence data, SNP data, or both
-- A population map file if you want multi-population summaries
+- An input HDF5 from `ipyrad2 assemble`
+- A population map (IMAP) file if you want multi-population summaries
 - An understanding of how much missing data remains in your assembled dataset
 
 If you do not provide `--imap`, all retained samples are treated as one population named `all`.
 
 ## Inputs and Backends
-
-`popgen` chooses its backend from the datasets stored in the HDF5:
-
-- Sequence backend: used when `phy` and `phymap` are present
-- SNP backend: used when sequence data are absent but `genos` and `snpsmap` are present
-
-The sequence backend supports the full current statistic panel. The SNP backend supports only the SNP-backed subset because several estimators in this phase require aligned sequence data.
 
 `--stats all` means:
 

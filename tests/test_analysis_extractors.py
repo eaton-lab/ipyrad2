@@ -65,6 +65,7 @@ def _make_wex(
     imap=None,
     minmap=None,
     max_sample_missing: float = 1.0,
+    logged_command: str | None = None,
 ) -> WindowExtracter:
     return WindowExtracter(
         data=h5,
@@ -80,6 +81,7 @@ def _make_wex(
         minmap=minmap,
         stdout=stdout,
         force=force,
+        logged_command=logged_command,
     )
 
 
@@ -90,6 +92,10 @@ def _make_lex(
     out_format: str = "bpp",
     nloci: int = 1,
     min_length: int = 4,
+    name: str = "alignment",
+    concatenate: bool = False,
+    random_seed: int | None = None,
+    max_sample_missing: float = 1.0,
     stdout: bool = False,
     force: bool = False,
     exclude=None,
@@ -99,14 +105,16 @@ def _make_lex(
 ) -> LocusExtracter:
     return LocusExtracter(
         data=h5,
-        name="alignment",
+        name=name,
         outdir=tmp_path / "LEX",
         out_format=out_format,
         nloci=nloci,
+        concatenate=concatenate,
+        random_seed=random_seed,
         min_length=min_length,
         windows=["chr1"],
         min_sample_coverage=1,
-        max_sample_missing=1.0,
+        max_sample_missing=max_sample_missing,
         exclude=exclude,
         include_reference=include_reference,
         imap=imap,
@@ -198,6 +206,7 @@ def test_wex_phy_output_writes_stats_and_keeps_filtered_rows_aligned(
         windows=["chr1:1-4"],
         force=True,
         max_sample_missing=0.5,
+        logged_command="ipyrad2 wex -d assembly.hdf5 -w chr1:1-4",
     )
 
     tool._write_to_phy()
@@ -213,6 +222,7 @@ def test_wex_phy_output_writes_stats_and_keeps_filtered_rows_aligned(
     assert lines[0] == "2 4"
     assert lines[1].strip().endswith("ACGT")
     assert lines[2].strip().endswith("TCGT")
+    assert stats.startswith("CMD: ipyrad2 wex -d assembly.hdf5 -w chr1:1-4\n\n")
     assert "# Extract Summary" in stats
     assert "# Filtering Summary" in stats
     assert "# Alignment Summary" in stats
@@ -296,7 +306,69 @@ def test_wex_phy_stdout_writes_stats_without_crashing(
     )
 
     assert captured.out.startswith("3 4\n")
+    assert stats.startswith("# Extract Summary\n")
     assert extract["outfile"] == "STDOUT"
+
+
+def test_wex_print_scaffold_table_writes_tabular_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class ScaffoldTable:
+        def to_csv(self, out, sep: str) -> None:
+            assert sep == "\t"
+            out.write("\tscaffold_name\tscaffold_length\n0\tchr1\t8\n")
+
+    class Tool:
+        scaffold_table = ScaffoldTable()
+
+    monkeypatch.setattr(
+        window_extracter_module, "WindowExtracter", lambda **kwargs: Tool()
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        window_extracter_module.run_window_extracter(print_scaffold_table=True)
+
+    assert exc_info.value.code == 0
+    assert (
+        capsys.readouterr().out
+        == "\tscaffold_name\tscaffold_length\n0\tchr1\t8\n"
+    )
+
+
+def test_wex_print_scaffold_table_handles_broken_pipe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ClosedScaffoldTable:
+        def to_csv(self, out, sep: str) -> None:
+            out.write("scaffold_name\n")
+
+    class ClosedStdout:
+        def write(self, value: str) -> int:
+            return len(value)
+
+        def flush(self) -> None:
+            raise BrokenPipeError
+
+    class Tool:
+        scaffold_table = ClosedScaffoldTable()
+
+    monkeypatch.setattr(
+        window_extracter_module, "WindowExtracter", lambda **kwargs: Tool()
+    )
+    original_stdout = window_extracter_module.sys.stdout
+    window_extracter_module.sys.stdout = ClosedStdout()
+    replacement_stdout = None
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            window_extracter_module.run_window_extracter(print_scaffold_table=True)
+        replacement_stdout = window_extracter_module.sys.stdout
+    finally:
+        window_extracter_module.sys.stdout = original_stdout
+        if replacement_stdout is not None and replacement_stdout is not original_stdout:
+            replacement_stdout.close()
+
+    assert exc_info.value.code == 0
 
 
 def test_wex_fasta_output_and_force_handling(tmp_path: Path) -> None:
@@ -692,6 +764,7 @@ def test_lex_bpp_output_still_works_and_respects_force(tmp_path: Path) -> None:
     assert "\nAccepted loci\n-------------\n" in stats_text
     header, rows = _parse_lex_stats(stats_path)
     assert header["tool"] == "lex"
+    assert header["outfile"] == str(outfile)
     assert header["nloci_written"] == "1"
     assert len(rows) == 1
     assert rows[0]["outfile"].endswith("alignment.phy")
@@ -838,8 +911,8 @@ def test_lex_writes_single_summary_stats_file_for_sequence_outputs(
     assert sorted(path.name for path in (tmp_path / "LEX").glob("*.stats.txt")) == [
         "alignment.stats.txt"
     ]
-    assert (tmp_path / "LEX" / f"chr1:1-4.{suffix}").exists()
-    assert (tmp_path / "LEX" / f"chr1:5-8.{suffix}").exists()
+    assert (tmp_path / "LEX" / f"alignment.chr1_1-4.{suffix}").exists()
+    assert (tmp_path / "LEX" / f"alignment.chr1_5-8.{suffix}").exists()
 
     stats_text = stats_path.read_text(encoding="utf-8")
     assert stats_text.startswith("Summary\n-------\n")
@@ -856,8 +929,8 @@ def test_lex_writes_single_summary_stats_file_for_sequence_outputs(
     assert rows[0]["locus_name"] == "chr1:1-4"
     assert rows[0]["start"] == "1"
     assert rows[0]["end"] == "4"
-    assert rows[0]["outfile"].endswith(f"chr1:1-4.{suffix}")
-    assert rows[1]["outfile"].endswith(f"chr1:5-8.{suffix}")
+    assert rows[0]["outfile"].endswith(f"alignment.chr1_1-4.{suffix}")
+    assert rows[1]["outfile"].endswith(f"alignment.chr1_5-8.{suffix}")
 
 
 def test_lex_stdout_writes_single_summary_stats_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -999,3 +1072,177 @@ def test_lex_warns_and_writes_fewer_loci_when_post_filter_length_is_too_short(
     assert len(rows) == 1
     assert rows[0]["locus_name"] == "chr1:5-8"
     assert any("only 1 met the minimum length requirement" in str(msg) for msg in messages)
+
+
+@pytest.mark.parametrize(
+    ("out_format", "suffix"),
+    [("phy", "phy"), ("nex", "nex")],
+)
+def test_lex_concatenate_writes_one_alignment_with_missing_blocks(
+    tmp_path: Path,
+    out_format: str,
+    suffix: str,
+) -> None:
+    h5 = _write_test_h5(
+        tmp_path / "assembly.hdf5",
+        ["AAAACCCC", "AAAANNNN", "NNNNCCCC"],
+        rows=[(0, 0, 4, 1, 4), (0, 4, 8, 5, 8)],
+        scaffold_length=8,
+    )
+    lex = _make_lex(
+        tmp_path,
+        h5,
+        out_format=out_format,
+        nloci=2,
+        concatenate=True,
+        random_seed=17,
+        max_sample_missing=0.5,
+        force=False,
+    )
+    lex.loci = pd.DataFrame(
+        [
+            {"chrom": 0, "startpos": 0, "endpos": 4},
+            {"chrom": 1, "startpos": 0, "endpos": 4},
+        ]
+    )
+
+    lex._write_loci()
+
+    outfile = tmp_path / "LEX" / f"alignment.{suffix}"
+    assert outfile.exists()
+    assert not list((tmp_path / "LEX").glob("alignment.chr1_*"))
+    text = outfile.read_text(encoding="utf-8")
+    if out_format == "phy":
+        assert text.startswith("3 8\n")
+    else:
+        assert "dimensions ntax=3 nchar=8;" in text
+    matrix = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0] in {"s1", "s2", "s3"}:
+            matrix[parts[0]] = parts[1]
+    assert matrix == {
+        "s1": "AAAACCCC",
+        "s2": "AAAANNNN",
+        "s3": "NNNNCCCC",
+    }
+
+    stats_path = tmp_path / "LEX" / "alignment.stats.txt"
+    header, rows = _parse_lex_stats(stats_path)
+    assert header["concatenate"] == "True"
+    assert header["random_seed"] == "17"
+    assert header["concatenated_sites"] == "8"
+    assert header["outfile"] == str(outfile)
+    assert header["nloci_written"] == "2"
+    assert [row["outfile"] for row in rows] == [str(outfile), str(outfile)]
+
+    with pytest.raises(IPyradError, match="already exists"):
+        lex._write_loci()
+
+
+def test_lex_concatenate_bpp_writes_one_locus_and_warns(tmp_path: Path) -> None:
+    h5 = _write_test_h5(
+        tmp_path / "assembly.hdf5",
+        ["AAAACCCC", "AAAANNNN", "NNNNCCCC"],
+        rows=[(0, 0, 4, 1, 4), (0, 4, 8, 5, 8)],
+        scaffold_length=8,
+    )
+    lex = _make_lex(
+        tmp_path,
+        h5,
+        out_format="bpp",
+        nloci=2,
+        concatenate=True,
+        max_sample_missing=0.5,
+        force=True,
+    )
+    lex.loci = pd.DataFrame(
+        [
+            {"chrom": 0, "startpos": 0, "endpos": 4},
+            {"chrom": 1, "startpos": 0, "endpos": 4},
+        ]
+    )
+    messages: list[str] = []
+    sink_id = logger.add(messages.append, format="{message}", level="WARNING")
+    try:
+        lex._write_loci()
+    finally:
+        logger.remove(sink_id)
+
+    outfile = tmp_path / "LEX" / "alignment.bpp"
+    text = outfile.read_text(encoding="utf-8")
+    assert text.startswith("3 8\n\n")
+    assert text.count("3 8") == 1
+    assert any("BPP is intended for multi-locus analyses" in msg for msg in messages)
+    header, rows = _parse_lex_stats(tmp_path / "LEX" / "alignment.stats.txt")
+    assert header["outfile"] == str(outfile)
+    assert [row["outfile"] for row in rows] == [str(outfile), str(outfile)]
+
+
+def test_lex_concatenate_stdout_writes_one_alignment(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    h5 = _write_test_h5(
+        tmp_path / "assembly.hdf5",
+        ["AAAACCCC", "AAAANNNN", "NNNNCCCC"],
+        rows=[(0, 0, 4, 1, 4), (0, 4, 8, 5, 8)],
+        scaffold_length=8,
+    )
+    lex = _make_lex(
+        tmp_path,
+        h5,
+        out_format="phy",
+        nloci=2,
+        concatenate=True,
+        max_sample_missing=0.5,
+        stdout=True,
+        force=True,
+    )
+    lex.loci = pd.DataFrame(
+        [
+            {"chrom": 0, "startpos": 0, "endpos": 4},
+            {"chrom": 1, "startpos": 0, "endpos": 4},
+        ]
+    )
+
+    lex._write_loci()
+
+    captured = capsys.readouterr()
+    assert captured.out.count("3 8") == 1
+    header, rows = _parse_lex_stats(tmp_path / "LEX" / "alignment.stats.txt")
+    assert header["outfile"] == "STDOUT"
+    assert [row["outfile"] for row in rows] == ["STDOUT", "STDOUT"]
+
+
+def test_lex_random_seed_reproduces_candidate_order(tmp_path: Path) -> None:
+    h5 = _write_test_h5(
+        tmp_path / "assembly.hdf5",
+        ["AAAACCCCGGGGTTTT", "TTTTGGGGCCCCAAAA", "CCCCAAAATTTTGGGG"],
+        rows=[
+            (0, 0, 4, 1, 4),
+            (0, 4, 8, 5, 8),
+            (0, 8, 12, 9, 12),
+            (0, 12, 16, 13, 16),
+        ],
+        scaffold_length=16,
+    )
+    first = _make_lex(tmp_path, h5, out_format="phy", random_seed=23, force=True)
+    second = _make_lex(tmp_path, h5, out_format="phy", random_seed=23, force=True)
+
+    first._get_loci()
+    second._get_loci()
+
+    assert first.loci["chrom"].tolist() == second.loci["chrom"].tolist()
+
+
+def test_lex_rejects_negative_random_seed(tmp_path: Path) -> None:
+    h5 = _write_test_h5(
+        tmp_path / "assembly.hdf5",
+        ["AAAA", "TTTT", "CCCC"],
+        rows=[(0, 0, 4, 1, 4)],
+        scaffold_length=4,
+    )
+
+    with pytest.raises(IPyradError, match="non-negative"):
+        _make_lex(tmp_path, h5, random_seed=-1)

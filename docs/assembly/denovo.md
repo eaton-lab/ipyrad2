@@ -1,25 +1,89 @@
-# Denovo
+# denovo
 
-`ipyrad2 denovo` is an optional step used to build a pseudoreference genome FASTA from trimmed sample FASTQs. It is used when you do not have a suitable external reference genome.
+`ipyrad2 denovo` is an optional step used to build a pseudoreference genome FASTA from trimmed sample FASTQs. It is used when you do not have a suitable external reference genome, or your samples are highly divergent and may be biased by using a single reference.
 
 In the normal assembly workflow, `denovo` sits after [`trim`](./trim.md) and before [`map`](./map.md). Its main output is a pseudoreference FASTA that you can map reads against. It is not the final assembled dataset, and it does not replace the later [`assemble`](./assemble.md) step.
 
+
+## When to Use
+
+Use `denovo` when: no suitable external reference genome exists; the available reference is too divergent to use confidently for read mapping; or you want to build a shared pseudoreference from the data themselves before mapping and assembly.
+
+Do not use `denovo` when you already have a trusted reference FASTA that is appropriate for your samples. In that case, skip directly from [`trim`](./trim.md) to [`map`](./map.md).
+
+
 ## Overview
 
-The goal of `denovo` is to construct a pseudo-reference that is representative for the samples in hand so that later read mapping and assembly steps can proceed against locus references that are empirically supported. In the case that a suitable reference sequence already exists, this step may be skipped.
+Reads are first clustered within samples at a high threshold (``--similarity-within``) to dereplicate and group reads representing alleles at the same locus into a consensus sequence. The consensus sequences are then clustered across samples at a lower thresholds (``--similarity-across``) to group homologous loci, putatively including orthologs and paralogs. Using a similarity graph among samples, we apply a graph-splitting algorithm to separate duplicated components. The final set of graph components includes sets of sequences that include at most one sequence per sample, all of which are within the across-sample similarity threshold of each other. An alignment is performed on each set to generate a consensus that will serve as a locus in the pseudoreference. (See further details below).
 
-Reads are first clustered within samples at a high threshold (``--similarity-within``) to dereplicate and group reads representing alleles at the same locus into a consensus sequence. The consensus sequences are then clustered across samples at a lower thresholds (``--similarity-across``) to group homologous loci, putatively including orthologs and paralogs. Using a similarity graph among samples, we then apply a graph-splitting algorithm to construct
+## Prerequisites
+
+Trimmed sample-level FASTQ or FASTQ.gz files, usually from [`trim`](./trim.md). All inputs in one run must be consistently single-end or consistently paired-end. Note: you do not need to use all of your samples during this step, e.g., we recommend usually using at most 10-20 samples. Thus you can still combine SE and PE data in later steps using the pseudoreference assembled from a subset of all SE or all PE samples in this step.
+
+
+## Command Patterns
+
+The smallest useful run is:
+
+```bash
+ipyrad2 denovo -d TRIMMED/*.fastq.gz -o output-denovo
+```
+
+That tells `ipyrad2` to parse sample names from the FASTQ filenames, run the denovo clustering workflow, and write a curated pseudoreference output set to `output-denovo/`.
+
+### Core Inputs
+
+- `-d, --fastqs`: one or more FASTQ paths or glob patterns
+- `-o, --out`: output directory, default `./output-denovo`
+- `-f, --force`: overwrite denovo outputs created by this command
+- `-b, --allow-reverse-complement`: cluster both strands rather than plus strand only
+
+### Clustering and Consensus
+
+- `-s, --within-similarity`: within-sample clustering threshold, default `0.95`
+- `-S, --across-similarity`: across-sample clustering threshold, default `0.85`
+- `-m, --min-derep-size`: minimum duplicate count retained during dereplication, default `5`
+- `-i, --min-length`: minimum retained sequence length after merge or join, default `35`
+- `-g, --min-merge-overlap`: minimum overlap required to merge paired reads, default `20`
+- `-e, --max-merge-diffs`: maximum mismatches allowed in the merged region, default `4`
+- `--no-alignment`: skip MAFFT in the final locus step and use the longest stripped sequence per locus
+
+### Sample Naming
+
+- `-dx, --delim-str`: delimiter used when parsing sample names
+- `-di, --delim-idx`: index of the retained delimiter-split token
+
+### Runtime
+
+- `-c, --cores`: maximum total cores to use, default `6`
+- `-t, --threads`: threads per `vsearch` job, default `3`
+- `--imap`: optional IMAP file used to choose one representative sample per group for denovo
+- `--use-all-samples`: disable automatic downselection and use every parsed sample
+- `--keep-intermediates`: retain the internal denovo working directory instead of cleaning it on success
+
+
+## Workflow
+
+1. parse sample names from input trimmed FASTQ (single or paired-end)
+2a. (if paired-end): merge overlapping pairs and join unmerged pairs while recording spacer position
+2b. dereplicate and cluster within samples to collapse into unique loci
+3. write sample consensus fastas
+4. cluster across-samples using vsearch all-by-all search among spacer-stripped consensus fastas
+5. build graph of connected components
+6. reconcile duplicated components that are below within-sample clustering threshold
+7. split graph with duplicated components using ... graph splitter
+8. align sequences within each component using mafft and store the consensus as a pseudoreference locus
+9. write pseudoreference loci to FASTA and write stats summary of graph splitting
+
+
+## Paired data spacers
 
 For paired-end data, prior to within sample clustering we merge overlapping reads and concatenate/join non-overlapping reads with a fixed length spacer. After this point paired-end and single-end reads are treated identically.
 
+## Dereplication
 Reads are dereplicated to retain only one copy of each unique sequence, and reads that occur fewer than (`--min_dereplication_size`) are discarded. This is an important heuristic. We find that a min dereplication size of 5 typically performs well. For very low depth datasets you may want to reduce this, but for large datasets using a value close to 1 will greatly increase runtimes.
 
-Next we cluster reads (still within samples) at a sequence similarity level which is a configurable parameter (`similarity_threshold_within`), while also taking account of potential variable strand orientation that is a hallmark of some RAD-Seq library prep methods (e.g. GBS (Elshire et al. 2011)). From this procedure, for each cluster of reads we retain a consensus sequence which is constructed using majority-rule per base position, and information about reach read within the cluster sufficient to
-
-Graph clustering and splitting algorithm to separate paralogs as distinct loci in the pseudoref. Assess how well this works.
-
-
-
+## ...
 This pipeline is designed around three distinct problems that naive clustering cannot solve well on its own. Within samples, raw reads contain redundancy and sequencing error, so denovo first reduces reads to sample-level consensus loci. Across samples, homologous loci can be divergent enough that a second clustering stage is needed to recover broader components. Those components can still contain duplicated sample representations caused either by true paralogy or by technical effects such as merged versus joined paired-read behavior, so denovo then applies reconciliation and graph-based splitting before writing final loci.
 
 
@@ -42,52 +106,7 @@ You can override this in two ways:
 
 The IMAP path is the recommended way to steer denovo toward phylogenetically diverse representatives while still keeping the pseudoreference construction set relatively small. IMAP selection may still exceed 10 representatives, in which case `denovo` emits an advisory warning rather than truncating the set.
 
-## When to Use
 
-Use `denovo` when:
-
-- no suitable external reference genome exists
-- the available reference is too divergent to use confidently for read mapping
-- you want to build a shared pseudoreference from the data themselves before mapping and assembly
-
-Do not use `denovo` when you already have a trusted reference FASTA that is appropriate for your samples. In that case, skip directly from [`trim`](./trim.md) to [`map`](./map.md).
-
-## Workflow
-
-```mermaid
-flowchart TD
-    A["Trimmed FASTQ"]:::file --> B["Parse sample names"]:::cmd
-    B --> C{"SE or PE input?"}
-    C -->|SE| D["Subsample to FASTA, dereplicate, cluster within sample"]:::cmd
-    C -->|PE| E["Merge pairs, join unmerged reads, dereplicate, cluster within sample"]:::cmd
-    D --> F["Sample consensus FASTA + sample summary"]:::file
-    E --> F
-    F --> G["Build spacer-stripped clustering sequences"]:::cmd
-    G --> H["Across-sample vsearch clustering"]:::cmd
-    H --> I["Build connected components"]:::cmd
-    I --> J["Reconcile duplicated components"]:::cmd
-    J --> K["Graph split with constrained sample-aware splitter"]:::cmd
-    K --> L{"Final locus writing mode"} 
-    L -->|default| M["MAFFT final locus consensus"]:::cmd
-    L -->|--no-alignment| N["Representative locus sequence"]:::cmd
-    M --> O["denovo_reference.fa + denovo.loci.mapping.tsv + denovo.loci.stats.tsv + denovo.sample_graph_summary.tsv + denovo.stats.txt + denovo.audit/"]:::file
-    N --> O
-
-    classDef file fill:#e8f2ff,stroke:#2f6fb1,color:#0f2f4f;
-    classDef cmd fill:#eaf8ea,stroke:#2f8a46,color:#10351c;
-```
-
-## Prerequisites
-
-- trimmed sample-level FASTQ files, usually from [`trim`](./trim.md)
-- an activated `ipyrad2` environment
-- executable `vsearch` and `mafft` binaries in the active environment at `Path(sys.prefix) / "bin" / ...`
-- read access to the FASTQ files
-- write access to the output directory
-
-`denovo` accepts plain FASTQ and `.gz`-compressed FASTQ input. All inputs in one run must be consistently single-end or consistently paired-end.
-
-For the current implementation, preflight still resolves both `vsearch` and `mafft` even if you select `--no-alignment`.
 
 ## Inputs and Sample Naming
 
@@ -107,54 +126,6 @@ These settings determine both:
 
 For a worked example of delimiter-based naming, see [Using -dx and -di to pair and name samples](../recipes/sample-name-parsing.md).
 
-## Command Patterns
-
-The smallest useful run is:
-
-```bash
-ipyrad2 denovo -d TRIMMED/*.fastq.gz -o output-denovo
-```
-
-That tells `ipyrad2` to parse sample names from the FASTQ filenames, run the denovo clustering workflow, and write a curated pseudoreference output set to `output-denovo/`.
-
-### Core Inputs
-
-- `-d, --fastqs`: one or more FASTQ paths or glob patterns
-- `-o, --out`: output directory, default `./output-denovo`
-- `-f, --force`: overwrite denovo outputs created by this command
-
-Without `--force`, `denovo` stops if curated denovo outputs already exist in the output directory.
-
-### Clustering and Consensus
-
-- `-s, --within-similarity`: within-sample clustering threshold, default `0.95`
-- `-S, --across-similarity`: across-sample clustering threshold, default `0.85`
-- `-m, --min-derep-size`: minimum duplicate count retained during dereplication, default `5`
-- `-i, --min-length`: minimum retained sequence length after merge or join, default `35`
-- `-g, --min-merge-overlap`: minimum overlap required to merge paired reads, default `20`
-- `-e, --max-merge-diffs`: maximum mismatches allowed in the merged region, default `4`
-- `--no-alignment`: skip MAFFT in the final locus step and use the longest stripped sequence per locus
-
-The final-stage choice matters biologically:
-
-- default mode builds an aligned locus consensus for loci that require it
-- `--no-alignment` is faster, but it writes a representative sequence rather than an aligned consensus
-
-### Sample Naming and Library Type
-
-- `-b, --allow-reverse-complement`: cluster both strands rather than plus strand only
-- `-dx, --delim-str`: delimiter used when parsing sample names
-- `-di, --delim-idx`: index of the retained delimiter-split token
-
-### Runtime
-
-- `-c, --cores`: maximum total cores to use, default `6`
-- `-t, --threads`: threads per `vsearch` job, default `3`
-- `--imap`: optional IMAP file used to choose one representative sample per group for denovo
-- `--use-all-samples`: disable automatic downselection and use every parsed sample
-- `--keep-intermediates`: retain the internal denovo working directory instead of cleaning it on success
-
-`denovo` validates that `--threads` does not exceed `--cores` before launching work.
 
 ### Logging
 

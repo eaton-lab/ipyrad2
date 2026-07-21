@@ -30,10 +30,17 @@ Multiple raw input files can be listed in one run. That is useful when a sample 
 The barcode table is whitespace-delimited, has no header, and should use:
 
 ```output
-sample  barcode1  barcode2
+sample1  barcode1  barcode2
 ```
 
-`barcode2` is optional. If it is present, ipyrad2 treats the table as combinatorial inline barcodes and requires paired-end reads. If barcodes are only present on read1 the second barcode column can be absent.
+Example
+```output
+sample1  AATTCCGG   TTAACCGG
+sample2  TTAAGGCC   AATTGGCC
+...
+```
+
+The third column (`barcode2`) is optional. If it is present, ipyrad2 treats the table as combinatorial inline barcodes and requires paired-end reads. If barcodes are only present on read1 the second barcode column can be absent.
 
 For `--i7` demux, only `barcode1` is used. If extra barcode columns are present, ipyrad2 ignores them in that mode.
 

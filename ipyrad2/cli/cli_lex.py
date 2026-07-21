@@ -13,6 +13,7 @@ Examples
 --------
 $ ipyrad2 lex -d assembly.hdf5 -o OUT/ -n TEST -m 10 -N 100 -L 150
 $ ipyrad2 lex -d assembly.hdf5 -o OUT/ -w Chr1 Chr2 -N 50 -O nex
+$ ipyrad2 lex -d assembly.hdf5 -o OUT/ -n TEST -N 50 -s 123 -C -O phy
 $ ipyrad2 lex -d assembly.hdf5 -o OUT/ -w Chr1:1-50000 -N 25 -L 300 -O bpp
 """
 
@@ -38,7 +39,7 @@ def _setup_lex_subparser(
     )
     core.add_argument(
         "-n", "--name", metavar="str", type=str, default="alignment",
-        help="Prefix name for output files. [default=alignment]",
+        help="Prefix name for alignment and stats files. [default=alignment]",
     )
     core.add_argument(
         "-o", "--out", metavar="Path", type=Path, default="output-lex",
@@ -57,6 +58,10 @@ def _setup_lex_subparser(
     sampling.add_argument(
         "-N", "--max-loci", metavar="int", type=int, default=100,
         help="Number of randomly sampled loci to extract. [default=100]",
+    )
+    sampling.add_argument(
+        "-s", "--random-seed", metavar="int", type=int,
+        help="Random seed for reproducible --max-loci selection.",
     )
     sampling.add_argument(
         "-L", "--min-length", metavar="int", type=int, default=150,
@@ -90,6 +95,10 @@ def _setup_lex_subparser(
     )
 
     output = tool.add_argument_group("Output control")
+    output.add_argument(
+        "-C", "--concatenate", action="store_true",
+        help="Append selected loci end to end and write one alignment.",
+    )
     output.add_argument(
         "-P", "--print-scaffold-table", action="store_true",
         help="Print the scaffold table to stdout and exit.",

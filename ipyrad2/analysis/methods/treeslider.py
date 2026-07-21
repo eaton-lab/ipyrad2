@@ -10,6 +10,7 @@ from pathlib import Path
 import os
 import shutil
 import sys
+import time
 
 import h5py
 import numpy as np
@@ -28,6 +29,9 @@ from ...utils.parallel import run_pipeline
 from ...utils.parallel import run_with_pool_iter
 from ...utils.progress import ProgressBar
 
+
+FILTER_MANIFEST_CHECKPOINT_BATCH_SIZE = 100
+FILTER_MANIFEST_CHECKPOINT_SECONDS = 2.0
 
 FINAL_TREE_STATUSES = {"polytomy_written", "tree_completed"}
 TERMINAL_STATUSES = FINAL_TREE_STATUSES | {
@@ -82,6 +86,17 @@ class TreeSliderWindowSpec:
     nloci: int
     sites_total: int
     spans: tuple[tuple[int, int], ...]
+
+
+@dataclass(frozen=True)
+class TreeSliderFilterState:
+    """Serializable sample and population state for one filter worker."""
+
+    sample_indices: tuple[int, ...]
+    sample_names: tuple[str, ...]
+    imap: dict[str, list[str]]
+    minmap: dict[str, int | float]
+    imap_row_indices: dict[str, np.ndarray]
 
 
 def _merge_spans(spans: list[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
@@ -399,7 +414,7 @@ def _rebuild_imap_row_indices(
 def _extract_window_alignment(
     *,
     data: Path,
-    extracter: WindowExtracter,
+    filter_state: TreeSliderFilterState,
     spec: TreeSliderWindowSpec,
     min_sample_alignment_length: int,
     min_alignment_length: int,
@@ -407,17 +422,25 @@ def _extract_window_alignment(
 ) -> dict[str, object]:
     """Filter one planned window and optionally write its staged FASTA."""
     with h5py.File(data, "r") as io5:
-        block = load_sequence_chunk_from_phy(io5["phy"], extracter.sidxs, spec.spans)
+        block = load_sequence_chunk_from_phy(
+            io5["phy"],
+            list(filter_state.sample_indices),
+            spec.spans,
+        )
 
     nsites_before = int(block.shape[1])
     nvariants_before = count_snps(block)
-    site_filtered = extracter._filter_block_sites(block)
+    site_filtered = filter_block_by_minmap(
+        block,
+        filter_state.imap_row_indices,
+        filter_state.minmap,
+    )
     nsites_after_site = int(site_filtered.shape[1])
     if nsites_after_site == 0:
         return {
             "status": "skipped_no_data",
             "status_detail": "No sites remained after min-sample-coverage filtering.",
-            "nsamples_before_filtering": len(extracter.snames),
+            "nsamples_before_filtering": len(filter_state.sample_names),
             "nsites_before_filtering": nsites_before,
             "nvariants_before_filtering": nvariants_before,
             "nsites_after_site_filter": 0,
@@ -433,8 +456,8 @@ def _extract_window_alignment(
 
     observed_counts = np.sum(site_filtered != MISSING_BASE, axis=1).astype(np.int64, copy=False)
     keep_mask = observed_counts >= min_sample_alignment_length
-    kept_names = [extracter.snames[idx] for idx in np.flatnonzero(keep_mask)]
-    dropped_names = [extracter.snames[idx] for idx in np.flatnonzero(~keep_mask)]
+    kept_names = [filter_state.sample_names[idx] for idx in np.flatnonzero(keep_mask)]
+    dropped_names = [filter_state.sample_names[idx] for idx in np.flatnonzero(~keep_mask)]
     sample_filtered = site_filtered[keep_mask, :]
     nsites_after_sample = int(sample_filtered.shape[1]) if sample_filtered.size else 0
 
@@ -442,8 +465,8 @@ def _extract_window_alignment(
     if sample_filtered.size and dropped_names:
         final_alignment = filter_block_by_minmap(
             sample_filtered,
-            _rebuild_imap_row_indices(kept_names, extracter.imap),
-            extracter.minmap,
+            _rebuild_imap_row_indices(kept_names, filter_state.imap),
+            filter_state.minmap,
         )
 
     nsites_after_final = int(final_alignment.shape[1]) if final_alignment.size else 0
@@ -451,7 +474,7 @@ def _extract_window_alignment(
     filtered_names = kept_names
 
     result = {
-        "nsamples_before_filtering": len(extracter.snames),
+        "nsamples_before_filtering": len(filter_state.sample_names),
         "nsites_before_filtering": nsites_before,
         "nvariants_before_filtering": nvariants_before,
         "nsites_after_site_filter": nsites_after_site,
@@ -486,11 +509,59 @@ def _extract_window_alignment(
         status="accepted_pending_tree",
         status_detail="Alignment staged for tree inference.",
         alignment_path=str(alignment_path),
-        filtered_names=filtered_names,
-        filtered_alignment=final_alignment,
     )
     return result
 
+
+
+def _filter_spec_needs_work(
+    manifest: pd.DataFrame,
+    spec: TreeSliderWindowSpec,
+    align_dir: Path,
+) -> bool:
+    """Return whether one window needs filtering or alignment restaging."""
+    status = str(manifest.at[spec.window_id, "status"])
+    if status in TERMINAL_STATUSES:
+        return False
+    alignment_path = align_dir / f"window_{spec.window_id:06d}.fa"
+    return status != "accepted_pending_tree" or not alignment_path.exists()
+
+
+def _filter_jobs_iter(
+    specs: list[TreeSliderWindowSpec],
+    *,
+    data: Path,
+    filter_state: TreeSliderFilterState,
+    min_sample_alignment_length: int,
+    min_alignment_length: int,
+    align_dir: Path,
+):
+    """Yield managed-pool jobs for windows requiring filtering."""
+    for spec in specs:
+        yield spec.window_id, (
+            _extract_window_alignment,
+            {
+                "data": data,
+                "filter_state": filter_state,
+                "spec": spec,
+                "min_sample_alignment_length": min_sample_alignment_length,
+                "min_alignment_length": min_alignment_length,
+                "alignment_path": align_dir / f"window_{spec.window_id:06d}.fa",
+            },
+        )
+
+
+def _record_filter_result(
+    manifest: pd.DataFrame,
+    window_id: int,
+    result: dict[str, object],
+) -> None:
+    """Apply one completed filter result to the parent-owned manifest."""
+    for key, value in result.items():
+        if key in MANIFEST_COLUMNS:
+            manifest.at[window_id, key] = value
+    if result["status"] != "accepted_pending_tree":
+        _clear_tree_fields(manifest, window_id)
 
 def _resolve_binary(binary: Path | str | None) -> str:
     """Resolve the raxml-ng executable path."""
@@ -583,7 +654,7 @@ def _run_tree_job(
         cmd.append("--redo")
 
     try:
-        _rc, out, err = run_pipeline([cmd])
+        run_pipeline([cmd])
     except Exception as exc:
         return {
             "window_id": spec.window_id,
@@ -595,9 +666,6 @@ def _run_tree_job(
             "alignment_path": alignment_path,
         }
 
-    combined = "\n".join(
-        part for part in (out.decode(errors="replace"), err.decode(errors="replace")) if part
-    ).strip()
     best_tree = workdir / f"{prefix}.raxml.bestTree"
     support_tree = workdir / f"{prefix}.raxml.support"
     final_tree_path = support_tree if bs_trees > 0 and support_tree.exists() else best_tree
@@ -699,6 +767,8 @@ def _finalize_outputs(
     mode: str,
     selected_scaffolds: list[str],
     binary: str,
+    filter_jobs_requested: int,
+    filter_jobs_resolved: int,
     threads: int | str,
     workers: int | str,
     resolved_threads: int,
@@ -721,6 +791,8 @@ def _finalize_outputs(
         mode=mode,
         selected_scaffolds=selected_scaffolds,
         binary=binary,
+        filter_jobs_requested=filter_jobs_requested,
+        filter_jobs_resolved=filter_jobs_resolved,
         threads=threads,
         workers=workers,
         resolved_threads=resolved_threads,
@@ -759,6 +831,8 @@ def _write_stats_text(
     mode: str,
     selected_scaffolds: list[str],
     binary: str,
+    filter_jobs_requested: int,
+    filter_jobs_resolved: int,
     threads: int | str,
     workers: int | str,
     resolved_threads: int,
@@ -777,12 +851,14 @@ def _write_stats_text(
     lines = [
         "Summary",
         "-------",
-        f"tool: treeslider",
+        "tool: treeslider",
         f"infile: {data}",
         f"name: {name}",
         f"outdir: {outdir}",
         f"window_mode: {mode}",
         f"scaffolds_selected: {', '.join(selected_scaffolds)}",
+        f"filter_jobs_requested: {filter_jobs_requested}",
+        f"filter_jobs_resolved: {filter_jobs_resolved}",
         f"raxml_ng_binary: {binary}",
         f"threads_requested: {threads}",
         f"workers_requested: {workers}",
@@ -841,13 +917,18 @@ def run_treeslider_method(
     seed: int | None,
     force: bool,
     redo: bool,
+    jobs: int = 4,
     log_level: str = "INFO",
 ) -> None:
     """CLI entrypoint for checkpointed sequence-window tree inference."""
+    if force and redo:
+        raise IPyradError("--force and --redo cannot be used together.")
+
     data = Path(data).expanduser().absolute()
     outdir = Path(outdir).expanduser().absolute()
     window_size = _normalize_positive_int(window_size, "--window-size")
     slide_size = _normalize_positive_int(slide_size, "--slide-size")
+    jobs = _normalize_positive_int(jobs, "--jobs") or 4
     min_sample_coverage = _normalize_positive_int(min_sample_coverage, "--min-sample-coverage") or 4
     min_sample_alignment_length = _normalize_positive_int(
         min_sample_alignment_length,
@@ -943,42 +1024,79 @@ def run_treeslider_method(
         if len(failed_ids):
             _write_manifest(manifest, manifest_path)
 
+    filter_state = TreeSliderFilterState(
+        sample_indices=tuple(int(idx) for idx in extracter.sidxs),
+        sample_names=tuple(extracter.snames),
+        imap={pop: list(names) for pop, names in extracter.imap.items()},
+        minmap=dict(extracter.minmap),
+        imap_row_indices={
+            pop: np.asarray(indices, dtype=np.int64)
+            for pop, indices in extracter._imap_row_indices.items()
+        },
+    )
+    filter_specs = [
+        spec
+        for spec in specs
+        if _filter_spec_needs_work(manifest, spec, align_dir)
+    ]
+    resolved_filter_jobs = max(1, min(jobs, len(filter_specs)))
+
     align_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("filtering windows and writing alignment files")
+    logger.info(
+        "filtering windows and writing alignment files (requested jobs: {}, active jobs: {})",
+        jobs,
+        resolved_filter_jobs,
+    )
     filter_progress = ProgressBar(
         len(specs),
         None,
         _filter_progress_message(len(specs)),
     )
-    filter_progress.finished = int(np.sum(manifest["status"] != "planned"))
+    filter_progress.finished = len(specs) - len(filter_specs)
     filter_progress.update()
+    filter_jobs_iter = _filter_jobs_iter(
+        filter_specs,
+        data=data,
+        filter_state=filter_state,
+        min_sample_alignment_length=min_sample_alignment_length,
+        min_alignment_length=min_alignment_length,
+        align_dir=align_dir,
+    )
+    filter_results_since_checkpoint = 0
+    last_filter_checkpoint = time.monotonic()
     try:
-        for spec in specs:
-            status = str(manifest.at[spec.window_id, "status"])
-            if status in TERMINAL_STATUSES:
-                continue
-            alignment_path = align_dir / f"window_{spec.window_id:06d}.fa"
-            if status == "accepted_pending_tree" and alignment_path.exists():
-                continue
-
-            result = _extract_window_alignment(
-                data=data,
-                extracter=extracter,
-                spec=spec,
-                min_sample_alignment_length=min_sample_alignment_length,
-                min_alignment_length=min_alignment_length,
-                alignment_path=alignment_path,
+        if resolved_filter_jobs == 1:
+            filter_results = (
+                (window_id, func(**kwargs))
+                for window_id, (func, kwargs) in filter_jobs_iter
             )
-            for key, value in result.items():
-                if key in {"filtered_names", "filtered_alignment"}:
-                    continue
-                manifest.at[spec.window_id, key] = value
-            if result["status"] != "accepted_pending_tree":
-                _clear_tree_fields(manifest, spec.window_id)
-            _write_manifest(manifest, manifest_path)
+        else:
+            filter_results = run_with_pool_iter(
+                filter_jobs_iter,
+                log_level,
+                max_workers=resolved_filter_jobs,
+                max_inflight=resolved_filter_jobs,
+            )
+
+        for window_id, result in filter_results:
+            window_id = int(window_id)
+            _record_filter_result(manifest, window_id, result)
+            filter_results_since_checkpoint += 1
             filter_progress.finished += 1
             filter_progress.update()
+            now = time.monotonic()
+            if (
+                filter_results_since_checkpoint
+                >= FILTER_MANIFEST_CHECKPOINT_BATCH_SIZE
+                or now - last_filter_checkpoint
+                >= FILTER_MANIFEST_CHECKPOINT_SECONDS
+            ):
+                _write_manifest(manifest, manifest_path)
+                filter_results_since_checkpoint = 0
+                last_filter_checkpoint = now
     finally:
+        if filter_results_since_checkpoint:
+            _write_manifest(manifest, manifest_path)
         filter_progress.close()
 
     pending = manifest[manifest["status"] == "accepted_pending_tree"].copy()
@@ -1009,16 +1127,13 @@ def run_treeslider_method(
             if not alignment_path.exists():
                 result = _extract_window_alignment(
                     data=data,
-                    extracter=extracter,
+                    filter_state=filter_state,
                     spec=spec,
                     min_sample_alignment_length=min_sample_alignment_length,
                     min_alignment_length=min_alignment_length,
                     alignment_path=alignment_path,
                 )
-                for key, value in result.items():
-                    if key in {"filtered_names", "filtered_alignment"}:
-                        continue
-                    manifest.at[window_id, key] = value
+                _record_filter_result(manifest, int(window_id), result)
                 _write_manifest(manifest, manifest_path)
 
             if manifest.at[window_id, "status"] != "accepted_pending_tree":
@@ -1093,6 +1208,8 @@ def run_treeslider_method(
             mode=mode,
             selected_scaffolds=selected_scaffolds,
             binary=binary,
+            filter_jobs_requested=jobs,
+            filter_jobs_resolved=resolved_filter_jobs,
             threads=threads,
             workers=workers,
             resolved_threads=resolved_threads,
@@ -1120,6 +1237,8 @@ def run_treeslider_method(
         mode=mode,
         selected_scaffolds=selected_scaffolds,
         binary=binary,
+        filter_jobs_requested=jobs,
+        filter_jobs_resolved=resolved_filter_jobs,
         threads=threads,
         workers=workers,
         resolved_threads=resolved_threads,

@@ -722,3 +722,193 @@ def test_run_treeslider_interrupt_cleans_children_and_leaves_resumable_manifest(
         assert not any(raxml_root.glob("window_*"))
     assert (outdir / "interrupt.stats.txt").exists()
     assert (outdir / "interrupt.trees.nex").exists()
+
+
+def test_parallel_filter_jobs_match_serial_results(tmp_path: Path) -> None:
+    h5 = _write_sequence_h5(
+        tmp_path / "assembly.hdf5",
+        [
+            "AAAACCCCGGGGTTTT",
+            "AAAACCCCGGGGTTTT",
+            "AAAACCCCGGGGTTTT",
+        ],
+        rows=[
+            (0, 0, 4, 1, 4),
+            (0, 4, 8, 5, 8),
+            (0, 8, 12, 9, 12),
+            (0, 12, 16, 13, 16),
+        ],
+    )
+    common_kwargs = dict(
+        data=h5,
+        name="slider",
+        window_size=None,
+        slide_size=None,
+        print_scaffold_table=False,
+        scaffolds=None,
+        min_sample_coverage=2,
+        imap=None,
+        minmap=None,
+        exclude=None,
+        include_reference=False,
+        min_sample_alignment_length=1,
+        min_alignment_length=1,
+        threads="auto",
+        workers="auto",
+        bs_trees=0,
+        model="GTR+G",
+        raxml_ng_binary=None,
+        seed=17,
+        force=True,
+        redo=False,
+        log_level="WARNING",
+    )
+
+    with pytest.raises(treeslider_mod.IPyradError, match="--jobs must be at least 1"):
+        treeslider_mod.run_treeslider_method(
+            outdir=tmp_path / "INVALID",
+            jobs=0,
+            **common_kwargs,
+        )
+
+    serial_out = tmp_path / "SERIAL"
+    parallel_out = tmp_path / "PARALLEL"
+    treeslider_mod.run_treeslider_method(
+        outdir=serial_out,
+        jobs=1,
+        **common_kwargs,
+    )
+    treeslider_mod.run_treeslider_method(
+        outdir=parallel_out,
+        jobs=2,
+        **common_kwargs,
+    )
+
+    serial_manifest = pd.read_csv(
+        serial_out / "slider.stats.tsv",
+        sep="\t",
+        keep_default_na=False,
+    )
+    parallel_manifest = pd.read_csv(
+        parallel_out / "slider.stats.tsv",
+        sep="\t",
+        keep_default_na=False,
+    )
+    pd.testing.assert_frame_equal(serial_manifest, parallel_manifest)
+    assert serial_manifest["status"].tolist() == ["polytomy_written"] * 4
+    assert (serial_out / "slider.trees.nex").read_text(encoding="utf-8") == (
+        parallel_out / "slider.trees.nex"
+    ).read_text(encoding="utf-8")
+
+    serial_stats = (serial_out / "slider.stats.txt").read_text(encoding="utf-8")
+    parallel_stats = (parallel_out / "slider.stats.txt").read_text(encoding="utf-8")
+    assert "filter_jobs_requested: 1" in serial_stats
+    assert "filter_jobs_resolved: 1" in serial_stats
+    assert "filter_jobs_requested: 2" in parallel_stats
+    assert "filter_jobs_resolved: 2" in parallel_stats
+    assert not (serial_out / ".slider.stage").exists()
+    assert not (parallel_out / ".slider.stage").exists()
+
+
+def test_filter_manifest_writes_are_batched(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    h5 = _write_sequence_h5(
+        tmp_path / "assembly.hdf5",
+        ["AAAACCCCGGGGTTTT"],
+        rows=[
+            (0, 0, 4, 1, 4),
+            (0, 4, 8, 5, 8),
+            (0, 8, 12, 9, 12),
+            (0, 12, 16, 13, 16),
+        ],
+        sample_names=["s1"],
+    )
+    monkeypatch.setattr(treeslider_mod, "run_with_pool_iter", _run_pool_iter_sequential)
+    monkeypatch.setattr(treeslider_mod, "FILTER_MANIFEST_CHECKPOINT_BATCH_SIZE", 2)
+    monkeypatch.setattr(
+        treeslider_mod,
+        "FILTER_MANIFEST_CHECKPOINT_SECONDS",
+        float("inf"),
+    )
+    real_write_manifest = treeslider_mod._write_manifest
+    manifest_writes: list[Path] = []
+
+    def _record_manifest_write(manifest: pd.DataFrame, path: Path) -> None:
+        real_write_manifest(manifest, path)
+        manifest_writes.append(Path(path))
+
+    monkeypatch.setattr(treeslider_mod, "_write_manifest", _record_manifest_write)
+
+    outdir = tmp_path / "OUT"
+    treeslider_mod.run_treeslider_method(
+        data=h5,
+        name="slider",
+        outdir=outdir,
+        window_size=None,
+        slide_size=None,
+        print_scaffold_table=False,
+        scaffolds=None,
+        min_sample_coverage=1,
+        imap=None,
+        minmap=None,
+        exclude=None,
+        include_reference=False,
+        min_sample_alignment_length=1,
+        min_alignment_length=1,
+        jobs=2,
+        threads="auto",
+        workers="auto",
+        bs_trees=0,
+        model="GTR+G",
+        raxml_ng_binary=None,
+        seed=17,
+        force=True,
+        redo=False,
+        log_level="WARNING",
+    )
+
+    manifest = pd.read_csv(outdir / "slider.stats.tsv", sep="\t")
+    assert manifest["status"].tolist() == ["skipped_few_samples"] * 4
+    assert manifest_writes == [outdir / "slider.stats.tsv"] * 3
+
+
+def test_force_and_redo_are_rejected_before_output_cleanup(tmp_path: Path) -> None:
+    outdir = tmp_path / "OUT"
+    outdir.mkdir()
+    manifest_path = outdir / "slider.stats.tsv"
+    manifest_path.write_text("preserve me\n", encoding="utf-8")
+
+    with pytest.raises(
+        treeslider_mod.IPyradError,
+        match="--force and --redo cannot be used together",
+    ):
+        treeslider_mod.run_treeslider_method(
+            data=tmp_path / "missing.hdf5",
+            name="slider",
+            outdir=outdir,
+            window_size=None,
+            slide_size=None,
+            print_scaffold_table=False,
+            scaffolds=None,
+            min_sample_coverage=4,
+            imap=None,
+            minmap=None,
+            exclude=None,
+            include_reference=False,
+            min_sample_alignment_length=1,
+            min_alignment_length=1,
+            jobs=1,
+            threads="auto",
+            workers="auto",
+            bs_trees=0,
+            model="GTR+G",
+            raxml_ng_binary=None,
+            seed=None,
+            force=True,
+            redo=True,
+            log_level="WARNING",
+        )
+
+    assert manifest_path.read_text(encoding="utf-8") == "preserve me\n"

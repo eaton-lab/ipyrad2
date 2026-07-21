@@ -168,10 +168,11 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
 
     if tool == "wex":
         run_window_extracter = _load_runner(tool)
+        logged_command = format_logged_command(sys.argv[1:])
         logger.info("-------------------------------------------------------")
         logger.info("----- ipyrad2 wex: extract alignments from windows -----")
         logger.info("-------------------------------------------------------")
-        logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
+        logger.info(f"CMD: {logged_command}")
         run_window_extracter(
             data=args.data,
             name=args.name,
@@ -187,6 +188,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
             print_scaffold_table=args.print_scaffold_table,
             stdout=args.stdout,
             force=args.force,
+            logged_command=logged_command,
         )
         if _exit:
             sys.exit(0)
@@ -204,6 +206,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
             outdir=args.out,
             out_format=args.out_format,
             nloci=args.max_loci,
+            random_seed=args.random_seed,
             min_length=args.min_length,
             windows=args.windows,
             min_sample_coverage=args.min_sample_coverage,
@@ -213,6 +216,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
             minmap=args.minmap,
             exclude=args.exclude,
             print_scaffold_table=args.print_scaffold_table,
+            concatenate=args.concatenate,
             stdout=args.stdout,
             force=args.force,
         )
@@ -241,6 +245,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
             include_reference=args.include_reference,
             min_sample_alignment_length=args.min_sample_alignment_length,
             min_alignment_length=args.min_alignment_length,
+            jobs=args.jobs,
             threads=args.threads,
             workers=args.workers,
             bs_trees=args.bs_trees,

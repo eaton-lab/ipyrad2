@@ -1,22 +1,8 @@
-# Quick Guide
+# Assembly Guide
 
-This guide is the short, example-forward map of the ipyrad2 assembly workflow. It shows how data move from reads to assembled outputs, but it is not a replacement for the command pages. Use it to orient yourself, then follow the links for the step you are actually running.
+The ipyrad2 assembly workflow involves running a sequence of subcommands, as shown below.
 
-```mermaid
-flowchart LR
-    A["Pooled FASTQ"]:::file --> B["demux"]:::cmd --> C["trim"]:::cmd --> D{"Reference?"}:::cmd
-    D -->|yes| E["map"]:::cmd
-    D -->|no| F["denovo"]:::cmd --> E
-    R["Reference FASTA"]:::file --> E
-    E --> G["RAD BAMs"]:::file --> H["assemble"]:::cmd
-    W["WGS BAMs"]:::file --> H
-    R --> H
-    F --> H
-    H --> I["HDF5 + VCF + loci + BED"]:::file
-
-    classDef file fill:#e8f2ff,stroke:#2f6fb1,color:#0f2f4f;
-    classDef cmd fill:#eaf8ea,stroke:#2f8a46,color:#10351c;
-```
+![ipyrad2 assembly workflow from input reads to assembled outputs](../Fig1-assembly.png){ width="100%" }
 
 ## Standard Example
 

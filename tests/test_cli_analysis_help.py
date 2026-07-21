@@ -147,6 +147,7 @@ def test_lex_help_groups_examples_and_logging_are_updated() -> None:
         "-O, --out-format",
         "-w, --windows",
         "-N, --max-loci",
+        "-s, --random-seed",
         "-L, --min-length",
         "-m, --min-sample-coverage",
         "-r, --max-sample-missing",
@@ -154,6 +155,7 @@ def test_lex_help_groups_examples_and_logging_are_updated() -> None:
         "-R, --include-reference",
         "-i, --imap",
         "-g, --minmap",
+        "-C, --concatenate",
         "-P, --print-scaffold-table",
         "-x, --stdout",
         "-f, --force",
@@ -170,6 +172,8 @@ def test_lex_help_groups_examples_and_logging_are_updated() -> None:
 
     assert "ipyrad2 lex: extract delimited loci from HDF5 database" in help_text
     assert "$ ipyrad2 lex -d assembly.hdf5 -o OUT/ -w Chr1:1-50000 -N 25 -L 300 -O bpp" in help_text
+    assert "-s 123 -C -O phy" in help_text
+    assert "Append selected loci end to end" in help_text
     assert "Minimum whole-locus length in bp before and after filtering" in help_text
     assert "--include-reference" in help_text
     assert "assembly_reference_sequence" in help_text
@@ -209,6 +213,7 @@ def test_treeslider_help_groups_examples_and_tree_options_are_present() -> None:
         "-R, --include-reference",
         "-i, --imap",
         "-g, --minmap",
+        "-j, --jobs",
         "--threads",
         "--workers",
         "--bs-trees",
@@ -234,6 +239,7 @@ def test_treeslider_help_groups_examples_and_tree_options_are_present() -> None:
     assert "one-tree-per-locus mode" in help_text
     assert "shell-style wildcard patterns" in help_text
     assert "assembly_reference_sequence" in help_text
+    assert "filtering and alignment-writing jobs" in help_text
     assert "--raxml-ng-binary" in help_text
     assert "--redo" in help_text
     assert help_text.index("-h, --help") > help_text.index("Logging:")
@@ -853,3 +859,12 @@ def test_treeslider_is_a_real_top_level_command_parser() -> None:
     args = parser.parse_args([tool, "-d", "assembly.hdf5"])
     assert args.subcommand == tool
     assert args.data.name == "assembly.hdf5"
+    assert args.jobs == 4
+
+    parallel_args = parser.parse_args([tool, "-d", "assembly.hdf5", "-j", "7"])
+    assert parallel_args.jobs == 7
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [tool, "-d", "assembly.hdf5", "--redo", "--force"]
+        )

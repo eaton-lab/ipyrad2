@@ -54,11 +54,14 @@ The HDF5 database can also serve as direct input to a number of analysis tools t
 ## Example File Types
 
 ### FASTQ
-Below is an example read1 FASTQ file. Your data will look different, including the read headers.
 
-This read has already been demultiplexed from a pooled lane by its i7 tag (AGTCGCTT), and from a pooled library by its inline barcode (already removed by ``demux``). It retains the restriction cutsite motif (ATCGG) at the 5' end of each read, which will be detected and trimmed by ``trim``.
+FASTQ is the standard text format for sequencing reads. Each read occupies four lines: a header beginning with `@`, the nucleotide sequence, a `+` separator, and one encoded quality character for every nucleotide in the sequence. Paired-end data are stored in separate Read 1 and Read 2 files whose read headers identify matching pairs.
 
-This example also includes optional i5 tags that were ligated as unique molecular identifiers (UMIs) during 3RAD library preparation (e.g., GAGCATGG, AGCAGGGA, GTGTCCAT, and TCTAGATT). These can be selected during ``trim`` and ``map`` to remove duplicates, when present.
+Below is an example Read 1 FASTQ file. Your data will look different, including the read headers.
+
+These reads have already been demultiplexed from a pooled lane by their i7 tag (`AGTCGCTT`), and from a pooled library by their inline barcode (already removed by `demux`). They retain the restriction cutsite motif (`ATCGG`) at the 5' end of each read, which will be detected and trimmed by `trim`.
+
+This example also includes optional i5 tags that were ligated as unique molecular identifiers (UMIs) during 3RAD library preparation (for example, `GAGCATGG`, `AGCAGGGA`, `GTGTCCAT`, and `TCTAGATT`). These can be selected during `trim` and `map` to remove duplicates, when present.
 
 ```parsed-literal
 @NB551405:60:H7T2GAFXY:1:11101:21625:19713 1:N:0:AGTCGCTT+GAGCATGG
@@ -79,7 +82,11 @@ ATCGGCGGAGGTGATTTTCCTTCCTCTTCGGAAAGAGCTAACCATGCCTGCTTCTCAAGATCAGGATGATCATCGATTAT
 EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE6EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEAEEEEEEEEEAAAA/<EEEAAEEEEEAEE/AEAEEEAE
 ```
 
-### reference FASTA
+### Reference FASTA
+
+FASTA stores one or more named nucleotide sequences. Each record begins with a header line starting with `>`, followed by one or more lines of sequence. For a reference genome, records usually represent chromosomes or scaffolds. The first whitespace-delimited value in each header is the sequence name used in BAM, BED, VCF, and HDF5 coordinates, so it must be unique.
+
+The example below is shortened for display. Line wrapping does not change the sequence: software joins all sequence lines until the next `>` header.
 
 ```
 >A_tuberculatus_Chr01
@@ -95,20 +102,147 @@ GAGGCTAATTACTTAATTTTGTCTGTTAGCATTGGTGTACTTCAAAGTGATCTAATTTCTTTTCGTCCACCTTTACCCGT
 ```
 
 
-### pseudoreference FASTA
+The reference passed to `map` must be the same reference passed to `assemble`. Indexing tools create companion files for the FASTA, including a `.fai` index that records sequence names and lengths.
 
-### VCF (vcf.gz)
-...
+### Pseudoreference FASTA
 
-### LOCI (loci.gz)
-...
+`ipyrad2 denovo` writes `denovo_reference.fa` when a suitable external reference is unavailable or when a data-derived reference is preferable. It is a valid FASTA file, but its records are inferred RAD loci rather than chromosomes. Headers such as `locus_1_1` and `locus_1_2` identify separately retained sequences from the same graph component. This allows the denovo workflow to preserve supported duplicated or paralogous copies as distinct mapping targets.
 
-### BED (loci.bed)
-...
+When paired-read arm structure is preserved, ipyrad2 joins the two arms with exactly 50 `N` characters. The spacer represents unknown intervening sequence, not observed sequence. Single-end loci and successfully merged paired reads do not require it.
 
-#### HDF5
+This shortened example is taken from an ipyrad2 denovo reference. The line containing only `N` characters is the 50-base spacer.
 
+```text
+>locus_1_1
+TCATTCACCCTTCTGGTGCATTATCTTCTCATTTTACTCGATAACTTGGGTCT
+NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN
+ACTCAAATGAGTACTCCTTGTTCAAAGATATCCATTTGTATGTCTATCATATA
+>locus_1_2
+TCATTCACCCTTCTGGCGCATTATCTTCTCATTTGACTCGATAACTCGGGTCT
+NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN
+CAAATGAGTACTCCTTGTTCAAAGATATCCATTTGTACTTCTATCATATATAT
+```
 
+The pseudoreference is used by `map` like an external reference FASTA. It is an intermediate mapping reference, not the final assembled loci or HDF5 database.
+
+### BAM
+
+`ipyrad2 map` writes one coordinate-sorted BAM alignment per sample. BAM is a compressed binary representation of SAM, so inspect it with `samtools` rather than opening it as text. Each BAM is accompanied by an index, normally `sample.filtered.bam.bai`, which lets programs retrieve selected intervals without scanning the whole file.
+
+For example, `samtools view -h sample.filtered.bam` renders BAM records as SAM text. The long sequence, quality, and optional tag fields below are shortened for readability.
+
+```text
+@HD VN:1.6  SO:coordinate
+@SQ SN:locus_1_1  LN:562
+@SQ SN:locus_2_1  LN:336
+LH00150:...:UMI_GCCTTGTT  99  locus_2_1  1  8  21M2D28M9I16M2D63M  =  198  336  TTCTCACC...  IIIIIIII...  NM:i:18  AS:i:72  RG:Z:bella-JJ85-plate_J2
+```
+
+The header states that the file is coordinate sorted (`@HD`) and describes reference sequences (`@SQ`). An alignment record contains, in order:
+
+1. read name (`QNAME`)
+2. bitwise flags (`FLAG`)
+3. reference sequence and 1-based position (`RNAME`, `POS`)
+4. mapping quality and alignment operations (`MAPQ`, `CIGAR`)
+5. mate reference, mate position, and template length (`RNEXT`, `PNEXT`, `TLEN`)
+6. read sequence and base qualities (`SEQ`, `QUAL`)
+7. optional typed tags such as edit distance (`NM`), alignment score (`AS`), and read group (`RG`)
+
+Here, flag `99` describes the first read of a properly paired alignment, `=` means its mate maps to the same reference, and the CIGAR string records matched bases, deletions, and insertions. `assemble` uses these alignments and coordinates to determine read support within each locus.
+
+### VCF (`.vcf.gz`)
+
+`assemble` writes filtered SNP calls to `NAME.vcf.gz`, a block-gzip-compressed Variant Call Format file, together with a CSI index (`NAME.vcf.gz.csi`). Inspect it with `bcftools view NAME.vcf.gz` or another VCF-aware program. The final VCF is restricted to retained loci, contains SNP rather than indel records, and keeps sites that pass the final site filter.
+
+The example below, shortened to three samples, comes from a recent assembly. Fields are tab-delimited in the file.
+
+```text
+##fileformat=VCFv4.2
+#CHROM      POS  ID  REF  ALT  QUAL     FILTER  INFO                                                    FORMAT    alaschanica-DE237  axillaris-DE37  axillaris-JJ125
+locus_9_12  13   .   C    T    98.3163  PASS    DP=585;AC=0;AN=10;MQ=39;F_MISSING=0.642857;AF=0;MAF=0  GT:DP:AD  ./.:0:0,0          ./.:4:4,0       ./.:1:1,0
+```
+
+The fixed columns give the reference sequence (`CHROM`), 1-based position (`POS`), reference and alternate alleles (`REF`, `ALT`), variant quality (`QUAL`), filter status, and site annotations (`INFO`). Here the INFO fields include total depth (`DP`), alternate allele count (`AC`), called allele count (`AN`), mapping quality (`MQ`), missing-data frequency, allele frequency (`AF`), and minor allele frequency (`MAF`).
+
+`FORMAT` defines the sample columns. In `GT:DP:AD`, `GT` is the diploid genotype, `DP` is sample depth, and `AD` gives reference and alternate read depths. Typical genotypes are `0/0` (reference homozygote), `0/1` (heterozygote), `1/1` (alternate homozygote), and `./.` (missing). A VCF can retain an alternate allele in `ALT` even when genotype masking leaves no called copies among retained samples, as in this example (`AC=0`).
+
+### LOCI (`.loci.gz`)
+
+`assemble` writes `NAME.loci.gz`, a gzip-compressed, human-readable collection of final multiple-sequence alignments. Each locus contains the reference row (`assembly_reference_sequence`) followed by empirical samples retained at that locus. All rows within a locus have the same aligned length.
+
+This compact example is schematic but preserves the exact record structure:
+
+```text
+assembly_reference_sequence  ACGTACGTCCGTAACGTA
+sample_A                     ACGTACGTCCGTAACGTA
+sample_B                     ACGTACGTTCGTAACGTA
+sample_C                     ACGTACGTTCGTATCGNN
+//                                   *    -    |0:locus_16_1:1-18
+```
+
+`A`, `C`, `G`, and `T` are unambiguous consensus bases. IUPAC codes such as `R`, `Y`, or `S` represent heterozygous calls, `N` represents missing or masked sequence, and `-` within an alignment row is a gap. Samples removed by final sample-row filters are omitted from that locus in this text file.
+
+The `//` line terminates the locus. Its marker string aligns with sequence columns: `*` marks a parsimony-informative variable site, `-` marks another variable site, and spaces mark constant sites. The suffix is `index:scaffold:start-end`, where the locus index is zero-based and the displayed reference interval is 1-based and inclusive.
+
+### BED (`.bed`)
+
+`assemble` writes `NAME.bed` to map every retained locus to the assembly reference. It is a four-column, tab-delimited BED file with no header.
+
+```text
+locus_9_12  0   328  6
+locus_13_2  38  242  6
+locus_16_1  0   328  13
+locus_17_1  0   328  13
+```
+
+The columns are:
+
+1. reference scaffold or pseudoreference locus name
+2. 0-based start coordinate, included in the interval
+3. 0-based end coordinate, excluded from the interval
+4. number of empirical sample sequences retained at that locus
+
+The first row therefore spans 328 bases (`328 - 0`) on `locus_9_12` and contains sequence data from six samples. The synthetic `assembly_reference_sequence` row is not counted in column four. These 0-based, half-open intervals are also used by the coordinate maps inside the HDF5 database.
+
+### HDF5 (`.hdf5`)
+
+`assemble` writes `NAME.hdf5`, the structured binary database used by ipyrad2 export and analysis tools. HDF5 is not a line-oriented text format. It stores named, typed, multidimensional datasets and metadata attributes, allowing tools to retrieve selected samples, loci, genomic windows, or SNPs without reading the whole assembly.
+
+You can inspect it with `h5py`. This code reports the datasets in a recent 14-sample assembly:
+
+```python
+import h5py
+
+with h5py.File("assembly.hdf5", "r") as database:
+    print(sorted(database.attrs))
+    for name in sorted(database):
+        print(name, database[name].shape, database[name].dtype)
+```
+
+```text
+['names', 'nsnps', 'reference', 'scaffold_lengths', 'scaffold_names', 'version']
+genos      (14, 56208, 3)  uint8
+phy        (15, 516518)    uint8
+phymap     (3071, 5)       uint32
+reference  (56208,)        uint8
+snpsmap    (56208, 5)      uint32
+```
+
+The core datasets are:
+
+| Dataset | Axes or columns | Information stored |
+| --- | --- | --- |
+| `phy` | samples (including reference) x aligned sites | Concatenated locus alignments stored as ASCII-encoded nucleotide and IUPAC characters. |
+| `phymap` | loci x (`scaff`, `phy0`, `phy1`, `pos0`, `pos1`) | Maps each `phy` slice to a 0-based, half-open reference interval. `scaff` indexes the root `scaffold_names` attribute. |
+| `genos` | empirical samples x SNPs x 3 | The two VCF allele indexes followed by the ASCII-encoded nucleotide or IUPAC genotype character. Missing allele indexes are `255` and their character is `N`. |
+| `reference` | SNPs | ASCII-encoded reference allele at each SNP. This differs from the root `reference` attribute, which stores the reference FASTA path. |
+| `snpsmap` | SNPs x (`loc`, `loc_idx`, `loc_pos`, `scaff`, `pos`) | Maps each SNP to its locus, within-locus position, reference scaffold, and genomic position. All values are 0-based. |
+| `sample_dp` | empirical samples x SNPs | Per-sample VCF depth (`FORMAT/DP`) in current assemblies. |
+| `site_qual` | SNPs | VCF site quality (`QUAL`) in current assemblies. |
+
+The example database predates `sample_dp` and `site_qual`, so they are absent from its listing; current ipyrad2 assemblies write both. Root attributes store sample names, schema version, SNP count, reference path, and scaffold names and lengths. Dataset attributes store column names, indexing conventions, and sample order where needed.
+
+An HDF5 from `assemble` contains both sequence-backed and SNP-backed data. An SNP HDF5 created from an external VCF with `ipyrad2 vcf2hdf5` lacks `phy` and `phymap`, so sequence-based tools such as `wex` and `lex` require the assembly form.
 
 ## Exporting from HDF5
 
