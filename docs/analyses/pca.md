@@ -55,6 +55,7 @@ Current method-specific controls are:
 
 - `--replicates`: only valid with `-M pca`
 - `--plot`: only valid with `-M pca`
+- `--plot-format`: save the Toyplot canvas as `pdf`, `png`, `html`, or `svg`; requires `--plot`
 - `--perplexity` and `--max-iter`: only used with `-M tsne`
 - `--n-neighbors`: only used with `-M umap`
 
@@ -126,7 +127,7 @@ PCA runs additionally write:
 
 If you add `--plot`, PCA also writes:
 
-- `<name>.plot.svg`
+- `<name>.plot.<format>` (SVG by default)
 
 ### `coords.tsv`
 
@@ -143,11 +144,12 @@ For PCA with multiple replicates, the numeric columns in this file are averaged 
 
 This file is written only for `-M pca`. It contains `replicate`, `axis`, `explained_variance_ratio`. t-SNE and UMAP do not write a variance file.
 
-### `plot.svg`
+### `plot.<format>`
 
-This file is written only when you use `--plot` with `-M pca`.
+This file is written only when you use `--plot` with `-M pca`. Use
+`--plot-format` to select `pdf`, `png`, `html`, or `svg`; SVG is the default.
 
-- it is a default SVG scatter plot of `PC1` versus `PC2`
+- it is a scatter plot of `PC1` versus `PC2` in the selected format
 - the plotting axes are drawn with an external-tick style and a boxed outline
 - points are colored by `imap` group, or by the default `all` group if no `imap` is provided
 - single-replicate runs show one point per sample
@@ -220,6 +222,16 @@ ipyrad2 analysis pca \
   --plot
 ```
 
+Save the PCA plot as PNG:
+
+```bash
+ipyrad2 analysis pca \
+  -d snps.hdf5 \
+  -o PCA_OUT \
+  --plot \
+  --plot-format png
+```
+
 Run PCA replicates on the default unlinked SNP view:
 
 ```bash
@@ -282,7 +294,7 @@ ipyrad2 analysis pca \
 - Invalid replicate count: PCA replicates must be at least 1, and t-SNE or UMAP only support one run.
 - Invalid t-SNE settings: perplexity must be positive and smaller than the number of retained samples, and `max_iter` must be at least 250.
 - Invalid UMAP settings: `n_neighbors` must be at least 2.
-- Invalid plotting request: `--plot` currently works only with `-M pca`.
+- Invalid plotting request: `--plot` currently works only with `-M pca`, and non-default `--plot-format` values require `--plot`.
 - Existing output files: use `--force` to overwrite an existing result set.
 - Missing dependencies: scikit-learn is required for all methods, `umap-learn` is additionally required for UMAP, and `toyplot` is only required when `--plot` is requested.
 

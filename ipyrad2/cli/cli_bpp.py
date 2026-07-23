@@ -141,7 +141,7 @@ def _setup_bpp_subparser(
     runtime = tool.add_argument_group("Runtime")
     runtime.add_argument(
         "--threads", metavar="int", nargs="+", type=int,
-        help="BPP threads as one integer or three integers: nthreads start increment.",
+        help="BPP threads as nthreads [start increment]; nthreads also controls seqex preprocessing.",
     )
     runtime.add_argument(
         "--seed", metavar="none|int", type=str,

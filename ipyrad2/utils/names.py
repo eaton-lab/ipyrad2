@@ -475,6 +475,18 @@ def get_paths_list_from_fastq_str(
             raise IPyradError(f"No fastq data match input: {path}")
         for fastq in fastqs:
             fastq = expand_path(fastq)
+            if fastq.is_symlink():
+                try:
+                    fastq.stat()
+                except OSError as err:
+                    try:
+                        target = os.readlink(fastq)
+                    except OSError:
+                        target = "<unreadable>"
+                    raise IPyradError(
+                        "FASTQ input symlink cannot be resolved: "
+                        f"{fastq} -> {target}. Filesystem error: {err}"
+                    ) from err
             if fastq.is_dir():
                 raise IPyradError(
                     f"{fastq} is a dir. Use a glob pattern to select files in the dir "

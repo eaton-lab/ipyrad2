@@ -19,7 +19,7 @@ from types import SimpleNamespace
 import requests
 from loguru import logger
 
-from ..extracters.locus_extracter import LocusExtracter
+from ..extracters.seqex import SeqexEngine
 from ..extracters.sequence_common import normalize_sequence_population_inputs
 from ..extracters.sequence_common import resolve_sequence_sample_subset
 from ...utils.exceptions import IPyradError
@@ -41,7 +41,7 @@ except ImportError as exc:
 DELIM = "___"
 BPP_DOCS_VERSION = "4.8.6"
 _DEFAULT_LOCUSRATE = ("1", "2", "3", "2", "iid")
-_DEFAULT_CLOCK = ("2", "10.0", "100.0", "5.0", "dir", "LN")
+_DEFAULT_CLOCK = ("2", "10.0", "100.0", "5.0", "iid", "LN")
 _BPP_BINARY_SPECS = {
     ("linux", "x86_64"): (
         "4.8.6",
@@ -414,12 +414,15 @@ class Bpp:
             mapfile=self.outdir / f"{self.name}.imapfile.txt",
             ctlfile=self.outdir / f"{self.name}.ctl.txt",
             statsfile=self.outdir / f"{self.name}.stats.txt",
+            statsjson=self.outdir / f"{self.name}.stats.json",
             jobname=self.outdir / self.name,
             outfile=self.outdir / f"{self.name}.txt",
             mcmcfile=self.outdir / f"{self.name}.mcmc.txt",
             figtree=self.outdir / f"{self.name}.figtree.nex",
         )
-        self.lex = None
+        self.seqex = None
+        self.nloci = self.max_loci
+        self.effective_threads = self.threads
 
         self._validate()
         _, _, _, self.imap = resolve_sequence_sample_subset(
@@ -504,7 +507,13 @@ class Bpp:
 
     def _ensure_output_paths(self, *, include_results: bool) -> None:
         """Fail early when output files already exist and overwrite is disabled."""
-        paths = [self.paths.seqfile, self.paths.mapfile, self.paths.ctlfile, self.paths.statsfile]
+        paths = [
+            self.paths.seqfile,
+            self.paths.mapfile,
+            self.paths.ctlfile,
+            self.paths.statsfile,
+            self.paths.statsjson,
+        ]
         if include_results:
             paths.extend([self.paths.outfile, self.paths.mcmcfile, self.paths.figtree])
         existing = next((path for path in paths if path.exists()), None)
@@ -534,12 +543,13 @@ class Bpp:
 
     def _write_seqfile(self) -> None:
         """Extract loci once and write the BPP-formatted sequence file."""
-        self.lex = LocusExtracter(
+        self.seqex = SeqexEngine(
             data=self.data,
             name=self.name,
             outdir=self.outdir,
-            out_format="bpp",
-            nloci=self.max_loci,
+            out_format="phy",
+            max_loci=self.max_loci,
+            random_seed=self.seed,
             min_length=self.min_length,
             windows=None,
             min_sample_coverage=len(self.imap),
@@ -548,12 +558,26 @@ class Bpp:
             include_reference=False,
             imap=self.imap,
             minmap=self.minmap,
+            concatenate=False,
+            split=False,
+            append_population=True,
             stdout=False,
             force=self.force,
-            random_seed=self.seed,
+            logged_command=None,
+            cores=self.threads[0] if self.threads else 1,
+            log_level=self.log_level,
         )
-        self.lex._DELIM = "^" + DELIM
-        self.lex._run()
+        loci = self.seqex.run()
+        self.nloci = len(loci)
+        self.effective_threads = self.threads
+        if self.threads and self.threads[0] > self.nloci:
+            self.effective_threads = (self.nloci, *self.threads[1:])
+            logger.warning(
+                "reducing BPP threads from {} to {} because only {} loci were written",
+                self.threads[0],
+                self.nloci,
+                self.nloci,
+            )
 
     def _write_mapfile(self) -> None:
         """Write the IMAP file expected by BPP."""
@@ -561,9 +585,9 @@ class Bpp:
         for key in self.species_order:
             for name in self.imap[key]:
                 longname = max(longname, len(name))
-        formatstr = "{:<" + str(longname + len(DELIM) + 2) + "} {}"
+        formatstr = "{:<" + str(longname + 2) + "} {}"
         rows = [
-            formatstr.format(f"{DELIM}{sample}", f"{DELIM}{species}")
+            formatstr.format(sample, f"{DELIM}{species}")
             for species in self.species_order
             for sample in self.imap[species]
         ]
@@ -582,7 +606,7 @@ class Bpp:
             f"jobname = {self.paths.jobname}",
             "",
             "* DATA",
-            f"nloci = {self.max_loci}",
+            f"nloci = {self.nloci}",
             "usedata = 1",
             "cleandata = 0",
             "",
@@ -629,8 +653,10 @@ class Bpp:
                 f"nsample = {self.nsample}",
             ]
         )
-        if self.threads:
-            lines.append(f"threads = {' '.join(str(i) for i in self.threads)}")
+        if self.effective_threads:
+            lines.append(
+                f"threads = {' '.join(str(i) for i in self.effective_threads)}"
+            )
         return "\n".join(lines) + "\n"
 
     def _write_ctlfile(self) -> None:

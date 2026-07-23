@@ -18,9 +18,9 @@ if TYPE_CHECKING:
     from .pca import PCAFamilyResult
 
 
-def ensure_pca_plotting_available() -> None:
+def ensure_pca_plotting_available(plot_format: str = "svg") -> None:
     """Fail fast if the optional PCA plotting dependency is unavailable."""
-    require_toyplot()
+    require_toyplot(plot_format)
 
 
 def _require_pca_plot_axes(result: "PCAFamilyResult") -> None:
@@ -358,6 +358,28 @@ def draw_pca_plot(
     return canvas
 
 
+def write_pca_plot(
+    result: "PCAFamilyResult",
+    outfile: Path | str,
+    *,
+    plot_format: str = "svg",
+    width: int = 400,
+    height: int = 300,
+    marker_size: int = 10,
+    colors: Path | str | None = None,
+) -> None:
+    """Write a PCA plot using the selected Toyplot renderer."""
+    _toyplot, renderer = require_toyplot(plot_format)
+    canvas = draw_pca_plot(
+        result,
+        width=width,
+        height=height,
+        marker_size=marker_size,
+        colors=colors,
+    )
+    renderer.render(canvas, str(outfile))
+
+
 def write_pca_svg_plot(
     result: "PCAFamilyResult",
     outfile: Path | str,
@@ -367,13 +389,13 @@ def write_pca_svg_plot(
     marker_size: int = 10,
     colors: Path | str | None = None,
 ) -> None:
-    """Write a default SVG PCA plot using the first two principal components."""
-    _toyplot, toyplot_svg = require_toyplot()
-    canvas = draw_pca_plot(
+    """Write an SVG PCA plot for compatibility with the original helper."""
+    write_pca_plot(
         result,
+        outfile,
+        plot_format="svg",
         width=width,
         height=height,
         marker_size=marker_size,
         colors=colors,
     )
-    toyplot_svg.render(canvas, str(outfile))
