@@ -662,7 +662,23 @@ ipyrad2 assemble \
 
 ### assemble stats
 
-The stats ...
+The stats file shows that 199.5K loci in our pseudoreference genome contained mapped data, but only ~49K passed
+of these passed our minimum sample coverage filtering (`-m`), which required that at least four samples map to
+that locus at a depth higher than the minimum sample depth (`-s`) default value of 5. The number of retained
+loci was further reduced to ~45K after removal of putative paralogs based on patterns of excess read depth, or
+evidence of more than two alleles being present in a locus. The final number of assembled loci is 45,448.
+
+The Sample Summary section shows the extent each sample is present in these loci. The sample present in the fewest
+loci -- one of the outgroups, '32082_przewalskii' -- is present in 16,664 loci at a mean depth of 6.118 per locus.
+By contrast, the sample present in the most loci ('40578_rex') appears in 38,000 loci at a mean depth of 22 reads
+per locus.
+
+The final table shows Locus Occupancy. This is a histogram of how many loci contain at least N samples. This is useful
+to consider because during downstream filtering we may wish to filter more stringently to keep only loci that have
+data across more than 10 samples, or all 13 samples, for example. You can look at this table to determine how many
+loci you would still retain. In this data, if we allowed no missing samples at a locus, we would still recover
+5,490 loci.
+
 
 ```literal
 CMD: ipyrad2 assemble -d SRP021469/MAP/29154_superba.trimmed.sorted.bam SRP021469/MAP/30556_thamno.trimmed.sorted.bam SRP021469/MAP/30686_cyathophylla.trimmed.sorted.bam SRP021469/MAP/32082_przewalskii.trimmed.sorted.bam ...[truncated; 13 total matched paths] -r SRP021469/DENOVO/denovo_reference.fa -o SRP021469/OUT -n assembly -qm 40 -c 12 -t 4
@@ -748,7 +764,7 @@ Samples with data  RAD loci before min sample coverage  RAD loci after min sampl
 #### loci
 
 ```bash
-head -n 300 SRP021469/OUT/assembly.stats.txt
+zcat SRP021469/OUT/assembly.loci.gz | head -n 300
 ```
 
 ```literal
