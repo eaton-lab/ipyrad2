@@ -90,7 +90,7 @@ These formats write SNP characters as nucleotide/IUPAC alignments:
 - heterozygotes write the corresponding IUPAC ambiguity code
 - missing sites write `N` unless imputed beforehand
 
-These are SNP alignments, not locus alignments. If you want sequence windows or whole loci instead of one-character-per-SNP matrices, use `wex` or `lex`.
+These are SNP alignments, not locus alignments. If you want clipped sequence windows or whole loci instead of one-character-per-SNP matrices, use `seqex`.
 
 ### TreeMix
 
@@ -175,6 +175,5 @@ ipyrad2 analysis snpex \
 ## Related Pages
 
 - [Writing Outputs](./index.md)
-- [wex](./wex.md)
-- [lex](./lex.md)
+- [seqex](./seqex.md)
 - [Analysis Guide](../analyses/index.md)

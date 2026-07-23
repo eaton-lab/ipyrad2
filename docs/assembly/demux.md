@@ -2,6 +2,9 @@
 
 `ipyrad2 demux` splits pooled reads into per-sample FASTQ files by barcode or index. If your sequencing provider already delivered sample-specific FASTQ files, this step is unnecessary and you can proceed to [trim](./trim.md).
 
+![ipyrad2 assembly workflow from input reads to assembled outputs](../images/Fig1-assembly.png){ width="100%" }
+
+
 ## Overview
 Demultiplexing is an optional step in ipyrad2 used to separate reads among samples that were pooled on a sequencing lane. We support demultiplexing using inline (internal) barcodes of fixed or variable length, including single-inline designs (barcode on one read) and dual-inline designs (barcodes on both reads), and we also support demultiplexing using external Illumina i7 index reads. Barcode mismatches can be tolerated up to an “off-by-n” limit, but only while the off-by-n barcode set remains unique (i.e., increasing n is disallowed once distinct barcodes become identical under the off-by-n expansion, typically at n ≥ 2).
 

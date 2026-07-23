@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import h5py
@@ -44,22 +45,29 @@ def _make_fake_bpp_binary(path: Path, body: str = "exit 0\n") -> Path:
     return path
 
 
-class _DummyLex:
+class _DummySeqex:
     def __init__(self, **kwargs) -> None:
-        self.outfile = Path(kwargs["outdir"]) / f"{kwargs['name']}.phy"
-        self.statsfile = Path(kwargs["outdir"]) / f"{kwargs['name']}.stats.txt"
+        self.alignment_path = Path(kwargs["outdir"]) / f"{kwargs['name']}.phy"
+        self.stats_path = Path(kwargs["outdir"]) / f"{kwargs['name']}.stats.txt"
+        self.stats_json_path = (
+            Path(kwargs["outdir"]) / f"{kwargs['name']}.stats.json"
+        )
 
-    def _run(self, postfix: str = None) -> None:
-        del postfix
-        self.outfile.write_text("2 4\n^___a     AAAA\n^___b     CCCC\n", encoding="utf-8")
-        self.statsfile.write_text("Summary\n-------\n", encoding="utf-8")
+    def run(self) -> list[object]:
+        self.alignment_path.write_text(
+            "2 4\na^a     AAAA\nb^b     CCCC\n",
+            encoding="utf-8",
+        )
+        self.stats_path.write_text("# Seqex Summary\n", encoding="utf-8")
+        self.stats_json_path.write_text("{}\n", encoding="utf-8")
+        return [object(), object()]
 
 
 def test_bpp_write_inputs_does_not_resolve_binary(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(bpp_mod, "LocusExtracter", _DummyLex)
+    monkeypatch.setattr(bpp_mod, "SeqexEngine", _DummySeqex)
     monkeypatch.setattr(
         bpp_mod,
         "_resolve_bpp_binary",
@@ -95,7 +103,7 @@ def test_bpp_write_ctlfile_uses_new_defaults(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(bpp_mod, "LocusExtracter", _DummyLex)
+    monkeypatch.setattr(bpp_mod, "SeqexEngine", _DummySeqex)
     data = _write_test_h5(
         tmp_path / "assembly.hdf5",
         ["AAAA", "CCCC"],
@@ -122,7 +130,7 @@ def test_bpp_write_ctlfile_uses_new_defaults(
     assert "tauprior = invgamma 3 0.03" in text
     assert "alphaprior = 1 1 4" in text
     assert "locusrate = 1 2 3 2 iid" in text
-    assert "clock = 2 10.0 100.0 5.0 dir LN" in text
+    assert "clock = 2 10.0 100.0 5.0 iid LN" in text
     assert "phase = 1 1" in text
     assert "print = 1 0 0 1 0" in text
     assert "thetamodel = linked-none" in text
@@ -134,7 +142,7 @@ def test_bpp_msc_m_supports_parenthesized_references(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(bpp_mod, "LocusExtracter", _DummyLex)
+    monkeypatch.setattr(bpp_mod, "SeqexEngine", _DummySeqex)
     data = _write_test_h5(
         tmp_path / "assembly.hdf5",
         ["AAAA", "CCCC", "GGGG"],
@@ -236,6 +244,84 @@ def test_bpp_locus_sampling_is_deterministic_with_seed(tmp_path: Path) -> None:
     assert tool1.paths.seqfile.read_text(encoding="utf-8") == tool2.paths.seqfile.read_text(
         encoding="utf-8"
     )
+
+
+def test_bpp_stages_seqex_names_actual_locus_count_and_effective_threads(
+    tmp_path: Path,
+) -> None:
+    h5 = _write_test_h5(
+        tmp_path / "assembly.hdf5",
+        ["AAAACCCC", "TTTTGGGG"],
+        rows=[(0, 0, 4, 1, 4), (0, 4, 8, 5, 8)],
+        sample_names=["a", "b"],
+        scaffold_length=8,
+    )
+    tool = Bpp(
+        data=h5,
+        name="demo",
+        outdir=tmp_path / "run",
+        tree="(sp1,sp2);",
+        imap={"sp1": ["a"], "sp2": ["b"]},
+        minmap={"sp1": 1, "sp2": 1},
+        max_loci=3,
+        min_length=4,
+        threads=(3, 4, 1),
+        seed=11,
+    )
+
+    paths = tool.write_inputs()
+
+    sequence_text = paths.seqfile.read_text(encoding="utf-8")
+    assert sequence_text.count("2 4\n") == 2
+    assert "sp1^a" in sequence_text
+    assert "sp2^b" in sequence_text
+    assert "^___" not in sequence_text
+    map_rows = {
+        tuple(line.split())
+        for line in paths.mapfile.read_text(encoding="utf-8").splitlines()
+    }
+    assert map_rows == {("a", "___sp1"), ("b", "___sp2")}
+    ctl_text = paths.ctlfile.read_text(encoding="utf-8")
+    assert "nloci = 2" in ctl_text
+    assert "threads = 2 4 1" in ctl_text
+    assert paths.statsfile.exists()
+    assert paths.statsjson.exists()
+    assert tool.seqex.cores == 3
+
+
+@pytest.mark.skipif(
+    not os.environ.get("IPYRAD2_BPP_BINARY"),
+    reason="set IPYRAD2_BPP_BINARY to run the external BPP smoke test",
+)
+def test_bpp_real_binary_accepts_seqex_staged_inputs(tmp_path: Path) -> None:
+    h5 = _write_test_h5(
+        tmp_path / "assembly.hdf5",
+        ["AAAACCCC", "TTTTGGGG"],
+        rows=[(0, 0, 4, 1, 4), (0, 4, 8, 5, 8)],
+        sample_names=["a", "b"],
+        scaffold_length=8,
+    )
+    tool = Bpp(
+        data=h5,
+        name="smoke",
+        outdir=tmp_path / "run",
+        tree="(sp1,sp2);",
+        imap={"sp1": ["a"], "sp2": ["b"]},
+        minmap={"sp1": 1, "sp2": 1},
+        max_loci=2,
+        min_length=4,
+        burnin=1,
+        samplefreq=1,
+        nsample=1,
+        threads=1,
+        seed=11,
+        binary=os.environ["IPYRAD2_BPP_BINARY"],
+    )
+
+    paths = tool.run()
+
+    assert paths.outfile.exists()
+    assert paths.mcmcfile.exists()
 
 
 def test_bpp_expands_glob_imap_entries_against_hdf5_sample_names(tmp_path: Path) -> None:

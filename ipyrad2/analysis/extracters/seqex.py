@@ -15,7 +15,11 @@ import numpy as np
 
 from ...utils.exceptions import IPyradError
 from ...utils.parallel import run_with_pool_iter
-from .window_extracter import MISSING_BASE, WindowExtracter, filter_block_by_minmap
+from .sequence_common import MISSING_BASE
+from .sequence_common import build_sequence_extraction_context
+from .sequence_common import filter_block_by_minmap
+from .sequence_windows import intersect_phymap_locus
+from .sequence_windows import resolve_sequence_windows
 
 SEQEX_BATCH_SITES = 100_000
 SEQEX_MIN_BATCH_SITES = 5_000
@@ -55,7 +59,7 @@ def _format_text_table(
 
 @dataclass(frozen=True)
 class LocusSpec:
-    """Coordinates needed to load and identify one complete locus."""
+    """Coordinates needed to load and identify one locus or clipped fragment."""
 
     index: int
     scaffold: str
@@ -63,6 +67,10 @@ class LocusSpec:
     phy1: int
     pos0: int
     pos1: int
+    source_pos0: int
+    source_pos1: int
+    selected_window: str
+    clipped: bool
 
     @property
     def label(self) -> str:
@@ -304,7 +312,7 @@ class _MultiLocusWriter:
 
 
 class SeqexEngine:
-    """Select, filter, sample, and write complete delimited loci."""
+    """Select, filter, sample, and write complete or clipped delimited loci."""
 
     def __init__(
         self,
@@ -331,6 +339,7 @@ class SeqexEngine:
         logged_command=None,
         cores=1,
         log_level="INFO",
+        clip: bool | None = None,
     ):
         self.data = Path(data)
         self.name = str(name)
@@ -347,29 +356,51 @@ class SeqexEngine:
         self.logged_command = logged_command
         self.cores = int(cores)
         self.log_level = str(log_level)
-        self.wex = WindowExtracter(
+        if clip not in (None, True, False):
+            raise IPyradError("clip must be one of None, True, or False.")
+        self.clip = clip
+        self.context = build_sequence_extraction_context(
             data=data,
-            name=name,
-            outdir=outdir,
-            out_format=out_format,
-            windows=windows,
             min_sample_coverage=min_sample_coverage,
             max_sample_missing=max_sample_missing,
             exclude=exclude,
             include_reference=include_reference,
             imap=imap,
             minmap=minmap,
-            stdout=stdout,
-            force=force,
-            logged_command=logged_command,
         )
-        self.wex._get_phymap_windows()
-        self.wex._get_phymap()
+        self.selected_windows = resolve_sequence_windows(
+            self.context.scaffold_table,
+            windows,
+        )
+        with h5py.File(self.data, "r") as io5:
+            self.phymap = np.asarray(io5["phymap"], dtype=np.int64)
+        self.coordinate_clipping_applied = self.clip is not False and any(
+            window.explicit_coordinates for window in self.selected_windows
+        )
         self.sample_to_population = {
             sample: population
-            for population, samples in self.wex.imap.items()
+            for population, samples in self.context.imap.items()
             for sample in samples
         }
+        if self.append_population:
+            invalid_samples = sorted(
+                name for name in self.context.sample_names if "^" in name
+            )
+            invalid_populations = sorted(
+                population
+                for population in set(self.sample_to_population.values())
+                if "^" in population
+            )
+            if invalid_samples or invalid_populations:
+                details = []
+                if invalid_samples:
+                    details.append("samples=" + ", ".join(invalid_samples))
+                if invalid_populations:
+                    details.append("populations=" + ", ".join(invalid_populations))
+                raise IPyradError(
+                    "--append-population requires sample and population names without "
+                    "the ^ delimiter (" + "; ".join(details) + ")."
+                )
         self.counts = {
             "candidate_loci": 0,
             "rejected_raw_length": 0,
@@ -397,31 +428,54 @@ class SeqexEngine:
     def _output_names(self, names: list[str]) -> list[str]:
         if not self.append_population:
             return names
-        return [f"{name}^{self.sample_to_population[name]}" for name in names]
+        return [f"{self.sample_to_population[name]}^{name}" for name in names]
 
     def _candidate_loci(self) -> list[LocusSpec]:
         specs = []
-        for _, row in self.wex.phymap.iterrows():
-            scaff_idx = int(row["scaff"])
-            pos0 = int(row["pos0"])
-            pos1 = int(row["pos1"])
-            windows = self.wex.phymap_windows.get(scaff_idx, [])
-            if not any(pos1 >= start and pos0 <= end for start, end in windows):
-                continue
-            scaffold = str(self.wex.scaffold_table.iloc[scaff_idx]["scaffold_name"])
-            specs.append(
-                LocusSpec(
-                    index=len(specs),
-                    scaffold=scaffold,
-                    phy0=int(row["phy0"]),
-                    phy1=int(row["phy1"]),
-                    pos0=pos0,
-                    pos1=pos1,
+        scaffold_names = (
+            self.context.scaffold_table["scaffold_name"].astype(str).tolist()
+        )
+        windows_by_scaffold = {}
+        for window in self.selected_windows:
+            windows_by_scaffold.setdefault(window.scaffold_index, []).append(window)
+        complete_rows = set()
+        for row_index, row in enumerate(self.phymap):
+            scaff_idx = int(row[0])
+            scaffold = scaffold_names[scaff_idx]
+            source_pos0 = int(row[3])
+            source_pos1 = int(row[4])
+            for window in windows_by_scaffold.get(scaff_idx, []):
+                should_clip = self.clip is True or (
+                    self.clip is None and window.explicit_coordinates
                 )
-            )
+                intersection = intersect_phymap_locus(
+                    row,
+                    window,
+                    clip=should_clip,
+                )
+                if intersection is None:
+                    continue
+                if not should_clip:
+                    if row_index in complete_rows:
+                        continue
+                    complete_rows.add(row_index)
+                specs.append(
+                    LocusSpec(
+                        index=row_index,
+                        scaffold=scaffold,
+                        phy0=intersection.phy0,
+                        phy1=intersection.phy1,
+                        pos0=intersection.pos0,
+                        pos1=intersection.pos1,
+                        source_pos0=source_pos0,
+                        source_pos1=source_pos1,
+                        selected_window=window.label,
+                        clipped=intersection.clipped,
+                    )
+                )
         self.counts["candidate_loci"] = len(specs)
         if not specs:
-            raise IPyradError("No complete loci overlap the selected windows.")
+            raise IPyradError("No loci overlap the selected windows.")
         return specs
 
     def _plan_filter_batches(
@@ -466,11 +520,11 @@ class SeqexEngine:
     def _batch_kwargs(self, specs: tuple[LocusSpec, ...]) -> dict:
         return {
             "specs": specs,
-            "sidxs": self.wex.sidxs,
-            "snames": self.wex.snames,
-            "imap_row_indices": self.wex._imap_row_indices,
-            "minmap": self.wex.minmap,
-            "max_sample_missing": self.wex.max_sample_missing,
+            "sidxs": self.context.sample_indices,
+            "snames": self.context.sample_names,
+            "imap_row_indices": self.context.imap_row_indices,
+            "minmap": self.context.minmap,
+            "max_sample_missing": self.context.max_sample_missing,
             "min_length": self.min_length,
         }
 
@@ -551,7 +605,7 @@ class SeqexEngine:
         self,
         loci: list[FilteredLocus],
     ) -> tuple[list[str], np.ndarray, list[dict], dict[str, float]]:
-        buffers = {name: bytearray() for name in self.wex.snames}
+        buffers = {name: bytearray() for name in self.context.sample_names}
         present = set()
         partitions = []
         position = 1
@@ -562,7 +616,7 @@ class SeqexEngine:
                 for idx, name in enumerate(locus.names)
             }
             missing = b"N" * width
-            for name in self.wex.snames:
+            for name in self.context.sample_names:
                 buffers[name].extend(by_name.get(name, missing))
             present.update(locus.names)
             partitions.append(
@@ -573,12 +627,12 @@ class SeqexEngine:
                 }
             )
             position += width
-        names = [name for name in self.wex.snames if name in present]
+        names = [name for name in self.context.sample_names if name in present]
         matrix = np.vstack(
             [np.frombuffer(bytes(buffers[name]), dtype=np.uint8) for name in names]
         )
         global_missing = np.mean(matrix == MISSING_BASE, axis=1)
-        keep = global_missing <= self.wex.max_sample_missing
+        keep = global_missing <= self.context.max_sample_missing
         if not np.any(keep):
             raise IPyradError(
                 "No samples passed max_sample_missing across the "
@@ -626,7 +680,7 @@ class SeqexEngine:
                 "loci_dropped_by_r": 0,
                 "non_missing_bases": 0,
             }
-            for name in self.wex.snames
+            for name in self.context.sample_names
         }
         total_bases_written = 0
         for locus in loci:
@@ -665,7 +719,7 @@ class SeqexEngine:
             ),
         }
         rows = []
-        for name in self.wex.snames:
+        for name in self.context.sample_names:
             row = sample_rows[name]
             matrix_bases = total_sites
             sample_occupancy = (
@@ -704,6 +758,21 @@ class SeqexEngine:
             "max_loci": self.max_loci,
             "random_seed": self.random_seed,
             "min_length": self.min_length,
+            "clipping_mode": (
+                "automatic"
+                if self.clip is None
+                else "always"
+                if self.clip
+                else "never"
+            ),
+            "coordinate_clipping_applied": self.coordinate_clipping_applied,
+            "selected_windows": [
+                {
+                    "window": window.label,
+                    "explicit_coordinates": window.explicit_coordinates,
+                }
+                for window in self.selected_windows
+            ],
         }
         partition_map = {row["locus"]: row for row in partitions}
         locus_rows = []
@@ -713,6 +782,12 @@ class SeqexEngine:
                 {
                     "locus_index": idx,
                     "locus": locus.spec.label,
+                    "source_locus": (
+                        f"{locus.spec.scaffold}:"
+                        f"{locus.spec.source_pos0}-{locus.spec.source_pos1}"
+                    ),
+                    "selected_window": locus.spec.selected_window,
+                    "clipped": locus.spec.clipped,
                     "raw_samples": locus.raw_samples,
                     "raw_sites": locus.raw_sites,
                     "filtered_samples": len(locus.names),
@@ -734,6 +809,13 @@ class SeqexEngine:
                 f"max_loci: {self.max_loci if self.max_loci is not None else 'all'}\n",
                 f"random_seed: {self.random_seed if self.random_seed is not None else 'none'}\n",
                 f"min_length: {self.min_length if self.min_length is not None else 'none'}\n",
+                f"clipping_mode: {seqex_summary['clipping_mode']}\n",
+                "coordinate_clipping_applied: "
+                f"{str(self.coordinate_clipping_applied).lower()}\n",
+                f"windows_selected: {len(self.selected_windows)}\n",
+                "selected_windows: "
+                + ", ".join(window.label for window in self.selected_windows)
+                + "\n",
             ]
         )
         lines.extend(f"{key}: {value}\n" for key, value in self.counts.items())
@@ -785,6 +867,9 @@ class SeqexEngine:
         locus_headers = (
             "locus_index",
             "locus",
+            "source_locus",
+            "selected_window",
+            "clipped",
             "raw_samples",
             "raw_sites",
             "filtered_samples",
@@ -793,14 +878,23 @@ class SeqexEngine:
             "concat_end",
         )
         locus_table_rows = [
-            tuple("" if row[key] is None else str(row[key]) for key in locus_headers)
+            tuple(
+                ""
+                if row[key] is None
+                else "yes"
+                if key == "clipped" and row[key]
+                else "no"
+                if key == "clipped"
+                else str(row[key])
+                for key in locus_headers
+            )
             for row in locus_rows
         ]
         lines.append(
             _format_text_table(
                 locus_headers,
                 locus_table_rows,
-                right_align={0, 2, 3, 4, 5, 6, 7},
+                right_align={0, 5, 6, 7, 8, 9, 10},
             )
         )
         self.stats_path.write_text("".join(lines), encoding="utf-8")
@@ -822,7 +916,7 @@ class SeqexEngine:
         global_dropped: dict[str, float],
     ) -> None:
         """Log sample drops and describe the output destinations."""
-        drop_counts = {name: 0 for name in self.wex.snames}
+        drop_counts = {name: 0 for name in self.context.sample_names}
         for locus in loci:
             for name in locus.dropped_names:
                 drop_counts[name] += 1
@@ -839,7 +933,7 @@ class SeqexEngine:
                 "(missing={:.6f}, maximum={:.6f})",
                 name,
                 missing,
-                self.wex.max_sample_missing,
+                self.context.max_sample_missing,
             )
 
         fmt = {"phy": "PHYLIP", "nex": "NEXUS", "fa": "FASTA"}[self.out_format]
@@ -925,7 +1019,7 @@ class SeqexEngine:
         global_dropped: dict[str, float] = {}
         final_names = [
             name
-            for name in self.wex.snames
+            for name in self.context.sample_names
             if any(name in locus.names for locus in selected)
         ]
         if stream_output:
@@ -988,7 +1082,7 @@ def run_seqex(**kwargs):
     engine = SeqexEngine(**kwargs)
     if print_scaffold_table:
         try:
-            engine.wex.scaffold_table.to_csv(sys.stdout, sep="\t")
+            engine.context.scaffold_table.to_csv(sys.stdout, sep="\t")
             sys.stdout.flush()
         except BrokenPipeError:
             sys.stdout = open(os.devnull, "w", encoding="utf-8")

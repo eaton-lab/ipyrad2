@@ -1,21 +1,21 @@
 # assemble
 
-## Summary
+`ipyrad2 assemble` takes mapped BAM files and a reference (or pseudoreference) genome fasta and generates
+a the main project outputs:
+final assembled loci, a filtered VCF, a loci BED, a human-readable stats report, and
+an HDF5 database that can be used by downstream export and analysis commands.
 
-`ipyrad2 assemble` is the step that turns mapped BAM files into the main project outputs: final assembled loci, a filtered VCF, a final loci BED, a human-readable stats report, and the HDF5 database that downstream export and analysis commands use.
+This is the normal next step after [`map`](./map.md), but it is also a valid entry point if you
+already have trusted mapped BAMs from another workflow.
 
-In the standard workflow, `assemble` comes after [`map`](./map.md). Its most important rule is simple:
+![ipyrad2 assembly workflow from input reads to assembled outputs](../images/Fig1-assembly.png){ width="100%" }
 
-- RAD BAMs define the shared loci unless you provide `--loci-bed`
-- optional WGS BAMs are analyzed only inside those loci
-
-That means `assemble` is both the locus-definition step and the final project-materialization step.
 
 ## When to Use
 
-Use `assemble` when you already have mapped BAM files against a reference or denovo pseudoreference and you are ready to define loci, call variants, and write final project outputs.
+Use `assemble` when you already have mapped BAM files against a reference or denovo pseudoreference
+and you are ready to define loci, call variants, and write final project outputs.
 
-This is the normal next step after [`map`](./map.md), but it is also a valid entry point if you already have trusted mapped BAMs from another workflow.
 
 Use cases fall into three modes:
 
@@ -29,11 +29,11 @@ If no RAD BAMs are available, `assemble` still works, but only when `--loci-bed`
 
 - mapped BAM files, usually from [`map`](./map.md)
 - the same reference FASTA or denovo pseudoreference used during mapping
-- an activated ipyrad2 environment with the dependencies required by the assemble pipeline
-- write access to the output directory
 
-The BAMs do not need to come only from ipyrad2, but they do need to be coordinate-consistent with the reference you provide here.
+The BAMs do not need to come only from ipyrad2, but they do need to be coordinate-consistent with the
+reference you provide here.
 
+<!--
 ## Inputs and Workflow Logic
 
 ### Core inputs
@@ -49,13 +49,14 @@ The workflow logic is:
 - if `--loci-bed` is provided, `assemble` uses that BED directly and skips RAD-based locus delimiting
 - WGS BAMs never define loci on their own unless a loci BED is supplied explicitly
 
-That last point matters. The WGS addition is powerful because it lets whole-genome samples join a RAD-defined assembly, not because `assemble` has become a general-purpose whole-genome locus-discovery tool.
+That last point matters. The WGS addition is powerful because it lets whole-genome samples join a
+RAD-defined assembly, not because `assemble` has become a general-purpose whole-genome locus-discovery tool.
 
 ### Sample naming and grouping
 
 - `--subsample`: first-column table selecting BAM filenames or sample names
-- `-p, --populations`: grouped-calling populations file
 - `--rename`: two-column table mapping BAM basenames to final sample names
+- `-p, --populations`: grouped-calling populations file
 - `-x, --masks`: optional sequence patterns to mask in the final assembled sequences
 
 `--subsample` reads only the first column and ignores additional columns. It can match literal BAM filenames or resolved sample names, so the same sample-mapping table can often be reused across selection and grouping steps.
@@ -65,28 +66,22 @@ That last point matters. The WGS addition is powerful because it lets whole-geno
 `--populations` is used for grouped calling only. If the file also includes classic per-population minmap thresholds, `assemble` currently ignores those thresholds and uses the file only to define grouped-calling sample groups.
 
 `--masks` affects the final assembled sequences. It does not change locus discovery.
+ -->
+## What `assemble` does
 
-## What `assemble` Actually Does
-
-At a high level, `assemble` runs five stages:
-
-1. It normalizes BAM inputs and creates filtered analysis BAMs using the mapped-read thresholds.
-2. It delimits shared loci from RAD BAMs, or loads them directly from `--loci-bed`.
-3. It runs within-sample and across-sample paralog filtering and promotes the filtered shared BED to the canonical final loci BED.
+1. It filters BAM inputs based on parameter thresholds to remove low quality mappings.
+2. It delimits loci from shared coverage BEDs among RAD sample BAMs, or loads them directly from `--loci-bed`.
+3. It runs within-sample and across-sample paralog filtering to define the final set of loci BEDs.
 4. It jointly calls variants inside those loci and applies project-wide genotype and site filters.
-5. It builds consensus sequences, writes final loci and BED outputs, writes the filtered VCF, and appends SNP data into the same final HDF5.
-
-That is why `assemble` is the densest step in the workflow: it is where coverage, locus definition, paralog filtering, variant calling, consensus generation, and final file writing all meet.
+5. It builds consensus sequences, writes final loci and BED outputs, a filtered VCF, and a HDF5 database file.
 
 ## Command Patterns
 
 The smallest standard RAD assembly is:
 
 ```bash
-ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -o OUT -m 4 -qm 20
+ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -o OUT
 ```
-
-That tells `assemble` to define loci from the RAD BAMs, apply mapped-read filters, call variants, and write the final outputs to `OUT/`.
 
 ### Core Inputs
 
@@ -135,7 +130,7 @@ These settings control what survives into the final `.loci`, `.vcf.gz`, and `.hd
 
 ### Paralog Filters
 
-`assemble` now has an explicit paralog-scoring stage. The current controls are:
+`assemble` has an explicit paralog-scoring stage. The current controls are:
 
 - `--depth-z-max`
 - `--softclip-len-threshold`
@@ -147,13 +142,15 @@ These settings control what survives into the final `.loci`, `.vcf.gz`, and `.hd
 - `--paralog-fail-frac-max`
 - `--max-sample-hetero-frequency`
 
-The user-facing idea is simple: loci can be flagged as paralog-like by unusually deep coverage, unusually clipped reads, strong third-allele evidence, or excess allelic variation. Those signals are evaluated within samples and then reduced across samples before the final shared BED is accepted.
+loci can be flagged as paralog-like by unusually deep coverage, unusually clipped reads, strong third-allele evidence,
+or excess allelic variation. Those signals are evaluated within samples and then reduced across samples before the
+final shared BED is accepted.
 
 ### Sample Naming, Grouping, and Masks
 
 - `--subsample`: select a subset of BAMs by filename or sample name
-- `-p, --populations`: grouped-calling populations file
 - `--rename`: rename final sample names from BAM basenames
+- `-p, --populations`: grouped-calling populations file
 - `-x, --masks`: site-pattern masks applied in the final assembled sequences
 
 Use these when you need grouped calling, stable sample names that differ from BAM headers, or post-consensus masking of known sequence patterns.
@@ -166,13 +163,8 @@ Use these when you need grouped calling, stable sample names that differ from BA
 
 `assemble` uses both multithreaded tools and pooled job stages, so `cores` and `threads` together determine how much parallel work can happen at once.
 
-### Logging
 
-- `-l, --log-level`: logging verbosity, default `INFO`
-
-At normal verbosity, `assemble` reports the main milestones clearly: loading samples, grouped calling, locus delimiting, paralog filtering, variant calling, sample-mask building, and final output writing.
-
-## Outputs and Stats
+## Outputs
 
 The main final outputs are:
 
@@ -182,7 +174,10 @@ The main final outputs are:
 - `NAME.bed`
 - `NAME.stats.txt`
 
-The final HDF5 is the main downstream project database. `assemble` first writes the sequence-backed assembly data and then appends SNP data into the same output HDF5 so later export and analysis commands can work from one structured dataset.
+The final HDF5 is the main downstream project database.
+See the [Writing Outputs](writing-outputs) and [Analysis][analysis] sections for example usage.
+
+## Stats
 
 `NAME.stats.txt` is the human-readable final summary. It includes counts such as:
 
@@ -208,15 +203,12 @@ That temp directory is useful for debugging and inspection. Important intermedia
 - normalized grouped-calling tables
 - per-sample BED masks and paralog stage outputs
 
+<!--
 ## Common Failures and Interpretation Notes
 
 ### No RAD BAMs when loci must be delimited
 
 If `--loci-bed` is not provided, RAD BAMs are required. WGS BAMs alone are not enough to define loci in the standard path.
-
-### No BAMs at all
-
-Even with `--loci-bed`, `assemble` still needs at least one BAM file. The BED defines windows, but the BAMs provide the actual sample data.
 
 ### Duplicate sample names across RAD and WGS inputs
 
@@ -261,6 +253,7 @@ Even after paralog filtering succeeds, the final locus-writing stage can still r
 ### Mapped-read filters are too strict
 
 High MAPQ thresholds, aggressive soft-clipping or NM filters, or a tight TLEN filter can wipe out useful read support before locus delimiting begins. If the assembly is unexpectedly sparse, inspect those mapped-read thresholds first.
+ -->
 
 ## Examples
 

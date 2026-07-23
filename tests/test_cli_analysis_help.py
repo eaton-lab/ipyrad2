@@ -42,8 +42,6 @@ def test_top_level_help_groups_commands_and_examples_are_updated() -> None:
         "map",
         "assemble",
         "inspect",
-        "wex",
-        "lex",
         "seqex",
         "snpex",
         "vcf2hdf5",
@@ -68,122 +66,15 @@ def test_top_level_help_groups_commands_and_examples_are_updated() -> None:
     assert "vcf2hdf5" in subparsers.choices
     assert "baba" in subparsers.choices
     assert "treeslider" in subparsers.choices
+    assert "wex" not in subparsers.choices
+    assert "\n    wex " not in help_text
+    assert "lex" not in subparsers.choices
+    assert "\n    lex " not in help_text
     assert "$ ipyrad2 demux -h" in help_text
-    assert "$ ipyrad2 wex -d OUT/HDF5 -m 10" in help_text
+    assert "$ ipyrad2 seqex -d OUT/HDF5 -N 1000 -L 100 -m 10" in help_text
     assert "$ ipyrad2 pca -d OUT/HDF5 -i IMAP -g MINMAP -I sample --plot" in help_text
     assert "ipyrad2 analysis" not in help_text
     assert "vcf-to-hdf5" not in help_text
-
-
-def test_wex_help_groups_examples_and_formats_are_updated() -> None:
-    help_text = _get_tool_parser("wex").format_help()
-
-    expected_sections = [
-        "Core inputs:",
-        "Locus sampling:",
-        "Filtering and samples:",
-        "Output control:",
-        "Logging:",
-    ]
-    positions = [help_text.index(section) for section in expected_sections]
-    assert positions == sorted(positions)
-
-    expected_order = [
-        "-d, --data",
-        "-n, --name",
-        "-o, --out",
-        "-O, --out-format",
-        "-w, --windows",
-        "-m, --min-sample-coverage",
-        "-r, --max-sample-missing",
-        "-e, --exclude",
-        "-R, --include-reference",
-        "-i, --imap",
-        "-g, --minmap",
-        "-P, --print-scaffold-table",
-        "-x, --stdout",
-        "-f, --force",
-        "-l, --log-level",
-        "-h, --help",
-    ]
-    start = help_text.index("Core inputs:")
-    indices = []
-    for item in expected_order:
-        idx = help_text.index(item, start)
-        indices.append(idx)
-        start = idx + 1
-    assert indices == sorted(indices)
-
-    assert "ipyrad2 wex: extract one alignment from selected genomic windows" in help_text
-    assert "$ ipyrad2 wex -d HDF5 -o OUT/" in help_text
-    assert "$ ipyrad2 wex -d HDF5 -o OUT/ -w windows.bed -O fa" in help_text
-    assert "If omitted, wex selects" in help_text
-    assert "the full length of all scaffolds." in help_text
-    assert "BED uses standard" in help_text
-    assert "0-based half-open coordinates" in help_text
-    assert "--include-reference" in help_text
-    assert "assembly_reference_sequence" in help_text
-    assert "ipyrad2 analysis wex" not in help_text
-    assert "inex" not in help_text
-    assert help_text.index("-h, --help") > help_text.index("Logging:")
-
-
-def test_lex_help_groups_examples_and_logging_are_updated() -> None:
-    help_text = _get_tool_parser("lex").format_help()
-
-    expected_sections = [
-        "Core inputs:",
-        "Locus sampling:",
-        "Filtering and samples:",
-        "Output control:",
-        "Logging:",
-    ]
-    positions = [help_text.index(section) for section in expected_sections]
-    assert positions == sorted(positions)
-
-    expected_order = [
-        "-d, --data",
-        "-n, --name",
-        "-o, --out",
-        "-O, --out-format",
-        "-w, --windows",
-        "-N, --max-loci",
-        "-s, --random-seed",
-        "-L, --min-length",
-        "-m, --min-sample-coverage",
-        "-r, --max-sample-missing",
-        "-e, --exclude",
-        "-R, --include-reference",
-        "-i, --imap",
-        "-g, --minmap",
-        "-C, --concatenate",
-        "-P, --print-scaffold-table",
-        "-x, --stdout",
-        "-f, --force",
-        "-l, --log-level",
-        "-h, --help",
-    ]
-    start = help_text.index("Core inputs:")
-    indices = []
-    for item in expected_order:
-        idx = help_text.index(item, start)
-        indices.append(idx)
-        start = idx + 1
-    assert indices == sorted(indices)
-
-    assert "ipyrad2 lex: extract delimited loci from HDF5 database" in help_text
-    assert "$ ipyrad2 lex -d assembly.hdf5 -o OUT/ -w Chr1:1-50000 -N 25 -L 300 -O bpp" in help_text
-    assert "-s 123 -C -O phy" in help_text
-    assert "Append selected loci end to end" in help_text
-    assert "Minimum whole-locus length in bp before and after filtering" in help_text
-    assert "--include-reference" in help_text
-    assert "assembly_reference_sequence" in help_text
-    assert "-l, --log-level" in help_text
-    assert "--log-level" in help_text
-    assert "ipyrad2 analysis lex" not in help_text
-    assert "--nloci" not in help_text
-    assert "--length" not in help_text
-    assert help_text.index("-h, --help") > help_text.index("Logging:")
 
 
 def test_treeslider_help_groups_examples_and_tree_options_are_present() -> None:
@@ -369,6 +260,8 @@ def test_pca_help_groups_examples_and_imputation_are_present() -> None:
     assert "Method to run: pca, tsne, or umap." in help_text
     assert "serial method initialization" in help_text
     assert "--plot" in help_text
+    assert "--plot-format" in help_text
+    assert "pdf, png, html, or svg" in help_text
     assert "--plot-width" in help_text
     assert "--plot-height" in help_text
     assert "--plot-marker-size" in help_text
@@ -380,6 +273,7 @@ def test_pca_help_groups_examples_and_imputation_are_present() -> None:
     assert "--min-site-qual" in help_text
     assert "chunked SNP filtering and UMAP embedding" in help_text
     assert "$ ipyrad2 pca -d snps.hdf5 -o OUT/ --plot" in help_text
+    assert "--plot --plot-format pdf" in help_text
     assert help_text.index("-h, --help") > help_text.index("Logging:")
 
 
@@ -604,23 +498,6 @@ def test_bpp_help_groups_examples_and_runtime_controls_are_present() -> None:
 def test_top_level_parser_accepts_flattened_export_and_analysis_subcommands() -> None:
     parser = setup_parsers()
 
-    lex_args = parser.parse_args(
-        [
-            "lex",
-            "-d",
-            "assembly.hdf5",
-            "-o",
-            "OUT",
-            "-N",
-            "10",
-            "-L",
-            "150",
-        ]
-    )
-    assert lex_args.subcommand == "lex"
-    assert lex_args.max_loci == 10
-    assert lex_args.min_length == 150
-
     snpex_args = parser.parse_args(
         [
             "snpex",
@@ -673,6 +550,7 @@ def test_top_level_parser_accepts_flattened_export_and_analysis_subcommands() ->
     assert pca_args.subcommand == "pca"
     assert pca_args.impute_method == "sample"
     assert pca_args.plot is False
+    assert pca_args.plot_format == "svg"
     assert pca_args.plot_width == 400
     assert pca_args.plot_height == 300
     assert pca_args.plot_marker_size == 10
@@ -685,13 +563,19 @@ def test_top_level_parser_accepts_flattened_export_and_analysis_subcommands() ->
             "-o",
             "OUT",
             "--plot",
+            "--plot-format",
+            "html",
             "-I",
             "zero",
         ]
     )
     assert pca_plot_args.subcommand == "pca"
     assert pca_plot_args.plot is True
+    assert pca_plot_args.plot_format == "html"
     assert pca_plot_args.impute_method == "zero"
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["pca", "-d", "snps.hdf5", "--plot", "--plot-format", "jpeg"])
 
     snmf_args = parser.parse_args(
         [
@@ -845,7 +729,9 @@ def test_removed_nested_analysis_command_no_longer_parses() -> None:
     parser = setup_parsers()
 
     with pytest.raises(SystemExit):
-        parser.parse_args(["analysis", "wex", "-d", "assembly.hdf5"])
+        parser.parse_args(["analysis", "seqex", "-d", "assembly.hdf5"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["lex", "-d", "assembly.hdf5"])
 
 
 def test_treeslider_is_a_real_top_level_command_parser() -> None:

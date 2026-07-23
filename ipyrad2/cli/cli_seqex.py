@@ -1,4 +1,4 @@
-"""Command-line parser for the experimental locus exporter."""
+"""Command-line parser for the locus-oriented sequence exporter."""
 
 from pathlib import Path
 
@@ -20,7 +20,7 @@ def _setup_seqex_subparser(subparsers, header=None):
     tool = subparsers.add_parser(
         "seqex",
         description=header,
-        help="Extract filtered, delimited loci from an HDF5 database.",
+        help="Extract complete or coordinate-clipped loci from an HDF5 database.",
         epilog=EPILOG,
         formatter_class=RAW_HELP_FORMATTER,
         add_help=False,
@@ -64,7 +64,11 @@ def _setup_seqex_subparser(subparsers, header=None):
         "--windows",
         metavar="str",
         nargs="*",
-        help="Select complete loci overlapping scaffold names, regexes, regions, or one BED file.",
+        help=(
+            "Select loci using scaffold names, regexes, regions, or one BED file. "
+            "Scaffold selectors retain complete loci; coordinate regions and BED "
+            "intervals clip loci to their exact boundaries."
+        ),
     )
     sampling.add_argument(
         "-N",
@@ -159,7 +163,7 @@ def _setup_seqex_subparser(subparsers, header=None):
         "-a",
         "--append-population",
         action="store_true",
-        help="Write names as sample^population; requires --imap.",
+        help="Write names as population^sample; requires --imap.",
     )
     output.add_argument(
         "-P",

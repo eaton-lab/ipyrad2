@@ -5,6 +5,8 @@ filtering, sorting, indexing, duplicate removal, and stats reporting.
 
 In the normal assembly workflow, `map` comes after [`trim`](./trim.md) and before [`assemble`](./assemble.md). Its main job is to convert trimmed reads into final BAMs that are ready for locus assembly.
 
+![ipyrad2 assembly workflow from input reads to assembled outputs](../images/Fig1-assembly.png){ width="100%" }
+
 ## When to Use
 
 Use `map` when you have sample-level FASTQ files and a reference or denovo pseudoreference sequence (e.g., from [`denovo`](./denovo.md)) to align against. If you already have mapped BAM files, you do not need this step. Start directly at [`assemble`](./assemble.md).
@@ -56,20 +58,14 @@ Use these when FASTQ filenames do not follow the default parser assumptions or w
 ipyrad2 runs up to `cores // threads` mapping jobs in parallel. `--threads` cannot exceed `--cores`.
 Without `--force`, samples that already have BAM outputs are skipped instead of being remapped.
 
-### Logging
-
-- `-l, --log-level`: logging verbosity, default `INFO`
-
-At normal verbosity, ipyrad2 reports parsed sample names, duplicate-removal warnings, reference indexing, mapping progress, and where the map stats file was written.
-
 
 ## Inputs and Sample Grouping
 
-Use `-d/--fastqs` with one or more FASTQ paths or shell-expanded globs. Inputs can be single-end or paired-end, but all samples in one run must be consistent. Mixed single-end and paired-end inputs are rejected.
+Use `-d/--fastqs` with one or more FASTQ paths or shell-expanded globs. Inputs can be single-end or paired-end, but all samples in one run must be consistent.
 
-Sample names are parsed from FASTQ filenames. If the default parsing is not right for your filenames, use the `-dx, --delim-str` and `-di, --delim-idx` options. See [ Using -dx and -di to pair and name samples ]( Using -dx and -di to pair and name samples ) for more details.
+Sample names are parsed from FASTQ filenames. If the default parsing is not right for your filenames, use the `-dx, --delim-str` and `-di, --delim-idx` options. (See [Using -dx and -di to pair and name samples](../recipes/sample-name-parsing.md).
 
-You can also provide `-i/--imap` to subset, rename, or merge samples before mapping. The `imap` file is a whitespace-delimited two-column table:
+You can provide `-i/--imap` to subset, rename, or merge samples before mapping. The `imap` file is a whitespace-delimited two-column table:
 
 ```text
 sample  group
@@ -77,29 +73,24 @@ sample  group
 
 This table can do three things:
 
-- keep only a subset of parsed samples
+- keep only the subset of listed samples from among the input data
 - rename samples before BAM writing
 - merge multiple parsed samples into one mapping target by concatenating their FASTQs
 
-If some `imap` names do not match the canonical parsed sample names, ipyrad2 warns and skips them. If none match, the run stops.
-
-For a worked example of explicit delimiter-based pairing and sample naming, see [Using -dx and -di to pair and name samples](../recipes/sample-name-parsing.md).
-
-
-## Outputs and Stats
+## Output files
 
 For each sample, `map` writes:
 
 - `SAMPLE.trimmed.sorted.bam`
 - `SAMPLE.trimmed.sorted.bam.csi`
 
-During the run it also uses `OUTDIR/tmpdir/` for temporary sort, fixmate, and stats files, but those temporary files are cleaned up when mapping finishes.
-
 For the run as a whole, it writes:
 
 - `ipyrad_map_stats_N.txt`
 
 The stats report is numbered so repeated runs in the same output directory do not overwrite older summaries. It reports final BAM retention and alignment-quality summaries rather than full aligner logs.
+
+## Stats report
 
 For single-end data, the report includes fields such as:
 
@@ -121,33 +112,14 @@ The MAPQ, soft-clipping, NM, and TLEN thresholds in this report are reporting th
 
 ## Common Failures and Interpretation Notes
 
-### No FASTQ inputs match
-
-If the shell does not expand your `-d` pattern the way you expect, ipyrad2 may see no usable inputs. Check the glob itself first and make sure the files are visible from your current working directory.
-
-### Sample names are parsed incorrectly
-
-If mates are not grouped together correctly, or several files collapse into one sample unexpectedly, adjust `--delim-str` and `--delim-idx`.
-
-### Unsupported compression
-
-Only plain FASTQ and `.gz` FASTQ are supported. `.bz2` input raises an error before mapping begins.
 
 ### Mixed SE and PE inputs
 
-If some parsed samples are paired-end and others are single-end, the run stops. That includes cases where an `imap` merge would mix single-end and paired-end inputs into one output sample.
+If some parsed samples are paired-end and others are single-end, the run stops. That includes cases where an `imap` merge would mix single-end and paired-end inputs into one output sample. You can instead run these as two separate calls to `map` selecting different input data.
 
 ### Reference indexing fails
 
-`map` auto-indexes the reference with `bwa-mem2` when needed. If the reference path does not exist or its directory is not writable, indexing fails before mapping starts.
-
-### Mapper dependencies are missing
-
-Both `bwa-mem2` and `samtools` must exist in the active ipyrad2 environment and be executable.
-
-### `threads` exceeds `cores`
-
-`map` validates this before running. Increase `--cores`, reduce `--threads`, or both.
+`map` auto-indexes the reference with `bwa-mem2` when needed. If the reference path does not exist or its directory is not writable, indexing fails before mapping starts. You can force re-indexing by using `--reindex-reference`.
 
 ### Duplicate-removal mode is invalid
 
@@ -159,7 +131,7 @@ If some names in the `imap` file do not match canonical parsed sample names, ipy
 
 ### Disk-space failures during sorting
 
-The mapping pipeline creates temporary BAMs during sorting and duplicate removal. If the output filesystem fills up, `samtools sort` can fail with a disk-space error. ipyrad2 now surfaces those failures more cleanly, but the fix is still to free space or choose a different output location.
+The mapping pipeline creates temporary BAMs during sorting and duplicate removal. If the output filesystem fills up, `samtools sort` can fail with a disk-space error. ipyrad2 can usually report these failures. The fix is to free space or choose a different output location.
 
 ## Examples
 
@@ -197,5 +169,5 @@ ipyrad2 map -d TRIMMED/*.fastq.gz -r REF.fa -o MAPPED/ -u
 
 - [Quick Guide](./index.md)
 - [trim](./trim.md)
-- [Denovo](./denovo.md)
-- [Assemble](./assemble.md)
+- [denovo](./denovo.md)
+- [assemble](./assemble.md)

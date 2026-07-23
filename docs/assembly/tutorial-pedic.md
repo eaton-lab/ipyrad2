@@ -11,21 +11,20 @@ The sampling spans from population-level variation where species boundaries are 
 higher-level divergence where species boundaries are quite distinct.
 This is a common scale at which RAD-seq data are often very useful.
 
-## Setup
-
-If you haven’t done so yet, start by installing ipyrad2, as well as a few additional packages that will
-be used to download the dataset from SRA, and run some downstream analyses.
-
-```bash
-conda install ipyrad2 sra-tools raxml-ng -c bioconda -c conda-forge
-```
 
 ## Download the dataset
 
-First we will download the metadata which includes sample accession IDs, names, and other information.
-Here we use some bash commands to fetch the metadata from NCBI using a public URL for the study
-accession (SRP021469) and save its metadata to a file (runinfo.csv), and also print a subset of it
-to the terminal for viewing. The data could alternatively be fetched manually online.
+To follow along you can download the dataset by following these instructions. Otherwise skip ahead.
+You will need `sra-tools` to download the data, which can be installed with this conda command.
+
+```bash
+conda install sra-tools -c conda-forge -c bioconda
+```
+
+The bash commands below will fetch metadata for this study from the NCBI short read archive (SRA),
+using a public URL for the study accession (SRP021469). We will save the metadata to a file
+(runinfo.csv), and print a subset of it to the terminal for viewing.
+The data could alternatively be fetched manually online.
 
 ```bash
 # Create directories for the metadata and sequencing data
@@ -69,8 +68,8 @@ cut -d ',' -f1,30 SRP021469/runinfo.csv |
   tr ',' '\t' > SRP021469/samples.tsv
 ```
 
-Then call the following bash script that uses `fasterq-dump` from the sra-tools package that we installed
-to download the FASTQ files for each sample. This will probably take a few minutes at most, the total data
+Then call the following bash script, which uses `fasterq-dump` from the sra-tools package,
+to download the FASTQ files for each sample. This will take a few minutes, the total data
 size is approximately 5Gb raw, and closer to 1Gb after cleanup and compression below.
 
 ```bash
@@ -98,9 +97,9 @@ while IFS=$'\t' read -r run sample; do
 done < SRP021469/samples.tsv
 ```
 
-Finally, let's compress the FASTQ files and view them. Note the path to our downloaded FASTQ data files is `SRP021469/fastq/`.
-If the data were paired-end they would end in \_1.fastq.gz and \_2.fastq.gz, but here because it is single-end data it
-produces just one .fastq.gz file per sample.
+Finally, compress the FASTQ files and view them. Note the path to our downloaded FASTQ data
+files is `SRP021469/fastq/`. If the data were paired-end they would end in \_1.fastq.gz and
+\_2.fastq.gz, but here because it is single-end data there is just one .fastq.gz file per sample.
 
 ```bash
 # compress the FASTQ files
@@ -130,16 +129,15 @@ total 1.1G
 -rw-rw-r-- 1 deren deren 134M Jul 20 12:53 41954_cyathophylloides.fastq.gz
 ```
 
-
 ## Assembly
 
 ### trim
 
-#### run
-The data that we downloaded is already demultiplexed to individual samples, so we can start by running read trimming.
-Here we just enter the path to our data (-d) and the path where we want the trimmed reads to be written (-o). I also
-specify the total number of cores to use (-c 12) and how to distribute these resources among threaded jobs (-t 4),
-which specified to run 3 4-threaded jobs at a time. All other settings are left at the default.
+The data are already demultiplexed to individual samples, so we can start by running read trimming.
+We enter the path to our data (`-d`) and the path where we want the trimmed reads to be written (`-o`).
+I also specify the total number of cores to use (`-c 12`) and how to distribute these resources among
+threaded jobs (`-t 4`), which specified to run 3 4-threaded jobs at a time. All other settings are
+left at the default. This will print a log to the terminal (stdout) describing the steps it is performing:
 
 ```bash
 ipyrad2 trim \
@@ -148,50 +146,48 @@ ipyrad2 trim \
   -c 12 -t 4
 ```
 
-#### logging
+??? "ipyrad2 trim log"
 
-This will write a log to the terminal (stdout) describing the steps it is performing:
+    ```literal
+    2026-07-20 13:07:44 | INFO     | cli_main.py          | ----------------------------------------------------------
+    2026-07-20 13:07:44 | INFO     | cli_main.py          | ----- ipyrad2 trim: quality, adapter, and cutsite motif trimming -----
+    2026-07-20 13:07:44 | INFO     | cli_main.py          | ----------------------------------------------------------
+    2026-07-20 13:07:44 | INFO     | cli_main.py          | CMD: ipyrad2 trim -d SRP021469/fastq/29154_superba.fastq.gz SRP021469/fastq/30556_thamno.fastq.gz SRP021469/fastq/30686_cyathophylla.fastq.gz SRP021469/fastq/32082_przewalskii.fastq.gz SRP021469/fastq/33413_thamno.fastq.gz ...[truncated; 13 total matched paths] -o SRP021469/TRIM/
+    2026-07-20 13:07:44 | INFO     | names.py             | failed to pair files, assuming data in single-end
+    2026-07-20 13:07:44 | INFO     | names.py             | parsed names by stripping known file suffixes
+    2026-07-20 13:07:44 | INFO     | names.py             | showing first 10/13 names parsed from file paths
+    2026-07-20 13:07:44 | INFO     | names.py             | 29154_superba          <- 29154_superba.fastq.gz
+    2026-07-20 13:07:44 | INFO     | names.py             | 30556_thamno           <- 30556_thamno.fastq.gz
+    2026-07-20 13:07:44 | INFO     | names.py             | 30686_cyathophylla     <- 30686_cyathophylla.fastq.gz
+    2026-07-20 13:07:44 | INFO     | names.py             | 32082_przewalskii      <- 32082_przewalskii.fastq.gz
+    2026-07-20 13:07:44 | INFO     | names.py             | 33413_thamno           <- 33413_thamno.fastq.gz
+    2026-07-20 13:07:44 | INFO     | names.py             | 33588_przewalskii      <- 33588_przewalskii.fastq.gz
+    2026-07-20 13:07:44 | INFO     | names.py             | 35236_rex              <- 35236_rex.fastq.gz
+    2026-07-20 13:07:44 | INFO     | names.py             | 35855_rex              <- 35855_rex.fastq.gz
+    2026-07-20 13:07:44 | INFO     | names.py             | 38362_rex              <- 38362_rex.fastq.gz
+    2026-07-20 13:07:44 | INFO     | names.py             | 39618_rex              <- 39618_rex.fastq.gz
+    2026-07-20 13:07:44 | INFO     | trim_fastqs.py       | trim input preflight found 13 usable samples and 0 skipped empty samples
+    [####################] 100% | Counting kmers - total jobs: 13
+    2026-07-20 13:07:46 | INFO     | trim_fastqs.py       | cutsite motifs set to R1=[TGCAG] at offset 0 R2=[<none>] at offset 0
+    2026-07-20 13:07:46 | INFO     | trim_fastqs.py       | trimming/filtering 13 samples with 'fastp' and writing to /home/deren/Documents/tools/ipyrad2/SRP021469/TRIM
+    2026-07-20 13:07:46 | INFO     | trim_fastqs.py       | running up to 3 parallel jobs each using up to 4 threads
+    [####################] 100% | Trimming - total jobs: 13
+    2026-07-20 13:11:47 | INFO     | trim_fastqs.py       | trimming stats written to /home/deren/Documents/tools/ipyrad2/SRP021469/TRIM/ipyrad_trim_stats_0.txt and /home/deren/Documents/tools/ipyrad2/SRP021469/TRIM/ipyrad_trim_stats_0.json
+    ```
 
-```literal
-2026-07-20 13:07:44 | INFO     | cli_main.py          | ----------------------------------------------------------
-2026-07-20 13:07:44 | INFO     | cli_main.py          | ----- ipyrad2 trim: quality, adapter, and cutsite motif trimming -----
-2026-07-20 13:07:44 | INFO     | cli_main.py          | ----------------------------------------------------------
-2026-07-20 13:07:44 | INFO     | cli_main.py          | CMD: ipyrad2 trim -d SRP021469/fastq/29154_superba.fastq.gz SRP021469/fastq/30556_thamno.fastq.gz SRP021469/fastq/30686_cyathophylla.fastq.gz SRP021469/fastq/32082_przewalskii.fastq.gz SRP021469/fastq/33413_thamno.fastq.gz ...[truncated; 13 total matched paths] -o SRP021469/TRIM/
-2026-07-20 13:07:44 | INFO     | names.py             | failed to pair files, assuming data in single-end
-2026-07-20 13:07:44 | INFO     | names.py             | parsed names by stripping known file suffixes
-2026-07-20 13:07:44 | INFO     | names.py             | showing first 10/13 names parsed from file paths
-2026-07-20 13:07:44 | INFO     | names.py             | 29154_superba          <- 29154_superba.fastq.gz
-2026-07-20 13:07:44 | INFO     | names.py             | 30556_thamno           <- 30556_thamno.fastq.gz
-2026-07-20 13:07:44 | INFO     | names.py             | 30686_cyathophylla     <- 30686_cyathophylla.fastq.gz
-2026-07-20 13:07:44 | INFO     | names.py             | 32082_przewalskii      <- 32082_przewalskii.fastq.gz
-2026-07-20 13:07:44 | INFO     | names.py             | 33413_thamno           <- 33413_thamno.fastq.gz
-2026-07-20 13:07:44 | INFO     | names.py             | 33588_przewalskii      <- 33588_przewalskii.fastq.gz
-2026-07-20 13:07:44 | INFO     | names.py             | 35236_rex              <- 35236_rex.fastq.gz
-2026-07-20 13:07:44 | INFO     | names.py             | 35855_rex              <- 35855_rex.fastq.gz
-2026-07-20 13:07:44 | INFO     | names.py             | 38362_rex              <- 38362_rex.fastq.gz
-2026-07-20 13:07:44 | INFO     | names.py             | 39618_rex              <- 39618_rex.fastq.gz
-2026-07-20 13:07:44 | INFO     | trim_fastqs.py       | trim input preflight found 13 usable samples and 0 skipped empty samples
-[####################] 100% | Counting kmers - total jobs: 13
-2026-07-20 13:07:46 | INFO     | trim_fastqs.py       | cutsite motifs set to R1=[TGCAG] at offset 0 R2=[<none>] at offset 0
-2026-07-20 13:07:46 | INFO     | trim_fastqs.py       | trimming/filtering 13 samples with 'fastp' and writing to /home/deren/Documents/tools/ipyrad2/SRP021469/TRIM
-2026-07-20 13:07:46 | INFO     | trim_fastqs.py       | running up to 3 parallel jobs each using up to 4 threads
-[####################] 100% | Trimming - total jobs: 13
-2026-07-20 13:11:47 | INFO     | trim_fastqs.py       | trimming stats written to /home/deren/Documents/tools/ipyrad2/SRP021469/TRIM/ipyrad_trim_stats_0.txt and /home/deren/Documents/tools/ipyrad2/SRP021469/TRIM/ipyrad_trim_stats_0.json
+This includes a few notable things to pay attention to. First, it says `failed to pair files, assuming data in single-end`.
+This is expected, since our data is single-end data.
 
-```
-
-This log includes a few notable things to pay attention to.
-
-First, it says `failed to pair files, assuming data in single-end`. This is expected, since our data is single-end data.
-
-Second, you can see that it parses sample names from the file names by trimming the `.fastq.gz` suffix. The `trim` command
-includes additional options for how to parse names from file names in case you want to further edit these.
+Second, you can see that it parses sample names from the file names by trimming the `.fastq.gz` suffix. The
+`trim` command includes additional options for how to parse names from file names in case you want to further
+edit these.
 
 Third, it says `cutsite motifs set to R1=[TGCAG] at offset 0 R2=[<none>] at offset 0`. This indicates that ipyrad2
 detected the restriction enzyme motif that is left on the sequences from the restriction digestion and ligation used
-during library preparation. Here "TGCAG" is the expected motif from using the enzyme PstI. It will be trimmed from all of the reads.
+during library preparation. Here "TGCAG" is the expected motif from using the enzyme PstI. It will be trimmed from
+all of the reads.
 
-#### stats
+### trim stats
 
 When the run is finished it writes a stats file. Here we use `cat` to read it, but you can view this text file using any suitable method.
 
@@ -221,14 +217,12 @@ CMD: ipyrad2 trim -d SRP021469/fastq/29154_superba.fastq.gz SRP021469/fastq/3055
 ### denovo
 
 Next, we will assemble a denovo pseudoreference genome from the data. A close reference genome is not available for
-this subclade of *Pedicularis*, and this pseudoreference will likely serve better than using a distantly related
-reference genome. If you have a reference genome you can skip this step and proceed straight to `map`.
+this subclade of *Pedicularis*. A denovo pseudoreference will likely serve better than using a distantly related
+reference genome.
 
-#### run
-
-Here we specify the input data path (-d), output data path (-o), and the clustering thresholds within (-s)
-and between samples (-S), and the resources to be used. Because this dataset is pretty small, we also use the
-`--use-all-samples` option to build the pseudoreference from all 13 samples, instead of randomly sampling
+Here we specify the input data path (`-d`), output data path (`-o`), and the clustering thresholds within (`-s`)
+and between samples (`-S`), and the cores/threads to be used. Because this dataset is pretty small, I specify
+the `--use-all-samples` option to build the pseudoreference from all 13 samples, instead of randomly sampling
 a subset of samples, which is the default for this step.
 
 Note that another important parameter in this step is the `-m/--min-derep-size` argument, which specifies the
@@ -252,68 +246,66 @@ ipyrad2 denovo \
   -c 12 -t 3
 ```
 
-#### logging
-```literal
-2026-07-20 13:53:56 | INFO     | cli_main.py          | ------------------------------------------------------------
-2026-07-20 13:53:56 | INFO     | cli_main.py          | ----- ipyrad2 denovo: construct locus reference library -----
-2026-07-20 13:53:56 | INFO     | cli_main.py          | ------------------------------------------------------------
-2026-07-20 13:53:56 | INFO     | cli_main.py          | CMD: ipyrad2 denovo -d SRP021469/TRIM/29154_superba.trimmed.fastq.gz SRP021469/TRIM/30556_thamno.trimmed.fastq.gz SRP021469/TRIM/30686_cyathophylla.trimmed.fastq.gz SRP021469/TRIM/32082_przewalskii.trimmed.fastq.gz SRP021469/TRIM/33413_thamno.trimmed.fastq.gz ...[truncated; 13 total matched paths] -o SRP021469/DENOVO/ -s 0.94 -S 0.85 --use-all-samples -c 12 -t 3 -f
-2026-07-20 13:53:56 | INFO     | denovo.py            | loading FASTQ inputs
-2026-07-20 13:53:56 | INFO     | names.py             | failed to pair files, assuming data in single-end
-2026-07-20 13:53:56 | INFO     | names.py             | parsed names by stripping known file suffixes
-2026-07-20 13:53:56 | INFO     | names.py             | showing first 10/13 names parsed from file paths
-2026-07-20 13:53:56 | INFO     | names.py             | 29154_superba.trimmed          <- 29154_superba.trimmed.fastq.gz
-2026-07-20 13:53:56 | INFO     | names.py             | 30556_thamno.trimmed           <- 30556_thamno.trimmed.fastq.gz
-2026-07-20 13:53:56 | INFO     | names.py             | 30686_cyathophylla.trimmed     <- 30686_cyathophylla.trimmed.fastq.gz
-2026-07-20 13:53:56 | INFO     | names.py             | 32082_przewalskii.trimmed      <- 32082_przewalskii.trimmed.fastq.gz
-2026-07-20 13:53:56 | INFO     | names.py             | 33413_thamno.trimmed           <- 33413_thamno.trimmed.fastq.gz
-2026-07-20 13:53:56 | INFO     | names.py             | 33588_przewalskii.trimmed      <- 33588_przewalskii.trimmed.fastq.gz
-2026-07-20 13:53:56 | INFO     | names.py             | 35236_rex.trimmed              <- 35236_rex.trimmed.fastq.gz
-2026-07-20 13:53:56 | INFO     | names.py             | 35855_rex.trimmed              <- 35855_rex.trimmed.fastq.gz
-2026-07-20 13:53:56 | INFO     | names.py             | 38362_rex.trimmed              <- 38362_rex.trimmed.fastq.gz
-2026-07-20 13:53:56 | INFO     | names.py             | 39618_rex.trimmed              <- 39618_rex.trimmed.fastq.gz
-2026-07-20 13:53:56 | INFO     | names.py             | normalized 13 parsed FASTQ sample name(s) by stripping recognized workflow suffixes
-2026-07-20 13:53:56 | INFO     | names.py             | 29154_superba.trimmed -> 29154_superba
-2026-07-20 13:53:56 | INFO     | names.py             | 30556_thamno.trimmed -> 30556_thamno
-2026-07-20 13:53:56 | INFO     | names.py             | 30686_cyathophylla.trimmed -> 30686_cyathophylla
-2026-07-20 13:53:56 | INFO     | names.py             | 32082_przewalskii.trimmed -> 32082_przewalskii
-2026-07-20 13:53:56 | INFO     | names.py             | 33413_thamno.trimmed -> 33413_thamno
-2026-07-20 13:53:56 | INFO     | names.py             | 33588_przewalskii.trimmed -> 33588_przewalskii
-2026-07-20 13:53:56 | INFO     | names.py             | 35236_rex.trimmed -> 35236_rex
-2026-07-20 13:53:56 | INFO     | names.py             | 35855_rex.trimmed -> 35855_rex
-2026-07-20 13:53:56 | INFO     | names.py             | 38362_rex.trimmed -> 38362_rex
-2026-07-20 13:53:56 | INFO     | names.py             | 39618_rex.trimmed -> 39618_rex
-2026-07-20 13:53:56 | INFO     | names.py             | 40578_rex.trimmed -> 40578_rex
-2026-07-20 13:53:56 | INFO     | names.py             | 41478_cyathophylloides.trimmed -> 41478_cyathophylloides
-2026-07-20 13:53:56 | INFO     | names.py             | 41954_cyathophylloides.trimmed -> 41954_cyathophylloides
-2026-07-20 13:53:56 | INFO     | denovo.py            | loaded 13 denovo input samples
-2026-07-20 13:53:56 | INFO     | denovo.py            | selecting denovo samples
-2026-07-20 13:53:56 | INFO     | denovo.py            | using all 13 denovo input samples
-2026-07-20 13:53:56 | INFO     | denovo.py            | clustering within samples
-[####################] 100% | Clustering within samples - total jobs: 13
-2026-07-20 13:56:08 | INFO     | denovo.py            | within-sample clustering complete for 13 selected samples
-2026-07-20 13:56:08 | INFO     | denovo.py            | combining per-sample summaries
-2026-07-20 13:56:13 | INFO     | denovo.py            | combined 644744 consensus records across 13 selected samples
-2026-07-20 13:56:13 | INFO     | denovo.py            | clustering consensus sequences across samples
-[####################] 100% | Across-sample clustering
-2026-07-20 13:58:04 | INFO     | denovo.py            | building denovo locus tables
-[####################] 100% | Splitting global clusters - total jobs: 181327
-2026-07-20 14:01:16 | WARNING  | graph.py             | retaining 12 raw oversize clusters as unsplit placeholder loci (limit=130 raw nodes; total_oversize_nodes=4255)
-2026-07-20 14:01:16 | INFO     | graph.py             | built 203941 loci from 181327 graph components (rescued oversize: 0, raw placeholders: 12, post-contraction placeholders: 0)
-2026-07-20 14:01:17 | INFO     | denovo.py            | building denovo reference (MAFFT)
-[####################] 100% | Aligning loci - total jobs: 203941
-2026-07-20 14:42:54 | INFO     | align.py             | wrote denovo reference
-2026-07-20 14:42:54 | INFO     | denovo.py            | collecting final denovo QC
-2026-07-20 14:42:59 | INFO     | denovo.py            | writing denovo summary report
-2026-07-20 14:42:59 | INFO     | denovo.py            | wrote denovo summary report
-2026-07-20 14:42:59 | INFO     | denovo.py            | denovo complete; outputs written to /home/deren/Documents/tools/ipyrad2/SRP021469/DENOVO
-```
+??? "ipyrad2 denovo log"
 
-[add description of some of the logged info...]
+    ```literal
+    2026-07-20 13:53:56 | INFO     | cli_main.py          | ------------------------------------------------------------
+    2026-07-20 13:53:56 | INFO     | cli_main.py          | ----- ipyrad2 denovo: construct locus reference library -----
+    2026-07-20 13:53:56 | INFO     | cli_main.py          | ------------------------------------------------------------
+    2026-07-20 13:53:56 | INFO     | cli_main.py          | CMD: ipyrad2 denovo -d SRP021469/TRIM/29154_superba.trimmed.fastq.gz SRP021469/TRIM/30556_thamno.trimmed.fastq.gz SRP021469/TRIM/30686_cyathophylla.trimmed.fastq.gz SRP021469/TRIM/32082_przewalskii.trimmed.fastq.gz SRP021469/TRIM/33413_thamno.trimmed.fastq.gz ...[truncated; 13 total matched paths] -o SRP021469/DENOVO/ -s 0.94 -S 0.85 --use-all-samples -c 12 -t 3 -f
+    2026-07-20 13:53:56 | INFO     | denovo.py            | loading FASTQ inputs
+    2026-07-20 13:53:56 | INFO     | names.py             | failed to pair files, assuming data in single-end
+    2026-07-20 13:53:56 | INFO     | names.py             | parsed names by stripping known file suffixes
+    2026-07-20 13:53:56 | INFO     | names.py             | showing first 10/13 names parsed from file paths
+    2026-07-20 13:53:56 | INFO     | names.py             | 29154_superba.trimmed          <- 29154_superba.trimmed.fastq.gz
+    2026-07-20 13:53:56 | INFO     | names.py             | 30556_thamno.trimmed           <- 30556_thamno.trimmed.fastq.gz
+    2026-07-20 13:53:56 | INFO     | names.py             | 30686_cyathophylla.trimmed     <- 30686_cyathophylla.trimmed.fastq.gz
+    2026-07-20 13:53:56 | INFO     | names.py             | 32082_przewalskii.trimmed      <- 32082_przewalskii.trimmed.fastq.gz
+    2026-07-20 13:53:56 | INFO     | names.py             | 33413_thamno.trimmed           <- 33413_thamno.trimmed.fastq.gz
+    2026-07-20 13:53:56 | INFO     | names.py             | 33588_przewalskii.trimmed      <- 33588_przewalskii.trimmed.fastq.gz
+    2026-07-20 13:53:56 | INFO     | names.py             | 35236_rex.trimmed              <- 35236_rex.trimmed.fastq.gz
+    2026-07-20 13:53:56 | INFO     | names.py             | 35855_rex.trimmed              <- 35855_rex.trimmed.fastq.gz
+    2026-07-20 13:53:56 | INFO     | names.py             | 38362_rex.trimmed              <- 38362_rex.trimmed.fastq.gz
+    2026-07-20 13:53:56 | INFO     | names.py             | 39618_rex.trimmed              <- 39618_rex.trimmed.fastq.gz
+    2026-07-20 13:53:56 | INFO     | names.py             | normalized 13 parsed FASTQ sample name(s) by stripping recognized workflow suffixes
+    2026-07-20 13:53:56 | INFO     | names.py             | 29154_superba.trimmed -> 29154_superba
+    2026-07-20 13:53:56 | INFO     | names.py             | 30556_thamno.trimmed -> 30556_thamno
+    2026-07-20 13:53:56 | INFO     | names.py             | 30686_cyathophylla.trimmed -> 30686_cyathophylla
+    2026-07-20 13:53:56 | INFO     | names.py             | 32082_przewalskii.trimmed -> 32082_przewalskii
+    2026-07-20 13:53:56 | INFO     | names.py             | 33413_thamno.trimmed -> 33413_thamno
+    2026-07-20 13:53:56 | INFO     | names.py             | 33588_przewalskii.trimmed -> 33588_przewalskii
+    2026-07-20 13:53:56 | INFO     | names.py             | 35236_rex.trimmed -> 35236_rex
+    2026-07-20 13:53:56 | INFO     | names.py             | 35855_rex.trimmed -> 35855_rex
+    2026-07-20 13:53:56 | INFO     | names.py             | 38362_rex.trimmed -> 38362_rex
+    2026-07-20 13:53:56 | INFO     | names.py             | 39618_rex.trimmed -> 39618_rex
+    2026-07-20 13:53:56 | INFO     | names.py             | 40578_rex.trimmed -> 40578_rex
+    2026-07-20 13:53:56 | INFO     | names.py             | 41478_cyathophylloides.trimmed -> 41478_cyathophylloides
+    2026-07-20 13:53:56 | INFO     | names.py             | 41954_cyathophylloides.trimmed -> 41954_cyathophylloides
+    2026-07-20 13:53:56 | INFO     | denovo.py            | loaded 13 denovo input samples
+    2026-07-20 13:53:56 | INFO     | denovo.py            | selecting denovo samples
+    2026-07-20 13:53:56 | INFO     | denovo.py            | using all 13 denovo input samples
+    2026-07-20 13:53:56 | INFO     | denovo.py            | clustering within samples
+    [####################] 100% | Clustering within samples - total jobs: 13
+    2026-07-20 13:56:08 | INFO     | denovo.py            | within-sample clustering complete for 13 selected samples
+    2026-07-20 13:56:08 | INFO     | denovo.py            | combining per-sample summaries
+    2026-07-20 13:56:13 | INFO     | denovo.py            | combined 644744 consensus records across 13 selected samples
+    2026-07-20 13:56:13 | INFO     | denovo.py            | clustering consensus sequences across samples
+    [####################] 100% | Across-sample clustering
+    2026-07-20 13:58:04 | INFO     | denovo.py            | building denovo locus tables
+    [####################] 100% | Splitting global clusters - total jobs: 181327
+    2026-07-20 14:01:16 | WARNING  | graph.py             | retaining 12 raw oversize clusters as unsplit placeholder loci (limit=130 raw nodes; total_oversize_nodes=4255)
+    2026-07-20 14:01:16 | INFO     | graph.py             | built 203941 loci from 181327 graph components (rescued oversize: 0, raw placeholders: 12, post-contraction placeholders: 0)
+    2026-07-20 14:01:17 | INFO     | denovo.py            | building denovo reference (MAFFT)
+    [####################] 100% | Aligning loci - total jobs: 203941
+    2026-07-20 14:42:54 | INFO     | align.py             | wrote denovo reference
+    2026-07-20 14:42:54 | INFO     | denovo.py            | collecting final denovo QC
+    2026-07-20 14:42:59 | INFO     | denovo.py            | writing denovo summary report
+    2026-07-20 14:42:59 | INFO     | denovo.py            | wrote denovo summary report
+    2026-07-20 14:42:59 | INFO     | denovo.py            | denovo complete; outputs written to /home/deren/Documents/tools/ipyrad2/SRP021469/DENOVO
+    ```
 
-#### pseudoreference FASTA
 
-Below we peek at the first few lines of the pseudoreference FASTA file that is the main output of the `denovo` step.
+The main result of this step is the pseudoreference FASTA file. Let's take a peek at it using the `head` command.
 
 ```bash
 head -n 30 SRP021469/DENOVO/denovo_reference.fa
@@ -353,7 +345,7 @@ CTGCTGCCCAAAAAAATGATGTTGGTTCCGATGTTGGCAACATTAGACTCAACATCGTTTTCTGTTGCT
 ...
 ```
 
-Here the pseudoreference is composed of >200K loci that were recovered by graph clustering and splitting during
+This pseudoreference is composed of >200K loci that were recovered by graph clustering and splitting during
 the denovo assembly process. The process involved first clustering within each sample to collapse similar reads into
 a consensus sequence (e.g., using 0.95 threshold), and clustering across samples at a lower threshold (0.85) to cluster
 homologs across samples. The resulting graph included many clusters that contained duplicated regions of the genome from
@@ -361,13 +353,13 @@ a single sample, i.e., paralogs. These are split using a graph splitting algorit
 at most one sequence per sample (i.e., no duplications).
 
 You can see the result of this process in the names of the loci in the pseudoreference. For example,
-given the consensus sequences that grouped into the first cluster (`locus_1`), the graph splitting algorithm further split
-this into three distinct components (`locus_1_1`, `locus_1_2`, and `locus_1_3`).
+given the consensus sequences that grouped into the first cluster (`locus_1`), the graph splitting algorithm
+further split this into three distinct components (`locus_1_1`, `locus_1_2`, and `locus_1_3`).
 The sequences of these three loci look pretty similar, but clearly differ in their sequences.
 We purposely keep all three paralogous copies in the final pseudoreference as these will later allow
 for reads to map best to one locus versus another.
 
-#### stats
+### denovo stats
 
 <!-- The full stats file for denovo is quite long, you can click below to expand it and see the full thing. -->
 
@@ -502,16 +494,15 @@ Audit directory       /home/deren/Documents/tools/ipyrad2/SRP021469/DENOVO/denov
 Intermediate files    cleaned on success
 ```
 
-
 ### map
 
-Next, we will map reads from each sample to the pseudoreference genome to generate BAM alignment files.
+Next we map reads from each sample to the pseudoreference genome to generate BAM alignment files.
 
-#### run
-
-In the `map` command we specify the trimmed fastq files as the data input (-d), the pseudoreference genome fasta
-as the reference input (-r), and specify a path to write the output files (-o). We also specify the resources to
-be used, here assigning 12 cores to be distributed multiple 4-threaded jobs.
+In the `map` command we specify the trimmed fastq files as the data input (`-d`), the pseudoreference
+genome fasta (`-r`), and a path to write the output files (`-o`). We also specify the resources to
+be used, assigning 12 cores to be distributed across multiple 4-threaded jobs.
+The logging report indicates that it successfully identified the samples and their names, completed mapping,
+and calculated stats for the mapped reads.
 
 ```bash
 ipyrad2 map \
@@ -521,59 +512,55 @@ ipyrad2 map \
   -c 12 -t 4
 ```
 
-#### logging
+??? "ipyrad2 map log"
 
-The logging report indicates that it successfully identified the samples and their names, completed mapping,
-and calculated stats for the mapped reads.
+    ```literal
+    2026-07-20 14:47:09 | INFO     | cli_main.py          | --------------------------------------------------------------
+    2026-07-20 14:47:09 | INFO     | cli_main.py          | ----- ipyrad2 map: map reads and write coordinate-sorted BAMs -----
+    2026-07-20 14:47:09 | INFO     | cli_main.py          | --------------------------------------------------------------
+    2026-07-20 14:47:09 | INFO     | cli_main.py          | CMD: ipyrad2 map -d SRP021469/TRIM/29154_superba.trimmed.fastq.gz SRP021469/TRIM/30556_thamno.trimmed.fastq.gz SRP021469/TRIM/30686_cyathophylla.trimmed.fastq.gz SRP021469/TRIM/32082_przewalskii.trimmed.fastq.gz SRP021469/TRIM/33413_thamno.trimmed.fastq.gz ...[truncated; 13 total matched paths] -r SRP021469/DENOVO/denovo_reference.fa -o SRP021469/MAP/ -c 12 -t 4
+    2026-07-20 14:47:09 | INFO     | names.py             | failed to pair files, assuming data in single-end
+    2026-07-20 14:47:09 | INFO     | names.py             | parsed names by stripping known file suffixes
+    2026-07-20 14:47:09 | INFO     | names.py             | showing first 10/13 names parsed from file paths
+    2026-07-20 14:47:09 | INFO     | names.py             | 29154_superba.trimmed          <- 29154_superba.trimmed.fastq.gz
+    2026-07-20 14:47:09 | INFO     | names.py             | 30556_thamno.trimmed           <- 30556_thamno.trimmed.fastq.gz
+    2026-07-20 14:47:09 | INFO     | names.py             | 30686_cyathophylla.trimmed     <- 30686_cyathophylla.trimmed.fastq.gz
+    2026-07-20 14:47:09 | INFO     | names.py             | 32082_przewalskii.trimmed      <- 32082_przewalskii.trimmed.fastq.gz
+    2026-07-20 14:47:09 | INFO     | names.py             | 33413_thamno.trimmed           <- 33413_thamno.trimmed.fastq.gz
+    2026-07-20 14:47:09 | INFO     | names.py             | 33588_przewalskii.trimmed      <- 33588_przewalskii.trimmed.fastq.gz
+    2026-07-20 14:47:09 | INFO     | names.py             | 35236_rex.trimmed              <- 35236_rex.trimmed.fastq.gz
+    2026-07-20 14:47:09 | INFO     | names.py             | 35855_rex.trimmed              <- 35855_rex.trimmed.fastq.gz
+    2026-07-20 14:47:09 | INFO     | names.py             | 38362_rex.trimmed              <- 38362_rex.trimmed.fastq.gz
+    2026-07-20 14:47:09 | INFO     | names.py             | 39618_rex.trimmed              <- 39618_rex.trimmed.fastq.gz
+    2026-07-20 14:47:09 | INFO     | names.py             | normalized 13 parsed FASTQ sample name(s) by stripping recognized workflow suffixes
+    2026-07-20 14:47:09 | INFO     | names.py             | 29154_superba.trimmed -> 29154_superba
+    2026-07-20 14:47:09 | INFO     | names.py             | 30556_thamno.trimmed -> 30556_thamno
+    2026-07-20 14:47:09 | INFO     | names.py             | 30686_cyathophylla.trimmed -> 30686_cyathophylla
+    2026-07-20 14:47:09 | INFO     | names.py             | 32082_przewalskii.trimmed -> 32082_przewalskii
+    2026-07-20 14:47:09 | INFO     | names.py             | 33413_thamno.trimmed -> 33413_thamno
+    2026-07-20 14:47:09 | INFO     | names.py             | 33588_przewalskii.trimmed -> 33588_przewalskii
+    2026-07-20 14:47:09 | INFO     | names.py             | 35236_rex.trimmed -> 35236_rex
+    2026-07-20 14:47:09 | INFO     | names.py             | 35855_rex.trimmed -> 35855_rex
+    2026-07-20 14:47:09 | INFO     | names.py             | 38362_rex.trimmed -> 38362_rex
+    2026-07-20 14:47:09 | INFO     | names.py             | 39618_rex.trimmed -> 39618_rex
+    2026-07-20 14:47:09 | INFO     | names.py             | 40578_rex.trimmed -> 40578_rex
+    2026-07-20 14:47:09 | INFO     | names.py             | 41478_cyathophylloides.trimmed -> 41478_cyathophylloides
+    2026-07-20 14:47:09 | INFO     | names.py             | 41954_cyathophylloides.trimmed -> 41954_cyathophylloides
+    2026-07-20 14:47:09 | INFO     | mapper.py            | indexing reference: denovo_reference.fa
+    2026-07-20 14:47:14 | INFO     | mapper.py            | mapping 13 samples to coordinate-sorted BAMs in /home/deren/Documents/tools/ipyrad2/SRP021469/MAP
+    2026-07-20 14:47:14 | INFO     | mapper.py            | using up to 12 cores (up to 3 multi-threaded jobs using 4 threads)
+    [####################] 100% | Mapping - total jobs: 13
+    [####################] 100% | Gathering mapping stats - total jobs: 13
+    2026-07-20 14:50:41 | INFO     | mapper.py            | mapping stats written to /home/deren/Documents/tools/ipyrad2/SRP021469/MAP/ipyrad_map_stats_0.txt and /home/deren/Documents/tools/ipyrad2/SRP021469/MAP/ipyrad_map_stats_0.json
+    ```
 
-```literal
-2026-07-20 14:47:09 | INFO     | cli_main.py          | --------------------------------------------------------------
-2026-07-20 14:47:09 | INFO     | cli_main.py          | ----- ipyrad2 map: map reads and write coordinate-sorted BAMs -----
-2026-07-20 14:47:09 | INFO     | cli_main.py          | --------------------------------------------------------------
-2026-07-20 14:47:09 | INFO     | cli_main.py          | CMD: ipyrad2 map -d SRP021469/TRIM/29154_superba.trimmed.fastq.gz SRP021469/TRIM/30556_thamno.trimmed.fastq.gz SRP021469/TRIM/30686_cyathophylla.trimmed.fastq.gz SRP021469/TRIM/32082_przewalskii.trimmed.fastq.gz SRP021469/TRIM/33413_thamno.trimmed.fastq.gz ...[truncated; 13 total matched paths] -r SRP021469/DENOVO/denovo_reference.fa -o SRP021469/MAP/ -c 12 -t 4
-2026-07-20 14:47:09 | INFO     | names.py             | failed to pair files, assuming data in single-end
-2026-07-20 14:47:09 | INFO     | names.py             | parsed names by stripping known file suffixes
-2026-07-20 14:47:09 | INFO     | names.py             | showing first 10/13 names parsed from file paths
-2026-07-20 14:47:09 | INFO     | names.py             | 29154_superba.trimmed          <- 29154_superba.trimmed.fastq.gz
-2026-07-20 14:47:09 | INFO     | names.py             | 30556_thamno.trimmed           <- 30556_thamno.trimmed.fastq.gz
-2026-07-20 14:47:09 | INFO     | names.py             | 30686_cyathophylla.trimmed     <- 30686_cyathophylla.trimmed.fastq.gz
-2026-07-20 14:47:09 | INFO     | names.py             | 32082_przewalskii.trimmed      <- 32082_przewalskii.trimmed.fastq.gz
-2026-07-20 14:47:09 | INFO     | names.py             | 33413_thamno.trimmed           <- 33413_thamno.trimmed.fastq.gz
-2026-07-20 14:47:09 | INFO     | names.py             | 33588_przewalskii.trimmed      <- 33588_przewalskii.trimmed.fastq.gz
-2026-07-20 14:47:09 | INFO     | names.py             | 35236_rex.trimmed              <- 35236_rex.trimmed.fastq.gz
-2026-07-20 14:47:09 | INFO     | names.py             | 35855_rex.trimmed              <- 35855_rex.trimmed.fastq.gz
-2026-07-20 14:47:09 | INFO     | names.py             | 38362_rex.trimmed              <- 38362_rex.trimmed.fastq.gz
-2026-07-20 14:47:09 | INFO     | names.py             | 39618_rex.trimmed              <- 39618_rex.trimmed.fastq.gz
-2026-07-20 14:47:09 | INFO     | names.py             | normalized 13 parsed FASTQ sample name(s) by stripping recognized workflow suffixes
-2026-07-20 14:47:09 | INFO     | names.py             | 29154_superba.trimmed -> 29154_superba
-2026-07-20 14:47:09 | INFO     | names.py             | 30556_thamno.trimmed -> 30556_thamno
-2026-07-20 14:47:09 | INFO     | names.py             | 30686_cyathophylla.trimmed -> 30686_cyathophylla
-2026-07-20 14:47:09 | INFO     | names.py             | 32082_przewalskii.trimmed -> 32082_przewalskii
-2026-07-20 14:47:09 | INFO     | names.py             | 33413_thamno.trimmed -> 33413_thamno
-2026-07-20 14:47:09 | INFO     | names.py             | 33588_przewalskii.trimmed -> 33588_przewalskii
-2026-07-20 14:47:09 | INFO     | names.py             | 35236_rex.trimmed -> 35236_rex
-2026-07-20 14:47:09 | INFO     | names.py             | 35855_rex.trimmed -> 35855_rex
-2026-07-20 14:47:09 | INFO     | names.py             | 38362_rex.trimmed -> 38362_rex
-2026-07-20 14:47:09 | INFO     | names.py             | 39618_rex.trimmed -> 39618_rex
-2026-07-20 14:47:09 | INFO     | names.py             | 40578_rex.trimmed -> 40578_rex
-2026-07-20 14:47:09 | INFO     | names.py             | 41478_cyathophylloides.trimmed -> 41478_cyathophylloides
-2026-07-20 14:47:09 | INFO     | names.py             | 41954_cyathophylloides.trimmed -> 41954_cyathophylloides
-2026-07-20 14:47:09 | INFO     | mapper.py            | indexing reference: denovo_reference.fa
-2026-07-20 14:47:14 | INFO     | mapper.py            | mapping 13 samples to coordinate-sorted BAMs in /home/deren/Documents/tools/ipyrad2/SRP021469/MAP
-2026-07-20 14:47:14 | INFO     | mapper.py            | using up to 12 cores (up to 3 multi-threaded jobs using 4 threads)
-[####################] 100% | Mapping - total jobs: 13
-[####################] 100% | Gathering mapping stats - total jobs: 13
-2026-07-20 14:50:41 | INFO     | mapper.py            | mapping stats written to /home/deren/Documents/tools/ipyrad2/SRP021469/MAP/ipyrad_map_stats_0.txt and /home/deren/Documents/tools/ipyrad2/SRP021469/MAP/ipyrad_map_stats_0.json
-```
-
-#### stats
+### map stats
 
 The human-readable stats file from `map` is important to read as it provides some useful guidance on the parameter settings
 that should be used in the next step.
 
 First, we can see in the `## Applied mapping summary` section that between 74-92\% of reads were successfully mapped to the pseudoreference.
 However, not that this does not yet indicate how well these reads mapped. We will apply a number of filters to only keep reads that mapped uniquely and accurately to loci in the reference. The next section `## Assemble read-filter preview` shows us how the filters that will be applied in the next step (assemble) will affect the mapping. This shows that 88-94\% of reads will pass filtering, suggesting that these filters are not too strict. This is further reinforced by the next section `## Preview metric summaries` which shows that the MAPQ scores of these reads are generally very high (>50), with few soft clipped bases (<5) and low edit distances to the reference (<2).
-
 
 ```bash
 cat ./SRP021469/MAP/ipyrad_map_stats_0.txt
@@ -654,8 +641,6 @@ alignments to keep only confidently mapped reads, which are then used to delimit
 across samples, make variant calls, filter for paralogy, and write the final locus alignments into a database and several
 output files. A verbose stats file is also produced.
 
-#### run
-
 Here we indicate one or more paths to BAM files as the data input (-d); a path to the reference FASTA (-r);
 a path to store the outputs (-o); and a prefix name for the results (-n). We also show two of the most commonly
 changed parameter settings, `-m/--min-locus-sample-coverage`, `-s/--min-sample-depth`, and `-qm/--min-map-q`.
@@ -675,9 +660,9 @@ ipyrad2 assemble \
   -c 12 -t 4
 ```
 
-#### stats
+### assemble stats
 
-The stats
+The stats ...
 
 ```literal
 CMD: ipyrad2 assemble -d SRP021469/MAP/29154_superba.trimmed.sorted.bam SRP021469/MAP/30556_thamno.trimmed.sorted.bam SRP021469/MAP/30686_cyathophylla.trimmed.sorted.bam SRP021469/MAP/32082_przewalskii.trimmed.sorted.bam ...[truncated; 13 total matched paths] -r SRP021469/DENOVO/denovo_reference.fa -o SRP021469/OUT -n assembly -qm 40 -c 12 -t 4
@@ -759,6 +744,7 @@ Samples with data  RAD loci before min sample coverage  RAD loci after min sampl
 
 ```
 
+### assembly outputs
 #### loci
 
 ```bash
@@ -1088,114 +1074,68 @@ total 37M
 
 ## Analysis
 
-This dataset is used as an example for each tool in the Analysis section. Below I show just one example
-of using the window extracter (wex) tool filter and write a concatenated alignment, followed by raxml-ng
-to infer a ML phylogenetic tree.
+This dataset can be used with the tools in the Analysis section. The example
+below uses Seqex to filter the assembled loci, concatenate them into a
+supermatrix, and infer a maximum-likelihood tree with RAxML-NG.
 
-### window-extracter (wex)
+### Extract and concatenate loci with Seqex
 
-```bash
-ipyrad2 wex \
-  -d SRP021469/OUT/assembly.hdf5 \
-  -o SRP021469/output-wex \
-  -n assembly_min8 \
-  -m 8 \
-  -r 0.9
-```
-
-```literal
-2026-07-20 16:59:25 | INFO     | cli_analysis.py      | -------------------------------------------------------
-2026-07-20 16:59:25 | INFO     | cli_analysis.py      | ----- ipyrad2 wex: extract alignments from windows -----
-2026-07-20 16:59:25 | INFO     | cli_analysis.py      | -------------------------------------------------------
-2026-07-20 16:59:25 | INFO     | cli_analysis.py      | CMD: ipyrad2 wex -d SRP021469/OUT/assembly.hdf5 -m 8 -o SRP021469/output-wex -n assembly_min8 -r 0.9
-2026-07-20 16:59:25 | INFO     | window_extracter.py  | No windows specified; selecting the full length of all scaffolds. Use -w to subset scaffold windows and -P to view scaffold names.
-2026-07-20 16:59:25 | INFO     | window_extracter.py  | selected 45448 windows from 45448 scaffolds
-2026-07-20 16:59:43 | INFO     | window_extracter.py  | wrote alignment (13, 1965012) to: /home/deren/Documents/tools/ipyrad2/SRP021469/output-wex/assembly_min8.phy
-2026-07-20 16:59:43 | INFO     | window_extracter.py  | wrote stats/log to: /home/deren/Documents/tools/ipyrad2/SRP021469/output-wex/assembly_min8.stats.txt
-```
-
-This generated an alignment that is 13 taxa x 1.96M sites. Examining the stats file we can see additional information.
+This command retains sites represented by at least eight samples, removes any
+sample with more than 90% missing data, and uses `-C` to concatenate the
+filtered loci into a PHYLIP alignment.
 
 ```bash
-cat SRP021469/output-wex/assembly_min8.stats.txt
+ipyrad2 seqex \
+    -d SRP021469/OUT/assembly.hdf5 \
+    -o SRP021469/output-seqex \
+    -n assembly_min8 \
+    -m 8 \
+    -r 0.9 \
+    -C
 ```
 
-```literal
-CMD: ipyrad2 wex -d SRP021469/OUT/assembly.hdf5 -m 8 -o SRP021469/output-wex -n assembly_min8 -r 0.9
+Because no `-w` selection is provided, Seqex samples all complete loci. This
+is appropriate for this de novo assembly, where each RAD locus is stored on a
+separate scaffold. The run writes a 13-sample alignment with 1,965,012 sites,
+along with human-readable and machine-readable statistics:
 
-# Extract Summary
-infile                    SRP021469/OUT/assembly.hdf5
-outfile                   /home/deren/Documents/tools/ipyrad2/SRP021469/output-wex/assembly_min8.phy
-out_format                phy
-windows_selected          45,448
-selected_windows_preview  locus_1_1:1-69, locus_2_1:1-69, locus_3_1:1-72, locus_4_25:1-71, locus_5_1:1-69, locus_6_1:1-69, locus_7_1:1-69, locus_8_1:1-69, locus_9_1:1-62, locus_10_1:1-69, ... (45448 total)
-
-# Filtering Summary
-populations                     all
-min_sample_coverage_filter      all=8
-max_sample_missing              0.900000
-samples_selected_initial        13
-samples_dropped_by_max_missing  0
-samples_final                   13
-
-# Alignment Summary
-nsamples_before_filtering              13
-nsites_in_windows_before_filtering     3,100,317
-nvariants_in_windows_before_filtering  183,379
-nsamples_after_filtering               13
-nsites_in_windows_after_filtering      1,965,012
-nvariants_in_windows_after_filtering   126,655
-
-# Sample Summary
-sample                  population  percent_missing  dropped_by_max_missing
-29154_superba           all         26.241           no
-30556_thamno            all         6.652            no
-30686_cyathophylla      all         14.528           no
-32082_przewalskii       all         49.630           no
-33413_thamno            all         33.084           no
-33588_przewalskii       all         43.547           no
-35236_rex               all         4.721            no
-35855_rex               all         4.861            no
-38362_rex               all         4.950            no
-39618_rex               all         13.964           no
-40578_rex               all         3.844            no
-41478_cyathophylloides  all         6.613            no
-41954_cyathophylloides  all         10.684           no
+```bash
+less SRP021469/output-seqex/assembly_min8.stats.txt
 ```
 
-Now that have written a concatenated phylip file with the supermatrix alignment we can run a tree inference tool on it, such as `raxml-ng` below.
+The report describes the filtering settings, output layout, number of written
+loci, total bases, overall non-missing occupancy, per-sample occupancy, and
+per-locus statistics. The corresponding `.stats.json` file contains the same
+data in a machine-readable form.
 
-### raxml-ng concatenation tree
+### Infer a concatenation tree with RAxML-NG
 
-Here we use `raxml-ng` to infer a phylogenetic tree from the supermatrix alignment generated by `wex`. We specify the `--all` option which will perform a tree search and bootstrap analysis to calculate support values. We specify the input (`--msa`) as the phy file produced in the previous step, indicate the substitution model choice, here using the common default `GTR+G`, and tell it to perform 100 non-parametric bootstrap replicate searches (`--bs-trees`). This will likely take 20 minutes or more to run.
+Use the concatenated PHYLIP alignment as the RAxML-NG input. The `--all`
+workflow performs a tree search and bootstrap analysis, and `--bs-trees 100`
+requests 100 non-parametric bootstrap replicates.
 
 ```bash
 raxml-ng \
     --all \
-    --msa SRP021469/output-wex/assembly_min8.phy \
+    --msa SRP021469/output-seqex/assembly_min8.phy \
     --model GTR+G \
     --bs-trees 100 \
     --workers 2
 ```
 
-When it finishes you an examine the results by plotting a tree. The default result files are saved to the same folder as the input file.
-One easy way to plot a tree is using [`toytree`](https://eaton-lab.org/toytree/), which can plot trees either in the terminal, or as high quality vector graphics in formats like PDF. It can also be used to perform operations on a tree, such as re-rooting on an outgroup, as shown below.
-
-Let's start by rooting the tree on an outgroup, which in this case is the taxa labeled 'przewalksii'.
+The result files are written beside the input alignment. The following commands
+root the support tree on the *przewalskii* samples and display it in the
+terminal with [Toytree](https://eaton-lab.org/toytree/).
 
 ```bash
 toytree root \
-    -i SRP021469/output-wex/assembly_min8.phy.raxml.support \
-    -o SRP021469/output-wex/assembly_min8.phy.raxml.support.rooted \
+    -i SRP021469/output-seqex/assembly_min8.phy.raxml.support \
+    -o SRP021469/output-seqex/assembly_min8.phy.raxml.support.rooted \
     -n "~prz" \
     --mad
-```
 
-Then we can print a tree visualization to the terminal:
-
-```bash
 toytree view \
-    -i SRP021469/output-wex/assembly_min8.phy.raxml.support.rooted \
+    -i SRP021469/output-seqex/assembly_min8.phy.raxml.support.rooted \
     --ladderize
 ```
 
@@ -1227,23 +1167,15 @@ toytree view \
                                   └──39618_rex
 ```
 
-Or generate a high quality PDF tree visualization and open it externally:
+To create a PDF instead, draw the rooted tree directly:
 
 ```bash
 toytree draw \
-    -i SRP021469/output-wex/assembly_min8.phy.raxml.support.rooted \
-    -o SRP021469/output-wex/assembly_min8.phy.raxml.support.rooted.pdf \
-    --node-labels 'support' \
+    -i SRP021469/output-seqex/assembly_min8.phy.raxml.support.rooted \
+    -o SRP021469/output-seqex/assembly_min8.phy.raxml.support.rooted.pdf \
+    --node-labels support \
     --ladderize
 ```
-
-Or you can open a python or jupyter session and use toytree interactively in Python to generate
-a tree figure with many more styling options. See the toytree docs.
-
-
-## EXIT
-
-
 ### treeslider tree set
 
 Another useful phylogenetic analysis is to infer a *species tree* using ASTRAL. Here, you must first infer a gene tree

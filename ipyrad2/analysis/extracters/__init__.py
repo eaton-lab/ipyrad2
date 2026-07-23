@@ -3,20 +3,16 @@
 from importlib import import_module
 
 __all__ = [
-    "LocusExtracter",
+    "SeqexEngine",
     "SNPsExtracter",
-    "WindowExtracter",
-    "run_locus_extracter",
+    "run_seqex",
     "run_snps_extracter",
-    "run_window_extracter",
 ]
 
 
 _LAZY_EXPORTS = {
-    "WindowExtracter": (".window_extracter", "WindowExtracter"),
-    "run_window_extracter": (".window_extracter", "run_window_extracter"),
-    "LocusExtracter": (".locus_extracter", "LocusExtracter"),
-    "run_locus_extracter": (".locus_extracter", "run_locus_extracter"),
+    "SeqexEngine": (".seqex", "SeqexEngine"),
+    "run_seqex": (".seqex", "run_seqex"),
     "SNPsExtracter": (".snps_extracter", "SNPsExtracter"),
     "run_snps_extracter": (".snps_extracter", "run_snps_extracter"),
 }

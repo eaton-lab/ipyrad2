@@ -25,8 +25,6 @@ Interactive assembly and analysis of RAD-seq data
 """
 
 ANALYSIS_TOOL_NAMES = (
-    "wex",
-    "lex",
     "seqex",
     "snpex",
     "vcf2hdf5",
@@ -44,8 +42,6 @@ RESERVED_TOOL_NAMES = ()
 
 
 _PARSER_SPECS = {
-    "wex": (".cli_wex", "_setup_wex_subparser", "ipyrad2 wex: extract one alignment from selected genomic windows"),
-    "lex": (".cli_lex", "_setup_lex_subparser", "ipyrad2 lex: extract delimited loci from HDF5 database"),
     "seqex": (
         ".cli_seqex",
         "_setup_seqex_subparser",
@@ -65,8 +61,6 @@ _PARSER_SPECS = {
 
 
 _RUNTIME_RUNNERS = {
-    "wex": ("..analysis.extracters.window_extracter", "run_window_extracter"),
-    "lex": ("..analysis.extracters.locus_extracter", "run_locus_extracter"),
     "seqex": ("..analysis.extracters.seqex", "run_seqex"),
     "treeslider": ("..analysis.methods.treeslider", "run_treeslider_method"),
     "snpex": ("..analysis.extracters.snps_extracter", "run_snps_extracter"),
@@ -139,10 +133,6 @@ def _setup_analysis_tool_subparsers(
         else set(selected_tools)
     )
 
-    if "wex" in selected:
-        _setup_tool_subparser(subparsers, "wex", header)
-    if "lex" in selected:
-        _setup_tool_subparser(subparsers, "lex", header)
     if "seqex" in selected:
         _setup_tool_subparser(subparsers, "seqex", header)
     if "snpex" in selected:
@@ -174,64 +164,6 @@ def _tool_name(args) -> str:
 def run_analysis_tool(args, _exit: bool = True) -> None:
     """Dispatch one top-level export or analysis command."""
     tool = _tool_name(args)
-
-    if tool == "wex":
-        run_window_extracter = _load_runner(tool)
-        logged_command = format_logged_command(sys.argv[1:])
-        logger.info("-------------------------------------------------------")
-        logger.info("----- ipyrad2 wex: extract alignments from windows -----")
-        logger.info("-------------------------------------------------------")
-        logger.info(f"CMD: {logged_command}")
-        run_window_extracter(
-            data=args.data,
-            name=args.name,
-            outdir=args.out,
-            out_format=args.out_format,
-            windows=args.windows,
-            min_sample_coverage=args.min_sample_coverage,
-            max_sample_missing=args.max_sample_missing,
-            include_reference=args.include_reference,
-            imap=args.imap,
-            minmap=args.minmap,
-            exclude=args.exclude,
-            print_scaffold_table=args.print_scaffold_table,
-            stdout=args.stdout,
-            force=args.force,
-            logged_command=logged_command,
-        )
-        if _exit:
-            sys.exit(0)
-        return
-
-    if tool == "lex":
-        run_locus_extracter = _load_runner(tool)
-        logger.info("-------------------------------------------------------")
-        logger.info("---- ipyrad2 lex: extract delimited loci from HDF5 database ----")
-        logger.info("-------------------------------------------------------")
-        logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
-        run_locus_extracter(
-            data=args.data,
-            name=args.name,
-            outdir=args.out,
-            out_format=args.out_format,
-            nloci=args.max_loci,
-            random_seed=args.random_seed,
-            min_length=args.min_length,
-            windows=args.windows,
-            min_sample_coverage=args.min_sample_coverage,
-            max_sample_missing=args.max_sample_missing,
-            include_reference=args.include_reference,
-            imap=args.imap,
-            minmap=args.minmap,
-            exclude=args.exclude,
-            print_scaffold_table=args.print_scaffold_table,
-            concatenate=args.concatenate,
-            stdout=args.stdout,
-            force=args.force,
-        )
-        if _exit:
-            sys.exit(0)
-        return
 
     if tool == "seqex":
         run_seqex = _load_runner(tool)
@@ -386,6 +318,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
             max_iter=args.max_iter,
             n_neighbors=args.n_neighbors,
             plot=args.plot,
+            plot_format=args.plot_format,
             plot_width=args.plot_width,
             plot_height=args.plot_height,
             plot_marker_size=args.plot_marker_size,

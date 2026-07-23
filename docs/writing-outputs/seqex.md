@@ -1,16 +1,32 @@
 # seqex
 
-<code>ipyrad2 seqex</code> is an experimental exporter for complete,
-delimited loci in an assembly HDF5 file. It applies the same locus and site
-coverage requirements independently to every locus and can write accepted
+<code>ipyrad2 seqex</code> exports complete or coordinate-clipped delimited
+loci from an assembly HDF5 file. It applies locus and site coverage
+requirements independently to every selected unit and can write accepted
 loci as one multi-locus file, one concatenated matrix, or separate files.
 
-The established [lex](./lex.md) and [wex](./wex.md) commands remain
-available while the behavior and performance of seqex are evaluated.
+## Window selection and clipping
+
+The form of <code>-w/--windows</code> determines whether loci remain complete
+or are clipped automatically:
+
+- Omitting <code>-w</code> selects complete loci from every scaffold.
+- Scaffold names and regular expressions select complete overlapping loci.
+- <code>scaffold:start-end</code> regions clip loci to the exact 1-based,
+  inclusive interval boundaries.
+- BED files clip loci to each 0-based, half-open BED interval after coordinate
+  conversion.
+
+When one coordinate interval crosses several loci, each locus intersection is
+an independent unit. Two disjoint intervals within the same source locus also
+produce two independent clipped fragments. These units can be filtered,
+sampled with <code>-N</code>, concatenated, or written separately like complete
+loci.
 
 ## Filtering order
 
-For every complete locus selected by <code>-w/--windows</code>, seqex:
+For every complete locus or clipped fragment selected by
+<code>-w/--windows</code>, seqex:
 
 1. Counts a sample as present when it has at least one called base in the
    raw locus.
@@ -25,9 +41,6 @@ For every complete locus selected by <code>-w/--windows</code>, seqex:
 Both <code>-L</code> and <code>-N</code> are disabled by default. A random
 seed supplied with <code>-s</code> makes sampling reproducible. Randomly
 selected loci are written in their original genomic order.
-
-Regions and BED intervals select whole overlapping loci. They do not clip
-sequence at interval boundaries; use wex when exact clipping is required.
 
 ## Output layouts
 
@@ -48,7 +61,9 @@ Use <code>-X/--split</code> to write one file per accepted locus.
 output cannot be written to stdout.
 
 With an IMAP, <code>--append-population</code> changes output names to
-<code>sample^population</code>. Its short form is <code>-a</code>.
+<code>population^sample</code>. Its short form is <code>-a</code>. This
+ordering is compatible with BPP, which interprets the value after the caret
+as the individual identifier.
 
 ## Parallel filtering
 
@@ -65,6 +80,10 @@ the number of non-missing bases, and full-matrix non-missing occupancy.
 Full-matrix occupancy treats a sample omitted from a retained locus as
 missing. A per-sample table reports population, final output status, loci
 written, loci removed by <code>-r</code>, non-missing bases, and occupancy.
+The summary records the clipping mode and selected windows. Each written-locus
+row records the source locus, selected window, output coordinates, and whether
+the sequence was clipped. The same structured fields are available in the
+JSON report.
 
 Completion messages describe whether loci were written as independent
 records, concatenated into one alignment, or split among separate files.
@@ -97,8 +116,30 @@ Write one PHYLIP file per locus overlapping two scaffolds:
 ipyrad2 seqex -d assembly.hdf5 -w Chr01 Chr02 -X
 ~~~
 
+Write one concatenated alignment clipped to exact BED intervals:
+
+~~~bash
+ipyrad2 seqex -d assembly.hdf5 -w windows.bed -C -O phy
+~~~
+
+## Migrating from lex
+
+The former <code>lex</code> command has been removed. Use
+<code>seqex</code> for complete-locus exports:
+
+| Former lex behavior | seqex replacement |
+| --- | --- |
+| Default sample of 100 loci at least 150 bp long | Add <code>-N 100 -L 150</code> |
+| One file per locus | Add <code>-X/--split</code> |
+| One multi-locus PHYLIP file | Use the default layout with <code>-O phy</code> |
+| Concatenated alignment | Add <code>-C/--concatenate</code> |
+| BPP-formatted multi-locus data | Use <code>-O phy -i IMAP -a</code> |
+
+Unlike lex, seqex leaves <code>-N</code> and <code>-L</code> disabled by
+default and writes independent loci into one file unless <code>-C</code> or
+<code>-X</code> is selected. It also supports FASTA output, parallel
+filtering with <code>-c</code>, and both human-readable and JSON statistics.
+
 ## See also
 
 - [Writing Outputs](./index.md)
-- [lex](./lex.md)
-- [wex](./wex.md)

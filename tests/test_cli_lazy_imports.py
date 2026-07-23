@@ -12,20 +12,13 @@ import ipyrad2.cli.cli_main as cli_main
 
 ROOT = Path(__file__).resolve().parents[1]
 HEAVY_MODULES = (
-    "ipyrad2.analysis.extracters.window_extracter",
+    "ipyrad2.analysis.extracters.seqex",
     "ipyrad2.analysis.methods.baba.runner",
     "ipyrad2.analysis.methods.bpp",
     "ipyrad2.analysis.methods.popgen.runner",
     "requests",
     "toytree",
 )
-UNRELATED_WEX_HELP_MODULES = (
-    "ipyrad2.cli.cli_bpp",
-    "ipyrad2.cli.cli_popgen",
-    "ipyrad2.analysis.methods.popgen.models",
-)
-
-
 def _loaded_modules(script_body: str, module_names: tuple[str, ...]) -> Set[str]:
     code = "\n".join(
         [
@@ -69,25 +62,9 @@ def test_building_one_analysis_parser_keeps_other_heavy_runtimes_unloaded() -> N
         "buf = io.StringIO()\n"
         "try:\n"
         "    with contextlib.redirect_stdout(buf):\n"
-        "        command_line(['wex', '-h'])\n"
+        "        command_line(['seqex', '-h'])\n"
         "except SystemExit:\n"
         "    pass"
-    )
-    assert loaded == set()
-
-
-def test_wex_help_imports_only_the_requested_analysis_parser_path() -> None:
-    loaded = _loaded_modules(
-        "import contextlib\n"
-        "import io\n"
-        "from ipyrad2.cli.cli_main import command_line\n"
-        "buf = io.StringIO()\n"
-        "try:\n"
-        "    with contextlib.redirect_stdout(buf):\n"
-        "        command_line(['wex', '-h'])\n"
-        "except SystemExit:\n"
-        "    pass",
-        UNRELATED_WEX_HELP_MODULES,
     )
     assert loaded == set()
 
@@ -105,62 +82,6 @@ def test_baba_help_keeps_runtime_and_toytree_unloaded() -> None:
         "    pass"
     )
     assert loaded == set()
-
-
-def test_run_subcommand_lazily_imports_analysis_runner(monkeypatch) -> None:
-    args = cli_main.setup_parsers().parse_args(["wex", "-d", "assembly.hdf5"])
-    calls: list[dict] = []
-    real_import_module = cli_analysis.importlib.import_module
-
-    def fake_import_module(name, package=None):
-        if name == "..analysis.extracters.window_extracter":
-            return SimpleNamespace(
-                run_window_extracter=lambda **kwargs: calls.append(kwargs)
-            )
-        return real_import_module(name, package)
-
-    monkeypatch.setattr(cli_analysis.importlib, "import_module", fake_import_module)
-    monkeypatch.setattr(cli_main.sys, "argv", ["ipyrad2", "wex", "-d", "assembly.hdf5"])
-
-    cli_main.run_subcommand(args, _exit=False)
-
-    assert len(calls) == 1
-    assert calls[0]["data"] == Path("assembly.hdf5")
-    assert calls[0]["logged_command"] == "ipyrad2 wex -d assembly.hdf5"
-
-
-def test_run_subcommand_passes_lex_concatenation_options(monkeypatch) -> None:
-    argv = [
-        "lex",
-        "-d",
-        "assembly.hdf5",
-        "-n",
-        "dataset",
-        "-N",
-        "25",
-        "-s",
-        "123",
-        "-C",
-    ]
-    args = cli_main.setup_parsers().parse_args(argv)
-    calls: list[dict] = []
-    real_import_module = cli_analysis.importlib.import_module
-
-    def fake_import_module(name, package=None):
-        if name == "..analysis.extracters.locus_extracter":
-            return SimpleNamespace(run_locus_extracter=lambda **kwargs: calls.append(kwargs))
-        return real_import_module(name, package)
-
-    monkeypatch.setattr(cli_analysis.importlib, "import_module", fake_import_module)
-    monkeypatch.setattr(cli_main.sys, "argv", ["ipyrad2", *argv])
-
-    cli_main.run_subcommand(args, _exit=False)
-
-    assert len(calls) == 1
-    assert calls[0]["name"] == "dataset"
-    assert calls[0]["nloci"] == 25
-    assert calls[0]["random_seed"] == 123
-    assert calls[0]["concatenate"] is True
 
 
 def test_run_subcommand_passes_seqex_parallel_options(monkeypatch) -> None:
