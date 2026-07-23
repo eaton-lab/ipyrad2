@@ -4,7 +4,9 @@
 used inside `ipyrad2`, and it can also write external-tool formats such as PLINK, PHYLIP,
 NEXUS, FASTA, TreeMix, and EEMS from the same selected SNP view.
 
-This is the SNP export command to use when you need explicit control over missing-data handling, linked versus unlinked SNPs, population-aware filtering with `imap` and `minmap`, or files for software outside the built-in `analysis` commands.
+This is the SNP export command to use when you need explicit control over missing-data handling,
+linked versus unlinked SNPs, population-aware filtering with `imap` and `minmap`, or files for
+software outside the built-in `analysis` commands.
 
 ## When to Use
 
@@ -15,17 +17,10 @@ Use `snpex` when you need SNP files for software outside ipyrad2, such as:
 - TreeMix population-count input
 - EEMS genetic dissimilarity input
 
-If you are staying inside `ipyrad2 analysis`, the built-in methods already apply similar filtering and organize their own inputs internally, so you usually do not need `snpex`.
-
-## Prerequisites
-
-- an SNP-capable HDF5 file produced by `assemble` or `analysis vcf-to-hdf5`
-- a filtering strategy for samples, populations, and linked versus unlinked SNPs
-- a reference-aware HDF5 if you want PLINK export or global SNP imputation
+If you are using analysis tools inside `ipyrad2`, sich as its `pca`, `popgen`, `baba`, and related tools,
+you do not need to use `snpex` as its filtering options are implemented within those commands directly.
 
 ## Inputs and Filtering
-
-`snpex` starts from one SNP-capable HDF5 and applies the same SNP filtering logic used by the built-in numerical methods.
 
 - `-d, --data`: input SNP HDF5
 - `-m, --min-sample-coverage`: minimum number of samples with data required at a SNP
@@ -40,14 +35,14 @@ By default `snpex` writes one SNP per RAD locus. Use `--no-subsample` to keep li
 
 ## Imputation
 
-By default `snpex` preserves missing genotypes. If you pass `--impute-method`, imputation is applied once before any outputs are written, and every written format uses that same imputed SNP view.
+By default `snpex` preserves missing genotypes. If you pass `--impute-method`, imputation is applied
+once before any outputs are written, and every written format uses that same imputed SNP view.
 
 Supported imputation modes are:
 
 - `sample`: sample missing diploid genotypes from within-group allele frequencies
 - `zero-fill`: replace missing genotypes with homozygous reference calls
 
-Because `snpex` always writes both diploid genotypes and SNP character matrices, global SNP imputation requires the HDF5 `reference` dataset so the imputed character matrix can be rebuilt consistently.
 
 ## Core Outputs
 
@@ -79,7 +74,7 @@ Use one or more per-format flags to add external-tool files:
 
 ### PLINK
 
-PLINK export writes BED/BIM/FAM from the selected SNP view. It requires the HDF5 `reference` dataset because the BIM file must name the reference and alternate alleles.
+PLINK export writes BED/BIM/FAM from the selected SNP view.
 
 ### PHYLIP, NEXUS, and FASTA
 
@@ -111,38 +106,38 @@ This command does not write the spatial `.coord` or habitat `.outer` files. Thos
 
 ## Common Patterns
 
-### Baseline unlinked SNP export
-
-```bash
-ipyrad2 analysis snpex \
-  -d assembly.hdf5 \
-  -o SNP_OUT/
-```
-
-### Keep linked SNPs and write PLINK plus phylogenetic alignments
+### filter for missing data and write unlinked SNPs matrix
 
 ```bash
 ipyrad2 analysis snpex \
   -d assembly.hdf5 \
   -o SNP_OUT/ \
+  -m 10
+```
+
+### filter for missing data and write linked SNPs to PLINK format
+
+```bash
+ipyrad2 analysis snpex \
+  -d assembly.hdf5 \
+  -o SNP_OUT/ \
+  -m 10 \
   --no-subsample \
   --plink \
-  --phylip \
-  --nexus
 ```
 
-### Apply one imputation method to every written output
+### filter, impute, and write to FASTA
 
 ```bash
 ipyrad2 analysis snpex \
   -d assembly.hdf5 \
   -o SNP_OUT/ \
-  --plink \
-  --fasta \
-  --impute-method sample
+  -m 10 \
+  --impute-method sample \
+  --fasta
 ```
 
-### Export a population-filtered TreeMix dataset
+### filter and impute population-aware and write to TREEMIX
 
 ```bash
 ipyrad2 analysis snpex \
@@ -151,17 +146,6 @@ ipyrad2 analysis snpex \
   -i pops.tsv \
   -g minmap.tsv \
   --treemix
-```
-
-### Export an EEMS genetic matrix from the same filtered SNP set
-
-```bash
-ipyrad2 analysis snpex \
-  -d assembly.hdf5 \
-  -o SNP_OUT/ \
-  -i pops.tsv \
-  -g minmap.tsv \
-  --eems
 ```
 
 ## Common Failures
