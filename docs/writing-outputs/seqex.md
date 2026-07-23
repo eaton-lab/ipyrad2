@@ -1,9 +1,9 @@
 # seqex
 
-<code>ipyrad2 seqex</code> exports complete or coordinate-clipped delimited
-loci from an assembly HDF5 file. It applies locus and site coverage
-requirements independently to every selected unit and can write accepted
-loci as one multi-locus file, one concatenated matrix, or separate files.
+<code>ipyrad2 seqex</code> exports sequence alignments from an assembly
+HDF5 file. It applies locus and site coverage filters independently to
+every selected locus and can write accepted loci as one multi-locus file,
+one concatenated matrix, or separate files for each locus.
 
 ## Window selection and clipping
 
@@ -80,10 +80,11 @@ the number of non-missing bases, and full-matrix non-missing occupancy.
 Full-matrix occupancy treats a sample omitted from a retained locus as
 missing. A per-sample table reports population, final output status, loci
 written, loci removed by <code>-r</code>, non-missing bases, and occupancy.
-The summary records the clipping mode and selected windows. Each written-locus
-row records the source locus, selected window, output coordinates, and whether
-the sequence was clipped. The same structured fields are available in the
-JSON report.
+The summary records the clipping mode and the original values passed to
+<code>-w/--windows</code>, without expanding regexes or BED files. Each
+written-locus row records the source locus, resolved selected window, output
+coordinates, and whether the sequence was clipped. The same structured fields
+are available in the JSON report.
 
 Completion messages describe whether loci were written as independent
 records, concatenated into one alignment, or split among separate files.
@@ -121,24 +122,6 @@ Write one concatenated alignment clipped to exact BED intervals:
 ~~~bash
 ipyrad2 seqex -d assembly.hdf5 -w windows.bed -C -O phy
 ~~~
-
-## Migrating from lex
-
-The former <code>lex</code> command has been removed. Use
-<code>seqex</code> for complete-locus exports:
-
-| Former lex behavior | seqex replacement |
-| --- | --- |
-| Default sample of 100 loci at least 150 bp long | Add <code>-N 100 -L 150</code> |
-| One file per locus | Add <code>-X/--split</code> |
-| One multi-locus PHYLIP file | Use the default layout with <code>-O phy</code> |
-| Concatenated alignment | Add <code>-C/--concatenate</code> |
-| BPP-formatted multi-locus data | Use <code>-O phy -i IMAP -a</code> |
-
-Unlike lex, seqex leaves <code>-N</code> and <code>-L</code> disabled by
-default and writes independent loci into one file unless <code>-C</code> or
-<code>-X</code> is selected. It also supports FASTA output, parallel
-filtering with <code>-c</code>, and both human-readable and JSON statistics.
 
 ## See also
 

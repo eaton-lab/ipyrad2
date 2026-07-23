@@ -149,12 +149,14 @@ def test_seqex_filters_locus_then_sites_and_writes_multilocus_fasta(
     assert "non_missing_occupancy: 1.000000" in stats
     assert "max_samples: 2" in stats
     assert "mean_samples: 2.000000" in stats
+    assert "selected_windows: none\n" in stats
     assert "\t" not in stats
     assert "sample  population  written_final" in stats
     assert "locus_index  locus" in stats
     stats_json = json.loads((tmp_path / "OUT" / "alignment.stats.json").read_text())
     assert stats_json["seqex_summary"]["output_layout"] == "multi-locus"
     assert stats_json["seqex_summary"]["max_loci"] is None
+    assert stats_json["seqex_summary"]["selected_windows"] is None
     assert stats_json["output_summary"]["max_samples"] == 2
     assert stats_json["output_summary"]["mean_samples"] == 2.0
     assert stats_json["sample_occupancy"][0]["written_final"] is True
@@ -543,6 +545,14 @@ def test_seqex_mixed_scaffold_and_coordinate_selectors_clip_independently(
 
     assert [locus.spec.label for locus in loci] == ["chr1:1-4", "chr2:2-3"]
     assert [locus.spec.clipped for locus in loci] == [False, True]
+    stats_text = (tmp_path / "OUT" / "alignment.stats.txt").read_text()
+    stats_json = json.loads((tmp_path / "OUT" / "alignment.stats.json").read_text())
+    assert "selected_windows: chr1, chr2:2-3\n" in stats_text
+    assert "selected_windows: chr1:1-4, chr2:2-3\n" not in stats_text
+    assert stats_json["seqex_summary"]["selected_windows"] == [
+        "chr1",
+        "chr2:2-3",
+    ]
 
 
 def test_seqex_expands_imap_globs_and_applies_minmap(tmp_path: Path) -> None:

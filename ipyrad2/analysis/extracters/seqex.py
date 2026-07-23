@@ -356,6 +356,12 @@ class SeqexEngine:
         self.logged_command = logged_command
         self.cores = int(cores)
         self.log_level = str(log_level)
+        if windows is None:
+            self.requested_windows = None
+        elif isinstance(windows, str):
+            self.requested_windows = [windows]
+        else:
+            self.requested_windows = [str(window) for window in windows]
         if clip not in (None, True, False):
             raise IPyradError("clip must be one of None, True, or False.")
         self.clip = clip
@@ -766,13 +772,7 @@ class SeqexEngine:
                 else "never"
             ),
             "coordinate_clipping_applied": self.coordinate_clipping_applied,
-            "selected_windows": [
-                {
-                    "window": window.label,
-                    "explicit_coordinates": window.explicit_coordinates,
-                }
-                for window in self.selected_windows
-            ],
+            "selected_windows": self.requested_windows,
         }
         partition_map = {row["locus"]: row for row in partitions}
         locus_rows = []
@@ -797,6 +797,13 @@ class SeqexEngine:
                 }
             )
 
+        if self.requested_windows is None:
+            selected_windows_text = "none"
+        elif self.requested_windows:
+            selected_windows_text = ", ".join(self.requested_windows)
+        else:
+            selected_windows_text = "[]"
+
         lines = ["# Seqex Summary\n"]
         if self.logged_command:
             lines.append(f"command: {self.logged_command}\n")
@@ -813,9 +820,7 @@ class SeqexEngine:
                 "coordinate_clipping_applied: "
                 f"{str(self.coordinate_clipping_applied).lower()}\n",
                 f"windows_selected: {len(self.selected_windows)}\n",
-                "selected_windows: "
-                + ", ".join(window.label for window in self.selected_windows)
-                + "\n",
+                f"selected_windows: {selected_windows_text}\n",
             ]
         )
         lines.extend(f"{key}: {value}\n" for key, value in self.counts.items())
