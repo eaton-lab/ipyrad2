@@ -426,17 +426,15 @@ def test_baba_help_groups_examples_and_tree_controls_are_present() -> None:
     assert help_text.index("-h, --help") > help_text.index("Logging:")
 
 
-def test_bpp_help_groups_examples_and_runtime_controls_are_present() -> None:
+def test_bpp_help_is_grouped_concise_and_uses_the_new_interface() -> None:
     help_text = _get_tool_parser("bpp").format_help()
 
     expected_sections = [
-        "Core inputs:",
-        "Locus sampling:",
-        "Model selection:",
-        "Priors:",
-        "Rate variation:",
-        "MCMC sampler:",
-        "Runtime:",
+        "Input and output:",
+        "Analysis model:",
+        "Evolutionary models and priors:",
+        "MCMC and execution:",
+        "Additional output options:",
         "Logging:",
     ]
     positions = [help_text.index(section) for section in expected_sections]
@@ -444,36 +442,43 @@ def test_bpp_help_groups_examples_and_runtime_controls_are_present() -> None:
 
     expected_order = [
         "-d, --data",
-        "-o, --out",
-        "-n, --name",
-        "--tree",
+        "-t, --tree",
         "-i, --imap",
         "-g, --minmap",
         "-N, --max-loci",
         "-L, --min-length",
-        "--msc-i",
-        "--msc-m",
-        "--speciestree",
-        "--speciesdelimitation",
-        "--thetaprior",
-        "--tauprior",
-        "--speciesmodelprior",
-        "--phiprior",
-        "--wprior",
-        "--alphaprior",
-        "--locusrate",
+        "--analysis",
+        "--migration",
+        "--species-model-prior",
+        "--delimitation-proposal",
+        "--constraint-file",
+        "--theta-prior",
+        "--tau-prior",
+        "--phi-prior",
+        "--w-prior",
+        "--substitution-model",
+        "--alpha-prior",
+        "--locus-rate",
         "--clock",
+        "--theta-model",
+        "--clean-data",
         "--burnin",
         "--samplefreq",
         "--nsample",
         "--threads",
-        "--seed",
+        "--locus-seed",
+        "--mcmc-seed",
+        "--checkpoint",
+        "--bpp-binary",
+        "--print-locus-rates",
+        "--print-gene-trees",
+        "--print-substitution-parameters",
         "--write-only",
         "-f, --force",
         "-l, --log-level",
         "-h, --help",
     ]
-    start = help_text.index("Core inputs:")
+    start = help_text.index("Input and output:")
     indices = []
     for item in expected_order:
         idx = help_text.index(item, start)
@@ -481,19 +486,42 @@ def test_bpp_help_groups_examples_and_runtime_controls_are_present() -> None:
         start = idx + 1
     assert indices == sorted(indices)
 
-    assert "ipyrad2 bpp: stage one BPP analysis from sequence HDF5 data" in help_text
-    assert "$ ipyrad2 bpp -d assembly.hdf5 -o OUT/ -n demo --tree species.nwk -i IMAP.txt -g MINMAP.txt -N 1000 -L 100 --threads 50 --seed 123 --tauprior 3 0.05" in help_text
-    assert "--msc-m" in help_text
-    assert "--speciesdelimitation" in help_text
-    assert "--alphaprior" in help_text
-    assert "--locusrate" in help_text
-    assert "--clock" in help_text
-    assert "--write-only" in help_text
-    assert "sample<TAB>population" in help_text
-    assert "glob<TAB>population" in help_text
-    assert "population<TAB>min" in help_text
+    assert "BPP mode: A00, A01, A10, A11, MSC-I, or MSC-M." in help_text
+    for label in ("# A00:", "# A01:", "# A10:", "# A11:", "# MSC-I:", "# MSC-M:"):
+        assert label in help_text
+    assert "Recipes section will add real-data runs" in help_text
+    assert "--msc-i" not in help_text
+    assert "--msc-m" not in help_text
+    assert "--speciestree" not in help_text
+    assert "--speciesdelimitation" not in help_text
+    assert "--seed" not in help_text
     assert help_text.index("-h, --help") > help_text.index("Logging:")
 
+    option_lines = [
+        line for line in help_text.splitlines()
+        if line.startswith("  -") and "[TOKEN ...]" not in line
+    ]
+    assert all(len(line) <= 140 for line in option_lines)
+
+
+
+def test_bpp_tree_short_option_is_supported() -> None:
+    parser = _get_tool_parser("bpp")
+    args = parser.parse_args([
+        "-d", "assembly.hdf5", "-t", "(a,b);", "-i", "imap.tsv",
+        "-g", "minmap.tsv", "-N", "10", "-L", "50",
+    ])
+    assert args.tree == "(a,b);"
+
+def test_bpp_analysis_values_are_case_insensitive() -> None:
+    parser = _get_tool_parser("bpp")
+    required = [
+        "-d", "assembly.hdf5", "--tree", "(a,b);", "-i", "imap.tsv",
+        "-g", "minmap.tsv", "-N", "10", "-L", "50",
+    ]
+    for value, expected in [("A00", "a00"), ("a11", "a11"), ("MSC-I", "msc-i")]:
+        args = parser.parse_args([*required, "--analysis", value])
+        assert args.analysis == expected
 
 def test_top_level_parser_accepts_flattened_export_and_analysis_subcommands() -> None:
     parser = setup_parsers()
