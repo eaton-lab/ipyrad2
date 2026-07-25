@@ -740,7 +740,9 @@ def test_top_level_parser_accepts_flattened_export_and_analysis_subcommands() ->
             "100",
             "--threads",
             "8",
-            "--seed",
+            "--locus-seed",
+            "none",
+            "--mcmc-seed",
             "none",
             "--write-only",
         ]
@@ -749,7 +751,8 @@ def test_top_level_parser_accepts_flattened_export_and_analysis_subcommands() ->
     assert bpp_args.max_loci == 25
     assert bpp_args.min_length == 100
     assert bpp_args.threads == [8]
-    assert bpp_args.seed == "none"
+    assert bpp_args.locus_seed == "none"
+    assert bpp_args.mcmc_seed == "none"
     assert bpp_args.write_only is True
 
 
