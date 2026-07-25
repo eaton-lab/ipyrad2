@@ -831,6 +831,7 @@ zcat TUTORIAL/OUT/assembly.loci.gz | head -n 202
     SLH_AL_0042                  TTAATTGAATATAGTATTAAAAAGTCAACATGATGGGAGGTTTCACTACAAGATTGAATCTCATCGACCTCTCATTTCAATTGAAGTTTATAACGCCAAATTGATGAGAGTCTATGTATATCCACAATTCTAGGCCAAANTGTTTTCANATGAAGAGGTTATTTAATTATATAACATANCTCATAACNTCAATNATNAACTTATTGACTTTATTTTTAGTTATCACTATATATTGGCTTTAAATTTCTTATTTTTCTTCCCATTCCATTGTTGAATAACTATTTCCACAAATCTAAAAAAATAAAATTTTAAAAGGGAAAATATTGAAAAAATGGATTCATTTAGGTTGA
     //                                                            *  -                  -                                                                                                                                                                                                                       - -                  -                        *                                |15:A_tuberculatus_Chr01:280635-280984
 ```
+<!--
 
 ## Exploratory analyses
 
@@ -889,3 +890,5 @@ This alignment has ...
 
 We can now use this concatenated sequence alignment in a downstream analysis tool. Here we will use `raxml-ng`, a tool
 for inferring a phylogenetic tree
+
+-->

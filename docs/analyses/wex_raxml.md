@@ -1,4 +1,4 @@
-# Seqex concatenation and tree inference
+# seqex concatenation and raxml-ng tree inference
 
 The Seqex tool can filter assembled loci and concatenate them into a
 supermatrix for phylogenetic inference. This tutorial demonstrates that
@@ -126,12 +126,14 @@ following commands use [toytree](https://eaton-lab.org/toytree/) to root the
 support tree on the *przewalskii* samples and display it in the terminal.
 
 ```bash
+# write a new tree file rooted on the 'prz' prefix taxa
 toytree root \
     -i SRP021469/output-seqex/assembly_min8.phy.raxml.support \
     -o SRP021469/output-seqex/assembly_min8.phy.raxml.support.rooted \
     -n "~prz" \
     --mad
 
+# print a view of the tree to the terminal
 toytree view \
     -i SRP021469/output-seqex/assembly_min8.phy.raxml.support.rooted \
     --ladderize
@@ -165,7 +167,7 @@ toytree view \
                                   └──39618_rex
 ```
 
-For a publication-quality PDF, draw the rooted tree directly:
+For a publication-quality PDF, you could use the `draw` command:
 
 ```bash
 toytree draw \
@@ -175,7 +177,7 @@ toytree draw \
     --ladderize
 ```
 
-Or customize it interactively in Python:
+Or, customize the drawing further interactively in Python:
 
 ```python
 import toytree

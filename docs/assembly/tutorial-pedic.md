@@ -1088,6 +1088,9 @@ total 37M
 -rw-rw-r-- 1 deren deren  15K Jul 20 15:12 assembly.stats.json
 ```
 
+See the Writing Outputs and Analysis sections for next steps with a completed assembly.
+
+<!--
 ## Analysis
 
 This dataset can be used with the tools in the Analysis section. The example
@@ -1273,3 +1276,5 @@ ipyrad2 bpp \
   -o ... \
 
 ```
+
+-->

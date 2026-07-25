@@ -28,7 +28,7 @@ nav = [
   {"Analysis" = [
     {"Quick Guide" = "analyses/index.md"},
     {"raxml-ng (+seqex)" = "analyses/wex_raxml.md"},
-    {"bpp (+seqex)" = "analyses/bpp-msc.md"},
+    {"bpp (+seqex)" = "analyses/bpp.md"},
     "analyses/pca.md",
     # "analyses/baba.md",
     "analyses/popgen.md",
@@ -36,7 +36,7 @@ nav = [
     # "analyses/snmf.md",
     # "analyses/admixture.md",
     {"treeslider" = "analysis/treeslider.md"},
-    {"astral (+treeslider)" = "analysis/treeslider.md"},
+    # {"astral (+treeslider)" = "analysis/treeslider.md"},
     # {"bpp-MSC" = "analysis/bpp-msc"},
     # {"bpp-MSC-i" = "analysis/bpp-msc-i"},
     # {"bpp-MSC-m" = "analysis/bpp-msc-m"},
