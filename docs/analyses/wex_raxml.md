@@ -121,10 +121,48 @@ raxml-ng \
 
 ## Root and view the tree
 
-The default RAxML-NG result files are written beside the input alignment. The
-following commands use [toytree](https://eaton-lab.org/toytree/) to root the
-support tree on the *przewalskii* samples and display it in the terminal.
+The default RAxML-NG result files are written beside the input alignment.
+Let's use the Python package [toytree](https://eaton-lab.org/toytree/) to create
+a drawing of the resulting tree. **The code below is Python**. I suggest opening
+a jupyter notebook which will allow you execute the code below and see the
+resulting plots interactively.
 
+
+```python
+import toytree
+
+# enter the path to your NEWICK tree file written by raxml-ng
+NEWICK = "SRP021469/output-seqex/assembly_min8.phy.raxml.support"
+
+# load the NEWICK as a ToyTree object
+tree = toytree.tree(NEWICK)
+
+# optionally re-root the tree on an outgroup (here selecting names matching 'prz')
+rtree = tree.root("~prz").ladderize()
+
+# draw the tree; returns multiple objects
+canvas, axes, mark = rtree.draw(
+    tip_labels_align=True,
+    node_mask=(0, 1, 0),
+    node_labels="support",
+    node_labels_style={
+        "anchor-shift": "10px",
+    },
+)
+```
+
+Modify the draw parameters above until you are happy with your tree drawing.
+See the toytree documentation for drawing options. Finally, you can save/export
+the tree drawing as a PNG, PDF, SVG, or HTML file.
+
+```python
+toytree.save(canvas, "./tree-drawing.png")
+```
+
+![wex_raxml_tree_drawing](../images/wex_raxml_tree_drawing.png)
+
+
+<!--
 ```bash
 # write a new tree file rooted on the 'prz' prefix taxa
 toytree root \
@@ -176,21 +214,4 @@ toytree draw \
     --node-labels support \
     --ladderize
 ```
-
-Or, customize the drawing further interactively in Python:
-
-```python
-import toytree
-
-newick = "SRP021469/output-seqex/assembly_min8.phy.raxml.support"
-tree = toytree.tree(newick).root("~prz").ladderize()
-canvas, axes, mark = tree.draw(
-    tip_labels_align=True,
-    node_labels="support",
-    node_labels_style={
-        "anchor-shift": "10px",
-        "baseline-shift": "10px",
-    },
-)
-toytree.save(canvas, "./tree-drawing.png")
-```
+ -->
