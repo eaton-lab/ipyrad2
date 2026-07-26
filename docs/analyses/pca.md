@@ -208,7 +208,7 @@ For both t-SNE and UMAP, heavy missing-data imputation deserves extra caution be
 Basic PCA run:
 
 ```bash
-ipyrad2 analysis pca \
+ipyrad2 pca \
   -d snps.hdf5 \
   -o PCA_OUT
 ```
@@ -216,7 +216,7 @@ ipyrad2 analysis pca \
 Run PCA and write the default SVG plot:
 
 ```bash
-ipyrad2 analysis pca \
+ipyrad2 pca \
   -d snps.hdf5 \
   -o PCA_OUT \
   --plot
@@ -225,7 +225,7 @@ ipyrad2 analysis pca \
 Save the PCA plot as PNG:
 
 ```bash
-ipyrad2 analysis pca \
+ipyrad2 pca \
   -d snps.hdf5 \
   -o PCA_OUT \
   --plot \
@@ -235,7 +235,7 @@ ipyrad2 analysis pca \
 Run PCA replicates on the default unlinked SNP view:
 
 ```bash
-ipyrad2 analysis pca \
+ipyrad2 pca \
   -d snps.hdf5 \
   -o PCA_OUT \
   --replicates 3 \
@@ -245,7 +245,7 @@ ipyrad2 analysis pca \
 Run t-SNE:
 
 ```bash
-ipyrad2 analysis pca \
+ipyrad2 pca \
   -d snps.hdf5 \
   -o TSNE_OUT \
   -M tsne \
@@ -256,7 +256,7 @@ ipyrad2 analysis pca \
 Run UMAP:
 
 ```bash
-ipyrad2 analysis pca \
+ipyrad2 pca \
   -d snps.hdf5 \
   -o UMAP_OUT \
   -M umap \
@@ -266,7 +266,7 @@ ipyrad2 analysis pca \
 Keep linked SNPs and explicitly request zero-fill imputation:
 
 ```bash
-ipyrad2 analysis pca \
+ipyrad2 pca \
   -d snps.hdf5 \
   -o PCA_OUT \
   --no-subsample \
@@ -276,7 +276,7 @@ ipyrad2 analysis pca \
 Use population-aware filtering and sample-mode imputation groups:
 
 ```bash
-ipyrad2 analysis pca \
+ipyrad2 pca \
   -d snps.hdf5 \
   -o PCA_OUT \
   -i pops.tsv \
