@@ -359,28 +359,6 @@
          y="68.379349">(b) <tspan
    style="font-style:italic"
    id="tspan47">ipyrad2</tspan> export and analysis tools</tspan></text>
-    <g
-       id="g89"
-       transform="translate(-3.3333333e-8,10.054167)">
-      <rect
-         style="fill:#cccccc;stroke:none;stroke-width:0.0308798"
-         id="rect48"
-         width="14.524665"
-         height="4.1097622"
-         x="35.745667"
-         y="65.344978" />
-      <text
-         xml:space="preserve"
-         style="font-size:3.21427px;font-family:Arial;-inkscape-font-specification:Arial;text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;fill:none;stroke:#000000;stroke-width:0.0523283"
-         x="40.346016"
-         y="68.182632"
-         id="text49"><tspan
-           sodipodi:role="line"
-           style="font-size:3.21427px;fill:#000000;stroke:none;stroke-width:0.0523283"
-           x="40.346016"
-           y="68.182632"
-           id="tspan53">wex</tspan></text>
-    </g>
     <text
        xml:space="preserve"
        style="font-size:3.52778px;font-family:Arial;-inkscape-font-specification:Arial;text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;fill:#000000;stroke:#000000;stroke-width:0.79375;stroke-dasharray:none"
@@ -438,14 +416,14 @@
       <text
          xml:space="preserve"
          style="font-size:3.21427px;font-family:Arial;-inkscape-font-specification:Arial;text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;fill:none;stroke:#000000;stroke-width:0.0523283"
-         x="41.051495"
+         x="38.78"
          y="73.353325"
          id="text63"><tspan
            sodipodi:role="line"
            style="font-size:3.21427px;fill:#000000;stroke:none;stroke-width:0.0523283"
-           x="41.051495"
+           x="38.78"
            y="73.353325"
-           id="tspan63">lex</tspan></text>
+           id="tspan63">seqex</tspan></text>
     </g>
     <g
        id="g87"
@@ -750,28 +728,6 @@
            y="115.61874"
            id="tspan111">...</tspan></text>
     </g>
-    <g
-       id="g112"
-       transform="translate(-37.125799,111.94225)">
-      <rect
-         style="fill:#cccccc;stroke:none;stroke-width:0.0308798"
-         id="rect111"
-         width="14.524665"
-         height="4.1097622"
-         x="35.745667"
-         y="65.344978" />
-      <text
-         xml:space="preserve"
-         style="font-size:3.21427px;font-family:Arial;-inkscape-font-specification:Arial;text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;fill:none;stroke:#000000;stroke-width:0.0523283"
-         x="40.346016"
-         y="68.182632"
-         id="text112"><tspan
-           sodipodi:role="line"
-           style="font-size:3.21427px;fill:#000000;stroke:none;stroke-width:0.0523283"
-           x="40.346016"
-           y="68.182632"
-           id="tspan112">wex</tspan></text>
-    </g>
     <text
        xml:space="preserve"
        style="font-size:3.52778px;font-family:Arial;-inkscape-font-specification:Arial;text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;fill:#000000;stroke:#000000;stroke-width:0.79375;stroke-dasharray:none"
@@ -829,14 +785,14 @@
       <text
          xml:space="preserve"
          style="font-size:3.21427px;font-family:Arial;-inkscape-font-specification:Arial;text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;fill:none;stroke:#000000;stroke-width:0.0523283"
-         x="41.051495"
+         x="38.78"
          y="73.353325"
          id="text115"><tspan
            sodipodi:role="line"
            style="font-size:3.21427px;fill:#000000;stroke:none;stroke-width:0.0523283"
-           x="41.051495"
+           x="38.78"
            y="73.353325"
-           id="tspan115">lex</tspan></text>
+           id="tspan115">seqex</tspan></text>
     </g>
     <g
        id="g116"

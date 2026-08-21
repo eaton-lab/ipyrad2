@@ -13,6 +13,7 @@ Examples
 --------
 $ ipyrad2 pca -d snps.hdf5 -o OUT/
 $ ipyrad2 pca -d snps.hdf5 -o OUT/ --plot
+$ ipyrad2 pca -d snps.hdf5 -o OUT/ --plot --plot-format pdf
 $ ipyrad2 pca -d snps.hdf5 -o OUT/ --plot --plot-width 520 --plot-height 360
 $ ipyrad2 pca -d snps.hdf5 -o OUT/ --plot -i imap.tsv --plot-colors colors.tsv
 $ ipyrad2 pca -d snps.hdf5 -o OUT/ -M tsne --perplexity 8
@@ -81,16 +82,24 @@ def _setup_pca_subparser(
 
     plotting = tool.add_argument_group("Plotting")
     plotting.add_argument(
-        "--plot", action="store_true",
-        help="Write an SVG plot for PCA results. Only supported with `-M pca`.",
+        "--plot",
+        action="store_true",
+        help="Write a plot for PCA results. Only supported with `-M pca`.",
+    )
+    plotting.add_argument(
+        "--plot-format",
+        metavar="str",
+        choices=("pdf", "png", "html", "svg"),
+        default="svg",
+        help="Saved Toyplot canvas format: pdf, png, html, or svg. [default=svg]",
     )
     plotting.add_argument(
         "--plot-width", metavar="int", type=int, default=400,
-        help="SVG width in pixels for `--plot`. [default=400]",
+        help="Toyplot canvas width for `--plot`. [default=400]",
     )
     plotting.add_argument(
         "--plot-height", metavar="int", type=int, default=300,
-        help="SVG height in pixels for `--plot`. [default=300]",
+        help="Toyplot canvas height for `--plot`. [default=300]",
     )
     plotting.add_argument(
         "--plot-marker-size", metavar="int", type=int, default=10,

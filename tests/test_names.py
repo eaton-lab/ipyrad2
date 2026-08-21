@@ -32,6 +32,42 @@ def test_fastq_globs_expand_env_vars(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert result == [fastq]
 
 
+def test_valid_fastq_symlinks_preserve_alias_names(tmp_path: Path) -> None:
+    sources = tmp_path / "sources"
+    aliases = tmp_path / "aliases"
+    sources.mkdir()
+    aliases.mkdir()
+    source1 = sources / "original-contemp_R1.fastq.gz"
+    source2 = sources / "original-contemp_R2.fastq.gz"
+    source1.touch()
+    source2.touch()
+    alias1 = aliases / "sample_R1.fastq.gz"
+    alias2 = aliases / "sample_R2.fastq.gz"
+    alias1.symlink_to(Path("../sources") / source1.name)
+    alias2.symlink_to(Path("../sources") / source2.name)
+
+    result = get_name_to_fastq_dict(aliases / "*.fastq.gz", None, None)
+
+    assert result == {"sample": (alias1, alias2)}
+
+
+def test_broken_fastq_symlink_reports_link_target_and_cause(tmp_path: Path) -> None:
+    aliases = tmp_path / "aliases"
+    aliases.mkdir()
+    alias = aliases / "sample_R1.fastq.gz"
+    target = Path("../sources/missing_R1.fastq.gz")
+    alias.symlink_to(target)
+
+    with pytest.raises(IPyradError) as excinfo:
+        get_paths_list_from_fastq_str(aliases / "*.fastq.gz")
+
+    message = str(excinfo.value)
+    assert "FASTQ input symlink cannot be resolved" in message
+    assert str(alias) in message
+    assert str(target) in message
+    assert "No such file or directory" in message
+
+
 def test_common_paired_end_names_are_grouped_by_mate_token(tmp_path: Path) -> None:
     fastq2 = tmp_path / "sample_R2_001.fastq.gz"
     fastq1 = tmp_path / "sample_R1_001.fastq.gz"

@@ -8,7 +8,7 @@ Recipes will show concrete workflows built from assembled HDF5 data, export tool
 
 This section is especially intended for examples such as:
 
-- exporting sequence alignments with `wex` or `lex` for an external phylogenetic program
+- exporting sequence alignments with `seqex` for an external phylogenetic program
 - exporting SNP matrices with `snpex` for an external clustering or association workflow
 - choosing filtering and missing-data settings that match a specific downstream tool
 - comparing an external-file workflow against a built-in `analysis` workflow inside ipyrad2

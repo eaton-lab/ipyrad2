@@ -557,6 +557,57 @@ def test_run_pca_method_writes_svg_plot_when_requested(tmp_path: Path) -> None:
     assert (tmp_path / "OUT" / "phase2.variance.tsv").exists()
 
 
+@pytest.mark.parametrize(
+    ("plot_format", "signature"),
+    [
+        ("html", b"<div"),
+        ("png", b"\x89PNG\r\n\x1a\n"),
+        ("pdf", b"%PDF"),
+    ],
+)
+def test_run_pca_method_writes_selected_plot_format(
+    tmp_path: Path,
+    plot_format: str,
+    signature: bytes,
+) -> None:
+    pytest.importorskip("toyplot")
+    h5 = _write_phase2_snps_h5(tmp_path / "snps.hdf5")
+    outdir = tmp_path / "OUT"
+    outdir.mkdir()
+    unselected_svg = outdir / "phase2.plot.svg"
+    unselected_svg.write_text("existing SVG", encoding="utf-8")
+
+    run_pca_method(
+        data=h5,
+        name="phase2",
+        outdir=outdir,
+        method="pca",
+        min_sample_coverage=2,
+        max_sample_missing=1.0,
+        min_minor_allele_frequency=0.0,
+        imap=None,
+        minmap=None,
+        exclude=None,
+        include_reference=False,
+        impute_method="sample",
+        subsample=True,
+        random_seed=7,
+        replicates=1,
+        perplexity=5.0,
+        max_iter=1000,
+        n_neighbors=15,
+        plot=True,
+        plot_format=plot_format,
+        cores=1,
+        force=False,
+        log_level="INFO",
+    )
+
+    plot = outdir / f"phase2.plot.{plot_format}"
+    assert plot.read_bytes().lstrip().startswith(signature)
+    assert unselected_svg.read_text(encoding="utf-8") == "existing SVG"
+
+
 def test_run_pca_method_writes_svg_plot_with_population_colors(tmp_path: Path) -> None:
     pytest.importorskip("toyplot")
     h5 = _write_phase2_snps_h5(tmp_path / "snps.hdf5")
@@ -1072,6 +1123,49 @@ def test_run_pca_method_rejects_vcf_input_and_multiple_tsne_replicates(tmp_path:
         )
 
 
+@pytest.mark.parametrize(
+    ("plot", "plot_format", "match"),
+    [
+        (False, "png", "can only be used with --plot"),
+        (True, "jpeg", "Unsupported PCA plot format"),
+    ],
+)
+def test_run_pca_method_validates_plot_format(
+    tmp_path: Path,
+    plot: bool,
+    plot_format: str,
+    match: str,
+) -> None:
+    with pytest.raises(IPyradError, match=match):
+        run_pca_method(
+            data=tmp_path / "missing.hdf5",
+            name="invalid",
+            outdir=tmp_path / "OUT",
+            method="pca",
+            min_sample_coverage=2,
+            max_sample_missing=1.0,
+            min_minor_allele_frequency=0.0,
+            imap=None,
+            minmap=None,
+            exclude=None,
+            include_reference=False,
+            impute_method="sample",
+            subsample=True,
+            random_seed=1,
+            replicates=1,
+            perplexity=5.0,
+            max_iter=1000,
+            n_neighbors=15,
+            plot=plot,
+            plot_format=plot_format,
+            cores=1,
+            force=False,
+            log_level="INFO",
+        )
+
+    assert not (tmp_path / "OUT").exists()
+
+
 def test_run_pca_method_plot_is_supported_only_for_pca(tmp_path: Path) -> None:
     h5 = _write_phase2_snps_h5(tmp_path / "snps.hdf5")
 
@@ -1175,7 +1269,7 @@ def test_run_pca_method_plot_fails_fast_when_toyplot_is_missing(
 
     h5 = _write_phase2_snps_h5(tmp_path / "snps.hdf5")
 
-    def _raise_missing():
+    def _raise_missing(_plot_format: str = "svg"):
         raise IPyradError("PCA plotting requires toyplot.")
 
     monkeypatch.setattr(pca_drawing, "require_toyplot", _raise_missing)

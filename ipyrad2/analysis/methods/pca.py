@@ -36,6 +36,9 @@ from .common import (
 )
 
 
+_PCA_PLOT_FORMATS = frozenset(("pdf", "png", "html", "svg"))
+
+
 @dataclass
 class PCAFamilyResult:
     """Analysis-ready results for one PCA-family run."""
@@ -728,6 +731,7 @@ def run_pca_method(
     max_iter: int,
     n_neighbors: int,
     plot: bool = False,
+    plot_format: str = "svg",
     plot_width: int = 400,
     plot_height: int = 300,
     plot_marker_size: int = 10,
@@ -748,6 +752,13 @@ def run_pca_method(
     )
     if plot and method != "pca":
         raise IPyradError("PCA plotting is currently supported only with `-M pca`.")
+    if plot_format not in _PCA_PLOT_FORMATS:
+        supported = ", ".join(sorted(_PCA_PLOT_FORMATS))
+        raise IPyradError(
+            f"Unsupported PCA plot format: {plot_format}. Choose one of: {supported}."
+        )
+    if not plot and plot_format != "svg":
+        raise IPyradError("PCA --plot-format can only be used with --plot.")
     if colors is not None and not plot:
         raise IPyradError("PCA --plot-colors can only be used with --plot.")
     if colors is not None and imap is None:
@@ -777,8 +788,8 @@ def run_pca_method(
     if plot:
         from .pca_drawing import ensure_pca_plotting_available
 
-        ensure_pca_plotting_available()
-        paths["plot"] = outdir / f"{name}.plot.svg"
+        ensure_pca_plotting_available(plot_format)
+        paths["plot"] = outdir / f"{name}.plot.{plot_format}"
 
     ensure_output_paths(paths.values(), force=force)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -863,11 +874,12 @@ def run_pca_method(
     if method == "pca":
         _write_variance(paths["variance"], result.variance_by_replicate)
     if plot:
-        from .pca_drawing import write_pca_svg_plot
+        from .pca_drawing import write_pca_plot
 
-        write_pca_svg_plot(
+        write_pca_plot(
             result,
             paths["plot"],
+            plot_format=plot_format,
             width=plot_width,
             height=plot_height,
             marker_size=plot_marker_size,
@@ -897,7 +909,7 @@ def run_pca_method(
     if method == "pca":
         logger.info("wrote PCA explained variance to {}", paths["variance"])
     if plot:
-        logger.info("wrote PCA SVG plot to {}", paths["plot"])
+        logger.info("wrote PCA {} plot to {}", plot_format.upper(), paths["plot"])
     logger.info("wrote PCA-family stats to {}", paths["stats"])
 
 

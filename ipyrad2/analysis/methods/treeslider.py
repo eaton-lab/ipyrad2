@@ -17,13 +17,13 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from ..extracters.window_extracter import (
-    MISSING_BASE,
-    WindowExtracter,
-    count_snps,
-    filter_block_by_minmap,
-)
+from ..extracters.sequence_common import MISSING_BASE
+from ..extracters.sequence_common import build_sequence_extraction_context
+from ..extracters.sequence_common import count_sequence_variants as count_snps
+from ..extracters.sequence_common import filter_block_by_minmap
 from ..extracters.sequence_common import load_sequence_chunk_from_phy
+from ..extracters.sequence_windows import SelectedWindow
+from ..extracters.sequence_windows import intersect_phymap_locus
 from ...utils.exceptions import IPyradError
 from ...utils.parallel import run_pipeline
 from ...utils.parallel import run_with_pool_iter
@@ -188,6 +188,17 @@ def _plan_locus_windows(
             continue
         start = int(row[3])
         end = int(row[4])
+        intersection = intersect_phymap_locus(
+            row,
+            SelectedWindow(
+                scaffold_index=int(row[0]),
+                scaffold=scaffold,
+                start=start,
+                end=end,
+                explicit_coordinates=False,
+            ),
+            clip=False,
+        )
         specs.append(
             TreeSliderWindowSpec(
                 window_id=len(specs) + 1,
@@ -199,8 +210,8 @@ def _plan_locus_windows(
                 first_locus=row_idx + 1,
                 last_locus=row_idx + 1,
                 nloci=1,
-                sites_total=int(row[2] - row[1]),
-                spans=((int(row[1]), int(row[2])),),
+                sites_total=intersection.phy1 - intersection.phy0,
+                spans=((intersection.phy0, intersection.phy1),),
             )
         )
     return specs
@@ -239,6 +250,13 @@ def _plan_genomic_windows(
 
         for start0 in range(0, scaffold_length, slide_size):
             end0 = min(start0 + window_size, scaffold_length)
+            selected_window = SelectedWindow(
+                scaffold_index=scaffold_idx,
+                scaffold=scaffold,
+                start=start0 + 1,
+                end=end0,
+                explicit_coordinates=True,
+            )
             spans: list[tuple[int, int]] = []
             first_locus = None
             last_locus = None
@@ -253,15 +271,13 @@ def _plan_genomic_windows(
                     first_locus = int(selected_row_numbers[0]) + 1
                     last_locus = int(selected_row_numbers[-1]) + 1
                 for row in selected_rows:
-                    locus_start = int(row[3]) - 1
-                    locus_end = int(row[4])
-                    overlap_start = max(locus_start, start0)
-                    overlap_end = min(locus_end, end0)
-                    if overlap_start >= overlap_end:
-                        continue
-                    phy_start = int(row[1]) + (overlap_start - locus_start)
-                    phy_end = phy_start + (overlap_end - overlap_start)
-                    spans.append((phy_start, phy_end))
+                    intersection = intersect_phymap_locus(
+                        row,
+                        selected_window,
+                        clip=True,
+                    )
+                    if intersection is not None:
+                        spans.append((intersection.phy0, intersection.phy1))
 
             merged_spans = _merge_spans(spans)
             specs.append(
@@ -952,23 +968,17 @@ def run_treeslider_method(
             slide_size = window_size
 
     _require_sequence_hdf5(data)
-    extracter = WindowExtracter(
+    context = build_sequence_extraction_context(
         data=data,
-        name=name,
-        outdir=outdir,
-        out_format="fa",
-        windows=[],
         min_sample_coverage=min_sample_coverage,
         max_sample_missing=1.0,
         exclude=exclude,
         include_reference=include_reference,
         imap=imap,
         minmap=minmap,
-        stdout=False,
-        force=True,
     )
     if print_scaffold_table:
-        extracter.scaffold_table.to_csv(sys.stdout, sep="\t", index=False)
+        context.scaffold_table.to_csv(sys.stdout, sep="\t", index=False)
         return
 
     outdir.mkdir(parents=True, exist_ok=True)
@@ -984,9 +994,9 @@ def run_treeslider_method(
         shutil.rmtree(stage_dir, ignore_errors=True)
 
     phymap = _load_phymap(data)
-    scaffold_names = extracter.scaffold_table["scaffold_name"].tolist()
-    scaffold_lengths = extracter.scaffold_table["scaffold_length"].astype(int).tolist()
-    selected_scaffolds = _resolve_scaffold_subset(extracter.scaffold_table, scaffolds)
+    scaffold_names = context.scaffold_table["scaffold_name"].tolist()
+    scaffold_lengths = context.scaffold_table["scaffold_length"].astype(int).tolist()
+    selected_scaffolds = _resolve_scaffold_subset(context.scaffold_table, scaffolds)
 
     if mode == "genomic":
         specs = _plan_genomic_windows(
@@ -1025,13 +1035,13 @@ def run_treeslider_method(
             _write_manifest(manifest, manifest_path)
 
     filter_state = TreeSliderFilterState(
-        sample_indices=tuple(int(idx) for idx in extracter.sidxs),
-        sample_names=tuple(extracter.snames),
-        imap={pop: list(names) for pop, names in extracter.imap.items()},
-        minmap=dict(extracter.minmap),
+        sample_indices=tuple(int(idx) for idx in context.sample_indices),
+        sample_names=tuple(context.sample_names),
+        imap={pop: list(names) for pop, names in context.imap.items()},
+        minmap=dict(context.minmap),
         imap_row_indices={
             pop: np.asarray(indices, dtype=np.int64)
-            for pop, indices in extracter._imap_row_indices.items()
+            for pop, indices in context.imap_row_indices.items()
         },
     )
     filter_specs = [

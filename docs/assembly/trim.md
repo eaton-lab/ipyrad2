@@ -4,6 +4,8 @@
 
 In a typical workflow, `trim` comes after [`demux`](./demux.md) and before [`denovo`](./denovo.md) or [`map`](./map.md).
 
+![ipyrad2 assembly workflow from input reads to assembled outputs](../images/Fig1-assembly.png){ width="100%" }
+
 ## Overview
 Read trimming and filtering is an optional preprocessing step in ipyrad2 that removes technical sequence and low-quality data prior to assembly. Trimming and quality filtering are implemented via a wrapper around [`fastp`](https://github.com/OpenGene/fastp) (Chen et al. 2018). The step can (i) trim adapter sequence using fastp’s automatic adapter detection, and for paired-end data additionally uses overlap-aware adapter trimming and base correction in the overlapping region; (ii) trim low-quality bases and filter reads failing user-defined quality/length thresholds; and (iii) trim restriction enzyme cutsite/overhang sequence from read termini.
 

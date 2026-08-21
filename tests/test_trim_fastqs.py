@@ -242,6 +242,21 @@ def test_fastq_has_complete_first_record_detects_empty_gzipped_fastq(tmp_path: P
     assert trim_fastqs._fastq_has_complete_first_record(fastq) is False
 
 
+def test_fastq_has_complete_first_record_accepts_gzipped_symlink(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source = _write_fastq(
+        source_dir / "original.fastq.gz",
+        [("r1", "ACGT", "IIII")],
+    )
+    alias = tmp_path / "sample.fastq.gz"
+    alias.symlink_to(source)
+
+    assert trim_fastqs._fastq_has_complete_first_record(alias) is True
+
+
 def test_fastq_has_complete_first_record_rejects_incomplete_first_record(tmp_path: Path) -> None:
     fastq = _write_file(tmp_path / "truncated.fastq", "@r1\nACGT\n+\n")
 

@@ -2,7 +2,7 @@
 
 The export tools in `ipyrad2` are designed to allow you to assemble a dataset just once, and to
 use the generated HDF5 database file to export many curated datasets for downstream analyses.
-These export tools, `wex`, `lex`, and `snpex`, allow you to filter the dataset by scaffold,
+The export tools, `seqex` and `snpex`, allow you to filter the dataset by scaffold,
 sample or population names, and critically, by patterns of missing data, and to write the
 resulting data to output files formatted for various external tools.
 
@@ -26,30 +26,26 @@ RAD-seq datasets often need different filtering choices depending on the softwar
 - whether linked SNPs should be subsampled to one SNP per RAD locus
 - whether missing genotypes should stay missing or be imputed for a specific file format
 
-## The Three Export Tools
+## The Export Tools
 
-- [`wex`](./wex.md): writes one concatenated alignment from selected genomic windows in an assembly HDF5 file after applying site-wise filters.
-- [`lex`](./lex.md): writes per-locus or concatenated alignments of selected whole-locus alignments after applying locus-wise filters.
+- [`seqex`](./seqex.md): writes multi-locus, concatenated, or split alignments from complete loci or exact coordinate intersections after applying locus-wise and site-wise filters.
 - [`snpex`](./snpex.md): writes filtered SNP matrices after applying site-wise filters, with options for subsampling unlinked SNPs and exporting to various formats including PLINK, GENO, PHYLIP, TreeMix, and EEMS.
-
-The experimental [seqex](./seqex.md) command combines locus filtering with
-multi-locus, concatenated, or split sequence output while lex and wex remain
-available for established workflows.
 
 
 ## Command examples
 
 ```bash
 # write concatenated alignment of chromosome 1 in a reference assembly
-ipyrad2 wex \
+ipyrad2 seqex \
     -d DATA.hdf5 \
     -o ALIGNMENTS/ \
     -n Chr01 \
     -w Chr01 \
-    --min-sample-coverage 10
+    --min-sample-coverage 10 \
+    --concatenate
 
 # select 1000 random denovo loci and concatenate into an alignment
-ipyrad2 lex \
+ipyrad2 seqex \
     -d DATA.hdf5 \
     -o ALIGNMENTS/ \
     -n loci_10K \
@@ -72,8 +68,7 @@ ipyrad2 snpex \
 
 | Command | Input | Output | Main filtering controls | Missing-data handling | Imputation availability | Typical downstream use |
 | --- | --- | --- | --- | --- | --- | --- |
-| `wex` | HDF5 | one alignment from selected windows | windows, `-m`, `-r`, `-e`, `-R`, `imap`, `minmap` | explicit sample and site filtering before export | none | sequence-based tools that need one alignment over chosen regions |
-| `lex` | HDF5 | one or many locus alignments | windows, number of loci, minimum locus length, `-m`, `-r`, `-e`, `-R`, `imap`, `minmap` | explicit sample and site filtering before locus export | none | multilocus sequence analyses and locus-based phylogenetic workflows |
+| `seqex` | HDF5 | one or many locus alignments | windows, number of loci, minimum locus length, `-m`, `-r`, `-e`, `-R`, `imap`, `minmap` | explicit locus, sample, and site filtering before export | none | multilocus sequence analyses and locus-based phylogenetic workflows |
 | `snpex` | HDF5 | filtered SNP matrices or supported formatted  | `-m`, `-r`, `-a`, `-e`, `-R`, `imap`, `minmap`, linked vs unlinked SNPs | explicit sample and SNP filtering before export | optional, and applied to every written output in that run | SNP-based external tools such as PLINK, TreeMix, EEMS, or SNP-alignment workflows |
 -->
 
@@ -82,7 +77,7 @@ ipyrad2 snpex \
 
 The key idea is not simply to export data, but to export the right version of the data for the next tool.
 
-For sequence exports, `wex` and `lex` let you control which samples and sites survive filtering before alignments are written. That makes missing data explicit at the alignment stage instead of leaving it to downstream programs to interpret blindly.
+For sequence exports, `seqex` lets you control which loci, samples, and sites survive filtering before alignments are written. That makes missing data explicit at the alignment stage instead of leaving it to downstream programs to interpret blindly.
 
 For SNP exports, `snpex` adds the choices that matter most for RAD data:
 
@@ -105,7 +100,7 @@ If you plan to stay inside ipyrad2, these export tools are often unnecessary. Th
 
 ## Where to Go Next
 
-- Read [`wex`](./wex.md), [`lex`](./lex.md), or [`snpex`](./snpex.md) for the command that matches the kind of export you need.
+- Read [`seqex`](./seqex.md) or [`snpex`](./snpex.md) for the command that matches the kind of export you need.
 - Return to [Assemble](../assembly/assemble.md) if you are not yet at the HDF5 stage.
 - Read the [Analysis Guide](../analyses/index.md) if you want to stay inside ipyrad2 instead of writing external-format files.
 - See [Recipes](../recipes/index.md) for worked examples once that section is filled in. For now, Recipes is a visible TODO section where export and downstream workflow examples will live.

@@ -276,7 +276,7 @@ def test_run_denovo_requires_working_binaries(
     monkeypatch.setattr(denovo_module, "BIN_VSEARCH", str(tmp_path / "missing-vsearch"))
     monkeypatch.setattr(denovo_module, "BIN_MAFFT", str(tmp_path / "missing-mafft"))
 
-    with pytest.raises(IPyradError, match="vsearch binary is not executable"):
+    with pytest.raises(IPyradError, match="vsearch binary not installed"):
         denovo_module.run_denovo(
             fastqs=[tmp_path / "reads.fastq.gz"],
             outdir=tmp_path / "out",

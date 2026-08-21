@@ -21,7 +21,7 @@ def test_inspect_help_describes_assembly_directory() -> None:
 
     assert "ipyrad2 inspect: launch the interactive assembly browser" in help_text
     assert "Directory containing ipyrad2 assembly output files." in help_text
-    assert "$ ipyrad2 inspect OUT/ip2-pe_outfiles" in help_text
+    assert "$ ipyrad2 inspect ./myassembly_outfiles" in help_text
 
 
 def test_inspect_parser_accepts_assembly_directory() -> None:

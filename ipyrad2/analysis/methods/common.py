@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import importlib
 from pathlib import Path
 from typing import Dict, Iterable, List
 
@@ -674,15 +675,17 @@ def require_umap():
     return umap
 
 
-def require_toyplot():
-    """Import toyplot lazily for optional plotting helpers."""
+def require_toyplot(plot_format: str = "svg"):
+    """Import toyplot and one renderer lazily for optional plotting helpers."""
     try:
         import toyplot
-        import toyplot.svg
+
+        renderer = importlib.import_module(f"toyplot.{plot_format}")
     except ImportError as exc:
         raise IPyradError(
-            "PCA plotting requires toyplot. Install it with "
+            f"PCA {plot_format.upper()} plotting requires toyplot and its renderer "
+            "dependencies. Install them with "
             "`pip install ipyrad2[analysis]` or "
             "`conda install toyplot -c conda-forge`."
         ) from exc
-    return toyplot, toyplot.svg
+    return toyplot, renderer

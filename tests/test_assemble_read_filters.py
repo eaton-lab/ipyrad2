@@ -4995,6 +4995,7 @@ def test_write_loci_and_stats_files_counts_max_variant_frequency_filter(
     assert summary["nloci_after_filtering"] == 0
     assert summary["nsites_after_filtering"] == 0
     assert summary["filter_counts"]["max_variant_frequency"] == 1
+    assert summary["samples_per_locus_before_final_filters_counts"] == {3: 1}
     assert not (tmp_path / "assembly.stats_counts.tsv").exists()
 
 
@@ -5041,11 +5042,55 @@ def test_write_loci_and_stats_files_writes_gzipped_loci_and_streamed_bed(
     assert loci_lines[4].endswith("|0:chr1:1-4")
     assert (tmp_path / "assembly.bed").read_text(encoding="utf-8") == "chr1\t0\t4\t3\n"
     assert summary["sample_locus_counts"] == {"s1": 1, "s2": 1, "s3": 1}
+    assert summary["samples_per_locus_before_final_filters_counts"] == {3: 1}
     assert summary["samples_per_locus_counts"] == {3: 1}
     assert summary["locus_length_counts"] == {4: 1}
     assert not (tmp_path / "assembly.stats_counts.tsv").exists()
     assert not (tmp_path / "assembly.stats_sample_cov.txt").exists()
     assert not (tmp_path / "assembly.stats_locus_coverage.txt").exists()
+
+
+def test_write_loci_and_stats_files_reports_occupancy_before_sample_masking(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "assembly.database.fa"
+    database.write_text(
+        ">chr1:1-4 assembly_reference_sequence\nAAAA\n"
+        ">chr1:1-4 rad1\nAAAA\n"
+        ">chr1:1-4 rad2\nAAAA\n"
+        ">chr1:1-4 wgs\nAAAA\n\n"
+        ">chr1:5-8 assembly_reference_sequence\nAAAA\n"
+        ">chr1:5-8 rad1\nAAAA\n"
+        ">chr1:5-8 rad2\nAAAA\n"
+        ">chr1:5-8 wgs\nANNN\n\n",
+        encoding="utf-8",
+    )
+
+    summary = write_loci_and_stats_files(
+        snames=["rad1", "rad2", "wgs"],
+        name="assembly",
+        outdir=tmp_path,
+        tmpdir=tmp_path,
+        min_locus_sample_coverage=1,
+        min_locus_trim_sample_coverage=1,
+        min_locus_length=1,
+        max_locus_hetero_frequency=1.0,
+        max_locus_variant_frequency=1.0,
+        max_sample_hetero_frequency=1.0,
+        min_sample_observed_fraction=0.5,
+    )
+
+    assert summary["samples_per_locus_before_final_filters_counts"] == {3: 2}
+    assert summary["samples_per_locus_counts"] == {2: 1, 3: 1}
+    assert summary["masked_by_min_observed_fraction_counts"] == {
+        "rad1": 0,
+        "rad2": 0,
+        "wgs": 1,
+    }
+    assert (tmp_path / "assembly.bed").read_text(encoding="utf-8") == (
+        "chr1\t0\t4\t3\n"
+        "chr1\t4\t8\t2\n"
+    )
 
 
 def test_write_loci_and_stats_files_does_not_let_reference_meet_min_sample_coverage(
@@ -5359,6 +5404,7 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
                 "nsites_sample_cov_greater_than_or_equal_to_min_locus_trim_sample_coverage": 18,
             },
             "sample_locus_counts": {"s1": 5, "s2": 4},
+            "samples_per_locus_before_final_filters_counts": {1: 2, 2: 6},
             "masked_by_min_observed_fraction_counts": {"s1": 1, "s2": 0},
             "loci_with_samples_masked_by_min_observed_fraction": 1,
             "total_masked_sample_occurrences_by_min_observed_fraction": 1,
@@ -5409,7 +5455,9 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
     assert "Shared loci after delimiting" in report
     assert "RAD loci before min sample coverage" in report
     assert "RAD loci after min sample coverage" in report
-    assert "Final filtered RAD loci with WGS" in report
+    assert "Loci after RAD/WGS integration" in report
+    assert "Final loci after filtering" in report
+    assert "Final filtered RAD loci with WGS" not in report
     assert "Cumulative final loci" in report
     assert "Final SNP sites written" in report
     assert "Sample type" in report
@@ -5439,14 +5487,11 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
     assert report_json["locus_occupancy"][2]["rad_loci_before_min_sample_coverage"] == 8
     assert report_json["locus_occupancy"][1]["rad_loci_after_min_sample_coverage"] == 4
     assert report_json["locus_occupancy"][2]["rad_loci_after_min_sample_coverage"] == 6
-    assert (
-        report_json["locus_occupancy"][1]["final_filtered_rad_loci_with_wgs"]
-        == 3
-    )
-    assert (
-        report_json["locus_occupancy"][2]["final_filtered_rad_loci_with_wgs"]
-        == 3
-    )
+    assert report_json["locus_occupancy"][1]["loci_after_rad_wgs_integration"] == 2
+    assert report_json["locus_occupancy"][2]["loci_after_rad_wgs_integration"] == 6
+    assert report_json["locus_occupancy"][1]["final_loci_after_filtering"] == 3
+    assert report_json["locus_occupancy"][2]["final_loci_after_filtering"] == 3
+    assert "final_filtered_rad_loci_with_wgs" not in report_json["locus_occupancy"][1]
     assert report_json["locus_occupancy"][0]["cumulative_final_loci"] == 0
     assert report_json["locus_occupancy"][1]["cumulative_final_loci"] == 3
     assert report_json["locus_occupancy"][2]["cumulative_final_loci"] == 6
@@ -5501,6 +5546,7 @@ def test_write_assemble_stats_report_includes_mixed_run_summary(tmp_path: Path) 
                 "nsites_sample_cov_greater_than_or_equal_to_min_locus_trim_sample_coverage": 18,
             },
             "sample_locus_counts": {"rad": 5, "wgs": 4},
+            "samples_per_locus_before_final_filters_counts": {1: 2, 2: 6},
             "masked_by_min_observed_fraction_counts": {"rad": 0, "wgs": 0},
             "loci_with_samples_masked_by_min_observed_fraction": 0,
             "total_masked_sample_occurrences_by_min_observed_fraction": 0,
@@ -5556,7 +5602,9 @@ def test_write_assemble_stats_report_includes_mixed_run_summary(tmp_path: Path) 
     assert report_json["locus_filtering"]["loci_filtered_min_samples"] is None
     assert report_json["locus_occupancy"][0]["rad_loci_before_min_sample_coverage"] is None
     assert report_json["locus_occupancy"][0]["rad_loci_after_min_sample_coverage"] is None
-    assert report_json["locus_occupancy"][1]["final_filtered_rad_loci_with_wgs"] == 3
+    assert report_json["locus_occupancy"][1]["loci_after_rad_wgs_integration"] == 2
+    assert report_json["locus_occupancy"][2]["loci_after_rad_wgs_integration"] == 6
+    assert report_json["locus_occupancy"][1]["final_loci_after_filtering"] == 3
     assert report_json["locus_occupancy"][1]["cumulative_final_loci"] == 3
     assert "# Mixed RAD/WGS Diagnostics" in report
     assert "Sites supported by WGS only" in report
@@ -5987,6 +6035,7 @@ def test_write_final_outputs_finalizes_hdf5_after_bed_is_complete(tmp_path: Path
     )
 
     assert summary["nloci_after_filtering"] == 2
+    assert summary["samples_per_locus_before_final_filters_counts"] == {2: 2}
     assert (outdir / "assembly.bed").read_text(encoding="utf-8") == (
         "chr2\t0\t4\t2\n"
         "chr3\t4\t8\t2\n"

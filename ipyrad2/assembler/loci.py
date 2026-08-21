@@ -532,6 +532,9 @@ def resolve_locus_for_output(
         "max_depth_outlier": False,
     }
     stats = {
+        "samples_with_data_before_final_filters": int(
+            np.sum(empirical_row_mask & _sample_rows_with_data(seqs))
+        ),
         "locus_cov": 0,
         "variant_sites": 0,
         "variant_phylo_informative_sites": 0,
@@ -814,7 +817,8 @@ def _human_stats_label(key: str) -> str:
         "loci": "Loci",
         "rad_loci_before_min_sample_coverage": "RAD loci before min sample coverage",
         "rad_loci_after_min_sample_coverage": "RAD loci after min sample coverage",
-        "final_filtered_rad_loci_with_wgs": "Final filtered RAD loci with WGS",
+        "loci_after_rad_wgs_integration": "Loci after RAD/WGS integration",
+        "final_loci_after_filtering": "Final loci after filtering",
         "cumulative_final_loci": "Cumulative final loci",
         "fraction_of_final_loci": "Fraction of final loci",
         "rad_samples": "RAD samples",
@@ -862,6 +866,9 @@ def write_assemble_stats_report(
     site_totals = dict(loci_summary["site_totals"])
     sample_locus_counts = dict(loci_summary["sample_locus_counts"])
     samples_per_locus_counts = Counter(loci_summary["samples_per_locus_counts"])
+    integration_samples_per_locus_counts = Counter(
+        loci_summary.get("samples_per_locus_before_final_filters_counts", {})
+    )
     locus_length_counts = Counter(loci_summary["locus_length_counts"])
     alignment_nonmissing_sample_bases = int(loci_summary["alignment_nonmissing_sample_bases"])
 
@@ -1038,7 +1045,8 @@ def write_assemble_stats_report(
         "samples_with_data",
         "rad_loci_before_min_sample_coverage",
         "rad_loci_after_min_sample_coverage",
-        "final_filtered_rad_loci_with_wgs",
+        "loci_after_rad_wgs_integration",
+        "final_loci_after_filtering",
         "cumulative_final_loci",
         "fraction_of_final_loci",
     ]
@@ -1068,7 +1076,10 @@ def write_assemble_stats_report(
                 if rad_locus_occupancy_after_min_sample_coverage_filter is not None
                 else None
             ),
-            "final_filtered_rad_loci_with_wgs": int(
+            "loci_after_rad_wgs_integration": int(
+                integration_samples_per_locus_counts.get(sample_count, 0)
+            ),
+            "final_loci_after_filtering": int(
                 samples_per_locus_counts.get(sample_count, 0)
             ),
             "cumulative_final_loci": int(
@@ -1086,7 +1097,8 @@ def write_assemble_stats_report(
             _format_count(row["samples_with_data"]),
             _format_optional_count(row["rad_loci_before_min_sample_coverage"]),
             _format_optional_count(row["rad_loci_after_min_sample_coverage"]),
-            _format_count(row["final_filtered_rad_loci_with_wgs"]),
+            _format_count(row["loci_after_rad_wgs_integration"]),
+            _format_count(row["final_loci_after_filtering"]),
             _format_count(row["cumulative_final_loci"]),
             _format_fraction(row["fraction_of_final_loci"]),
         ]
@@ -1361,6 +1373,7 @@ def _resolve_output_batch(
         "max_shared_hetero_frequency": 0,
         "max_depth_outlier": 0,
     }
+    samples_per_locus_before_final_filters = Counter()
     phy_cursor = 0
     chunk_arrays: list[np.ndarray] = []
     chunk_map_rows: list[tuple[int, int, int, int, int]] = []
@@ -1379,6 +1392,9 @@ def _resolve_output_batch(
         )
         for key in total_filters:
             total_filters[key] += int(filters[key])
+        samples_per_locus_before_final_filters[
+            int(stats["samples_with_data_before_final_filters"])
+        ] += 1
         if sum(filters.values()):
             continue
 
@@ -1420,6 +1436,9 @@ def _resolve_output_batch(
     return {
         "nloci_before_filtering": len(batch_items),
         "filter_counts": total_filters,
+        "samples_per_locus_before_final_filters_counts": dict(
+            samples_per_locus_before_final_filters
+        ),
         "retained_loci": retained_loci,
         "chunkarr": chunkarr,
         "chunkmap": chunkmap,
@@ -1477,6 +1496,7 @@ def write_final_outputs(
     scaff2idx = {str(scaff): idx for idx, scaff in enumerate(writer.io5.attrs["scaffold_names"])}
 
     samples_per_locus = Counter()
+    samples_per_locus_before_final_filters = Counter()
     locus_length_counts = Counter()
     per_sample_locus_counts = {i: 0 for i in real_snames}
     total_filters = {
@@ -1557,6 +1577,11 @@ def write_final_outputs(
                 nloci_before_filtering += int(batch_result["nloci_before_filtering"])
                 for key in total_filters:
                     total_filters[key] += int(batch_result["filter_counts"][key])
+                samples_per_locus_before_final_filters.update(
+                    batch_result[
+                        "samples_per_locus_before_final_filters_counts"
+                    ]
+                )
                 retained_loci = batch_result["retained_loci"]
                 for locus_output in retained_loci:
                     out_bed.write(str(locus_output["bed_row"]))
@@ -1675,6 +1700,9 @@ def write_final_outputs(
         "filter_counts": dict(total_filters),
         "site_totals": dict(total_stats),
         "sample_locus_counts": dict(per_sample_locus_counts),
+        "samples_per_locus_before_final_filters_counts": dict(
+            samples_per_locus_before_final_filters
+        ),
         "masked_by_min_observed_fraction_counts": dict(masked_by_min_observed_fraction_counts),
         "loci_with_samples_masked_by_min_observed_fraction": loci_with_samples_masked_by_min_observed_fraction,
         "total_masked_sample_occurrences_by_min_observed_fraction": total_masked_sample_occurrences_by_min_observed_fraction,
@@ -1720,6 +1748,7 @@ def write_loci_and_stats_files(
     # writes the filtered loci and BED outputs, so the final stats report does
     # not need to reparse the full database later.
     samples_per_locus = Counter()
+    samples_per_locus_before_final_filters = Counter()
     locus_length_counts = Counter()
     per_sample_locus_counts = {i: 0 for i in real_snames}
     total_filters = {
@@ -1785,6 +1814,9 @@ def write_loci_and_stats_files(
             # update total dicts
             for key in total_filters:
                 total_filters[key] += int(result[4][key])
+            samples_per_locus_before_final_filters[
+                int(stats["samples_with_data_before_final_filters"])
+            ] += 1
 
             # store for writing if locus passed filters
             if not sum(filters.values()):
@@ -1885,6 +1917,9 @@ def write_loci_and_stats_files(
         "filter_counts": dict(total_filters),
         "site_totals": dict(total_stats),
         "sample_locus_counts": dict(per_sample_locus_counts),
+        "samples_per_locus_before_final_filters_counts": dict(
+            samples_per_locus_before_final_filters
+        ),
         "masked_by_min_observed_fraction_counts": dict(masked_by_min_observed_fraction_counts),
         "loci_with_samples_masked_by_min_observed_fraction": loci_with_samples_masked_by_min_observed_fraction,
         "total_masked_sample_occurrences_by_min_observed_fraction": total_masked_sample_occurrences_by_min_observed_fraction,

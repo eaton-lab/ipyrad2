@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 import itertools
 
@@ -18,6 +19,22 @@ from ...utils.pops import expand_imap_patterns, parse_imap, parse_minmap, parse_
 
 REFERENCE_SAMPLE_NAME = "assembly_reference_sequence"
 SEQUENCE_CHUNK_SITES = 5000
+MISSING_BASE = 78
+
+
+@dataclass(frozen=True)
+class SequenceExtractionContext:
+    """Resolved sequence-HDF5 metadata and sample filtering state."""
+
+    data: Path
+    scaffold_table: pd.DataFrame
+    sample_names: list[str]
+    sample_indices: list[int]
+    exclude: set[str]
+    imap: dict[str, list[str]]
+    minmap: dict[str, int | float]
+    imap_row_indices: dict[str, np.ndarray]
+    max_sample_missing: float
 
 
 def _decode_h5_names(values) -> list[str]:
@@ -67,8 +84,32 @@ def load_sequence_chunk_from_phy(
         width = end - start
         block[:, offset : offset + width] = phy[sidxs, start:end]
         offset += width
-    block[block == 45] = 78
+    block[block == 45] = MISSING_BASE
     return block
+
+
+def filter_block_by_minmap(
+    block: np.ndarray,
+    imap_row_indices: dict[str, np.ndarray],
+    minmap: dict[str, int | float],
+) -> np.ndarray:
+    """Return one block after applying per-population site coverage filters."""
+    if not block.size:
+        return block[:, 0:0]
+
+    remove = np.zeros(block.shape[1], dtype=np.bool_)
+    for population, indices in imap_row_indices.items():
+        remove |= np.sum(block[indices, :] != MISSING_BASE, axis=0) < minmap[
+            population
+        ]
+    return block[:, np.invert(remove)]
+
+
+def count_sequence_variants(block: np.ndarray) -> int:
+    """Count variable columns while ignoring missing sequence characters."""
+    masked = np.ma.masked_equal(block, MISSING_BASE)
+    variable = (np.ma.ptp(masked, axis=0) > 0).filled(False)
+    return int(np.sum(variable))
 
 
 def normalize_sequence_population_inputs(imap, minmap):
@@ -202,6 +243,52 @@ def build_sequence_imap_minmap(
         for key, names in imap.items()
     }
     return filtered_imap, {key: minmap[key] for key in filtered_imap}
+
+
+def build_sequence_extraction_context(
+    data: Path | str,
+    *,
+    min_sample_coverage: int | float,
+    max_sample_missing: float,
+    exclude=None,
+    include_reference: bool = False,
+    imap=None,
+    minmap=None,
+) -> SequenceExtractionContext:
+    """Resolve shared sequence metadata, samples, populations, and filters."""
+    data = Path(data)
+    imap, minmap = normalize_sequence_population_inputs(imap, minmap)
+    scaffold_table = load_sequence_scaffold_table(data)
+    sample_names, sample_indices, exclude, imap = resolve_sequence_sample_subset(
+        data,
+        exclude=exclude,
+        include_reference=include_reference,
+        imap=imap,
+    )
+    imap, minmap = build_sequence_imap_minmap(
+        sample_names,
+        min_sample_coverage=min_sample_coverage,
+        imap=imap,
+        minmap=minmap,
+    )
+    imap_row_indices = {
+        population: np.asarray(
+            [sample_names.index(name) for name in names],
+            dtype=np.int64,
+        )
+        for population, names in imap.items()
+    }
+    return SequenceExtractionContext(
+        data=data,
+        scaffold_table=scaffold_table,
+        sample_names=sample_names,
+        sample_indices=sample_indices,
+        exclude=exclude,
+        imap=imap,
+        minmap=minmap,
+        imap_row_indices=imap_row_indices,
+        max_sample_missing=min(1.0, max(0.0, float(max_sample_missing))),
+    )
 
 
 def sync_sequence_imap_after_sample_drop(

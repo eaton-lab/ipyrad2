@@ -23,8 +23,6 @@
 - variants: check that snps are being removed from indel regions, and that we want that (in func: get_vcf_with_indels_resolved)
 - variants: try bcf is faster than vcf for intermediates.
 - parallel: stderr writes temporarily to $TMPDIR. Instead set to outdir/tmpdir?
-- wex: check that alignments are correct when using -r or other exclude methods.
-- wex: better format for stats. Write missing per sample to stats.
 - analysis:
     - [ ] test api with logger
     - [x] pca
@@ -32,7 +30,7 @@
     - [ ] bpp - Done but not tested
     - [ ] raxml-ng
     - [ ] treeslider
-    - [ ] more converters like wex?
+    - [ ] more converters like seqex?
 
 
 # TODO Low priority
@@ -44,17 +42,7 @@
 
 # ideas to try/consider for V2
 ```bash
-# write 500 loci randomly sampled from chroms 1-5 using random seed 123 and requiring loci to contain 10 samples
-ipyrad2 lex -d DATA.hdf5 -s Chr[1-5] -n 500 -m 10 -x 123 --format fasta
-# write 1000 loci randomly sampled from chr1 or chr2 requiring minlen, and that loci have MINMAP cov across IMAP population
-ipyrad2 lex -d DATA.hdf5 -s Chr1 Chr2 -n 1000 --min-len 100 --imap IMAP.tsv --minmap MINMAP.tsv --format fasta
-# write 500 loci from chroms 1-5 requiring data to be across at least 4 individuals in each pop.
-ipyrad2 lex -d DATA.hdf5 -s Chr[1-5] -n 500 --imap IMAP.tsv --minmap 4 --format bpp
-...
-
-
-ipyrad2 analysis wex -d HDF5 ... -O phy
-ipyrad2 analysis lex -d HDF5 --imap ... --minmap ... -O bpp
+ipyrad2 seqex -d HDF5 -i IMAP.tsv -g MINMAP.tsv -N 500 -s 123 -O fa
 ipyrad2 analysis tex -d HDF5 ... --scaffolds chr1 -c 20 -t 10 --wsize 1e5 --ssize 1e5 --binary raxml-ng --kwargs 'model=GTR+G,boots=100,trees=pars{10}'
 ipyrad2 analysis tex -d HDF5 ... --scaffolds chr1 -c 20 -t 10 --wsize 1e5 --ssize 1e5 --binary veryfasttree --kwargs '-gtr,-gamma'
 ipyrad2 analysis pca -d HDF5 ... --scaffolds [defaults to all] -n name-prefix -o dir --imap ... --minmap ... --nreplicates 50 -c 10
@@ -100,7 +88,7 @@ ipyrad2 analysis pca -d HDF5 ... --scaffolds [defaults to all] -n name-prefix -o
 - [x] name: if splitting on _ from back fails, try from front.
 - [x] denovo: test on real data.
 - [x] denovo: develop SE pipeline.
-- [x] analysis: add analysis tools (wex/lex/treeslider) as 'analysis' subcommand
+- [x] add top-level analysis tools, including seqex and treeslider
 - [x] map: handle SE
 - [x] assemble: replace numba code to be pure numpy and remove numba as a dependency.
 - [x] cli: subcommand splash messages should show the ipyrad version.
