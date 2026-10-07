@@ -1,5 +1,4 @@
-{% set version = "0.1.9" %}
-{% set python_min = "3.9" %}
+{% set version = "0.1.12" %}
 
 package:
   name: ipyrad2
@@ -7,7 +6,7 @@ package:
 
 source:
   url: https://github.com/eaton-lab/ipyrad2/archive/v{{ version }}.tar.gz
-  sha256: d4148bce6a4696a3e6b5ac2430cd830e9c139247e9a885c8b2933edd4295c30a
+  sha256: ec3aa40441de4623b40018fae87f1bb28903cbd58c3d4cbec15c08636fd7ec9c
 
 build:
   entry_points:
@@ -17,6 +16,8 @@ build:
     - SETUPTOOLS_SCM_PRETEND_VERSION={{ version }}
   noarch: python
   script: {{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation
+  run_exports:
+    - {{ pin_subpackage('ipyrad2', max_pin="x.x") }}
   number: 0
 
 requirements:
@@ -33,16 +34,21 @@ requirements:
     - pandas
     - h5py
     - tomlkit
+    - fastp
+    - vsearch
+    - mafft
+    - bwa-mem2
+    - samtools
+    - bedtools
+    - bcftools
 
 test:
   imports:
     - ipyrad2
   commands:
-    - pip check
     - ipyrad2 --help
     - ipyrad2-classic --help
   requires:
-    - pip
     - python {{ python_min }}
 
 about:
