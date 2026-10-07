@@ -12,10 +12,14 @@ EPILOG = r"""
 Examples
 --------
 $ ipyrad2 snpex -d assembly.hdf5 -o OUT/
-$ ipyrad2 snpex -d assembly.hdf5 -o OUT/ -n SNPSET --seed 123 --phylip
-$ ipyrad2 snpex -d assembly.hdf5 -o OUT/ --no-subsample --plink --impute-method sample
+$ ipyrad2 snpex -d assembly.hdf5 -o OUT/ -n SNPSET --seed 123 -O phylip
+$ ipyrad2 snpex -d assembly.hdf5 -o OUT/ --no-subsample -O plink --impute-method sample
+$ ipyrad2 snpex -d assembly.hdf5 -o OUT/ -O nexus fasta
 $ ipyrad2 snpex -d assembly.hdf5 -o OUT/ -i POPs.txt -g MINs.txt
 """
+
+
+SNPEX_OUT_FORMATS = ("plink", "phylip", "nexus", "fasta", "treemix", "eems")
 
 
 def _setup_snpex_subparser(
@@ -98,28 +102,13 @@ def _setup_snpex_subparser(
         help="Random seed for reproducible one-SNP-per-locus subsampling.",
     )
     export.add_argument(
-        "--plink", action="store_true",
-        help="Also write PLINK BED/BIM/FAM files for the exported SNP set.",
-    )
-    export.add_argument(
-        "--phylip", action="store_true",
-        help="Also write the exported SNP matrix as a PHYLIP alignment.",
-    )
-    export.add_argument(
-        "--nexus", action="store_true",
-        help="Also write the exported SNP matrix as a NEXUS alignment.",
-    )
-    export.add_argument(
-        "--fasta", action="store_true",
-        help="Also write the exported SNP matrix as a FASTA alignment.",
-    )
-    export.add_argument(
-        "--treemix", action="store_true",
-        help="Also write TreeMix population-count input for the exported SNP set.",
-    )
-    export.add_argument(
-        "--eems", action="store_true",
-        help="Also write an EEMS genetic-dissimilarity matrix for the exported SNP set.",
+        "-O", "--out-format", dest="out_formats", metavar="str",
+        nargs="+", action="extend", choices=SNPEX_OUT_FORMATS,
+        help=(
+            "Additional output format(s): plink, phylip, nexus, fasta, "
+            "treemix, or eems. Core matrix and stats files are always written. "
+            "[default=none]"
+        ),
     )
     export.add_argument(
         "-I", "--impute-method", metavar="str", choices=("sample", "zero-fill", "zero"),

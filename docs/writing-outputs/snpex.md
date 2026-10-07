@@ -1,37 +1,46 @@
 # snpex
 
-`ipyrad2 snpex` exports filtered SNP datasets. It always writes the core filtered matrices
-used inside `ipyrad2`, and it can also write external-tool formats such as PLINK, PHYLIP,
-NEXUS, FASTA, TreeMix, and EEMS from the same selected SNP view.
+`ipyrad2 snpex` can be used to export subsampled and filtered SNP datasets in a variety of
+common formats, including PLINK, PHYLIP, NEXUS, and FASTA, as well as several more complex supported
+formats, including TreeMix and EEMS that group individual data into population frequencies.
+The subsampling, filtering, and optional imputation options allow for easily generating multiple
+datasets with different thresholds for dealing with missing data.
 
-This is the SNP export command to use when you need explicit control over missing-data handling,
-linked versus unlinked SNPs, population-aware filtering with `imap` and `minmap`, or files for
-software outside the built-in `analysis` commands.
+## Quick guide
 
-## When to Use
+!!! tip "Use snpex to filter/subsample/impute and write SNP data"
 
-Use `snpex` when you need SNP files for software outside ipyrad2, such as:
+```bash
+ipyrad2 snpex \
+  --data HDF5 \
+  --out SNPS/ \
+  --min-sample-coverage 20 \
+  --max-sample-missing 0.5 \
+  --out-format plink fasta
+```
 
-- PLINK-style clustering, association, or preprocessing workflows
-- SNP alignments for phylogenetic tools that accept PHYLIP, NEXUS, or FASTA
-- TreeMix population-count input
-- EEMS genetic dissimilarity input
-
-If you are using analysis tools inside `ipyrad2`, sich as its `pca`, `popgen`, `baba`, and related tools,
+Note: If you are using [Analysis](../analyses) tools inside `ipyrad2`, sich as its `pca`, `popgen`, `baba`, and related tools,
 you do not need to use `snpex` as its filtering options are implemented within those commands directly.
 
-## Inputs and Filtering
+## Input and output
 
 - `-d, --data`: input SNP HDF5
+- `-o, --out`: ...
+- `-O, --out-format`: write one or more additional formats selected from `plink`, `phylip`, `nexus`, `fasta`, `treemix`, and `eems`
+- `-i, --imap`: sample-to-population map for subsetting and population-aware filtering
+- `-g, --minmap`: per-population minimum coverage checks applied on top of `-m` when `imap` is used
+
+## Filtering
+
+If an `--imap` is entered the dataset will be subset to include only the samples listed in the file.
+
 - `-m, --min-sample-coverage`: minimum number of samples with data required at a SNP
 - `-r, --max-sample-missing`: drop samples whose missing-data fraction exceeds this threshold, then rerun SNP filtering
 - `-a, --min-minor-allele-frequency`: drop low-frequency SNPs after coverage filtering
 - `-e, --exclude`: exclude one or more named samples
 - `-R, --include-reference`: include `assembly_reference_sequence`
-- `-i, --imap`: sample-to-population map for subsetting and population-aware filtering
-- `-g, --minmap`: per-population minimum coverage checks applied on top of `-m` when `imap` is used
-
-By default `snpex` writes one SNP per RAD locus. Use `--no-subsample` to keep linked SNPs. Use `--seed` when you want reproducible one-SNP-per-locus subsampling.
+- `--no-subsample`: By default `snpex` writes one SNP per RAD locus. Use `--no-subsample` to keep linked SNPs.
+- `--seed` Use this when you want reproducible one-SNP-per-locus subsampling.
 
 ## Imputation
 
@@ -59,16 +68,16 @@ These baseline outputs are useful even if you do not request any additional exte
 
 ## Optional Export Formats
 
-Use one or more per-format flags to add external-tool files:
+Use `-O/--out-format` followed by one or more format names to add external-tool files:
 
-- `--plink`: `NAME.bed`, `NAME.bim`, `NAME.fam`
-- `--phylip`: `NAME.phy`
-- `--nexus`: `NAME.nex`
-- `--fasta`: `NAME.fa`
-- `--treemix`: `NAME.treemix.gz`
-- `--eems`: `NAME.eems`
+- `plink`: `NAME.bed`, `NAME.bim`, `NAME.fam`
+- `phylip`: `NAME.phy`
+- `nexus`: `NAME.nex`
+- `fasta`: `NAME.fa`
+- `treemix`: `NAME.treemix.gz`
+- `eems`: `NAME.eems`
 
-`snpex` does not force you to choose only one export target. A single run can write several of these formats from the same selected SNP matrix.
+For example, `-O plink fasta` writes both formats from the same selected SNP matrix. If `-O` is omitted, `snpex` writes only the core outputs listed above.
 
 ## Format Notes
 
@@ -109,7 +118,7 @@ This command does not write the spatial `.coord` or habitat `.outer` files. Thos
 ### filter for missing data and write unlinked SNPs matrix
 
 ```bash
-ipyrad2 analysis snpex \
+ipyrad2 snpex \
   -d assembly.hdf5 \
   -o SNP_OUT/ \
   -m 10
@@ -118,34 +127,34 @@ ipyrad2 analysis snpex \
 ### filter for missing data and write linked SNPs to PLINK format
 
 ```bash
-ipyrad2 analysis snpex \
+ipyrad2 snpex \
   -d assembly.hdf5 \
   -o SNP_OUT/ \
   -m 10 \
   --no-subsample \
-  --plink \
+  -O plink
 ```
 
 ### filter, impute, and write to FASTA
 
 ```bash
-ipyrad2 analysis snpex \
+ipyrad2 snpex \
   -d assembly.hdf5 \
   -o SNP_OUT/ \
   -m 10 \
   --impute-method sample \
-  --fasta
+  -O fasta
 ```
 
 ### filter and impute population-aware and write to TREEMIX
 
 ```bash
-ipyrad2 analysis snpex \
+ipyrad2 snpex \
   -d assembly.hdf5 \
   -o SNP_OUT/ \
   -i pops.tsv \
   -g minmap.tsv \
-  --treemix
+  -O treemix
 ```
 
 ## Common Failures

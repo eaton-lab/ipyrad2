@@ -2,6 +2,7 @@ import argparse
 
 import pytest
 
+from ipyrad2.cli import cli_analysis
 from ipyrad2.cli.cli_main import setup_parsers
 
 
@@ -165,12 +166,7 @@ def test_snpex_help_groups_examples_and_reference_controls_are_present() -> None
         "-g, --minmap",
         "--no-subsample",
         "--seed",
-        "--plink",
-        "--phylip",
-        "--nexus",
-        "--fasta",
-        "--treemix",
-        "--eems",
+        "-O, --out-format",
         "--impute-method",
         "-c, --cores",
         "-f, --force",
@@ -187,9 +183,12 @@ def test_snpex_help_groups_examples_and_reference_controls_are_present() -> None
 
     assert "ipyrad2 snpex: extract filtered SNP matrices from HDF5 database" in help_text
     assert "$ ipyrad2 snpex -d assembly.hdf5 -o OUT/" in help_text
-    assert "$ ipyrad2 snpex -d assembly.hdf5 -o OUT/ -n SNPSET --seed 123 --phylip" in help_text
-    assert "$ ipyrad2 snpex -d assembly.hdf5 -o OUT/ --no-subsample --plink --impute-method sample" in help_text
+    assert "$ ipyrad2 snpex -d assembly.hdf5 -o OUT/ -n SNPSET --seed 123 -O phylip" in help_text
+    assert "$ ipyrad2 snpex -d assembly.hdf5 -o OUT/ --no-subsample -O plink --impute-method sample" in help_text
+    assert "$ ipyrad2 snpex -d assembly.hdf5 -o OUT/ -O nexus fasta" in help_text
     assert "$ ipyrad2 snpex -d assembly.hdf5 -o OUT/ -i POPs.txt -g MINs.txt" in help_text
+    for legacy_flag in ("--plink", "--phylip", "--nexus", "--fasta", "--treemix", "--eems"):
+        assert legacy_flag not in help_text
     assert "-I" in help_text
     assert "Population-to-minimum-coverage mapping file" in help_text
     assert "`population<TAB>min`" in help_text
@@ -198,6 +197,79 @@ def test_snpex_help_groups_examples_and_reference_controls_are_present() -> None
     assert "--include-reference" in help_text
     assert "assembly_reference_sequence" in help_text
     assert help_text.index("-h, --help") > help_text.index("Logging:")
+
+
+@pytest.mark.parametrize(
+    "format_args",
+    [
+        ["-O", "phy"],
+        ["--plink"],
+        ["--phylip"],
+        ["--nexus"],
+        ["--fasta"],
+        ["--treemix"],
+        ["--eems"],
+    ],
+)
+def test_snpex_rejects_unknown_formats_and_removed_flags(format_args: list[str]) -> None:
+    parser = setup_parsers()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["snpex", "-d", "assembly.hdf5", *format_args])
+
+
+def test_snpex_out_formats_extend_and_dispatch_once_per_format(monkeypatch) -> None:
+    parser = setup_parsers()
+    args = parser.parse_args(
+        [
+            "snpex",
+            "-d",
+            "assembly.hdf5",
+            "-O",
+            "plink",
+            "phylip",
+            "nexus",
+            "-O",
+            "fasta",
+            "treemix",
+            "eems",
+            "plink",
+        ]
+    )
+    captured = {}
+    monkeypatch.setattr(
+        cli_analysis,
+        "_load_runner",
+        lambda _tool: lambda **kwargs: captured.update(kwargs),
+    )
+
+    cli_analysis.run_analysis_tool(args, _exit=False)
+
+    assert args.out_formats == [
+        "plink",
+        "phylip",
+        "nexus",
+        "fasta",
+        "treemix",
+        "eems",
+        "plink",
+    ]
+    assert captured["write_plink"] is True
+    assert captured["write_phylip"] is True
+    assert captured["write_nexus"] is True
+    assert captured["write_fasta"] is True
+    assert captured["write_treemix"] is True
+    assert captured["write_eems"] is True
+
+    default_args = parser.parse_args(["snpex", "-d", "assembly.hdf5"])
+    captured.clear()
+    cli_analysis.run_analysis_tool(default_args, _exit=False)
+    assert default_args.out_formats is None
+    assert captured["write_plink"] is False
+    assert captured["write_phylip"] is False
+    assert captured["write_nexus"] is False
+    assert captured["write_fasta"] is False
+    assert captured["write_treemix"] is False
+    assert captured["write_eems"] is False
 
 
 def test_vcf2hdf5_help_groups_examples_and_logging_are_present() -> None:
@@ -539,6 +611,7 @@ def test_top_level_parser_accepts_flattened_export_and_analysis_subcommands() ->
     )
     assert snpex_args.subcommand == "snpex"
     assert snpex_args.name == "snpset"
+    assert snpex_args.out_formats is None
     assert snpex_args.impute_method is None
 
     snpex_impute_args = parser.parse_args(

@@ -239,6 +239,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
 
     if tool == "snpex":
         run_snps_extracter = _load_runner(tool)
+        out_formats = set(args.out_formats or ())
         logger.info("------------------------------------------------------------")
         logger.info("---- ipyrad2 snpex: extract filtered SNP matrices ----")
         logger.info("------------------------------------------------------------")
@@ -261,12 +262,12 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
             log_level=args.log_level,
             subsample=not args.no_subsample,
             random_seed=args.seed,
-            write_plink=args.plink,
-            write_phylip=args.phylip,
-            write_nexus=args.nexus,
-            write_fasta=args.fasta,
-            write_treemix=args.treemix,
-            write_eems=args.eems,
+            write_plink="plink" in out_formats,
+            write_phylip="phylip" in out_formats,
+            write_nexus="nexus" in out_formats,
+            write_fasta="fasta" in out_formats,
+            write_treemix="treemix" in out_formats,
+            write_eems="eems" in out_formats,
             impute_method=args.impute_method,
         )
         if _exit:
