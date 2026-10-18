@@ -169,6 +169,8 @@ def _launch_pipeline(
     stdin_encoding: str,
     last_stdout_target,
     last_stderr_pipe: bool,
+    env: dict[str, str] | None = None,
+    cwd: str | Path | None = None,
 ) -> _LaunchedPipeline:
     """Launch a pipeline and optionally feed text into its first stage."""
     procs: list[sp.Popen] = []
@@ -193,12 +195,18 @@ def _launch_pipeline(
             stderr_target = tmpf
             stderr_tmpfiles.append(tmpf)
 
+        child_context = {}
+        if env is not None:
+            child_context["env"] = env
+        if cwd is not None:
+            child_context["cwd"] = cwd
         proc = safe_popen(
             argv,
             stdin=stdin_source,
             stdout=stdout_target,
             stderr=stderr_target,
             text=False,
+            **child_context,
         )
 
         if prev is not None and prev.stdout is not None:
@@ -511,6 +519,8 @@ def run_pipeline(
     stdin_encoding: str = "utf-8",
     ignore_sigpipe: bool = True,
     timeout_s: float | None = None,
+    env: dict[str, str] | None = None,
+    cwd: str | Path | None = None,
 ) -> Tuple[int, bytes, bytes]:
     """Run a shell-like pipeline of cmds with pipefail + fail-fast semantics."""
     import signal as _signal
@@ -558,6 +568,8 @@ def run_pipeline(
             stdin_encoding=stdin_encoding,
             last_stdout_target=fout if fout is not None else sp.PIPE,
             last_stderr_pipe=True,
+            env=env,
+            cwd=cwd,
         )
         procs = launched.procs
         stderr_tmpfiles = launched.stderr_tmpfiles

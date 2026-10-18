@@ -238,3 +238,13 @@ def test_make_indel_mask_bed_concurrent_stress(tmp_path: Path) -> None:
     assert len(outputs) == len(vcfs)
     assert all(path.exists() for path in outputs)
     assert all(path.read_text(encoding="utf-8").strip() for path in outputs)
+
+
+def test_run_pipeline_child_env_and_cwd_are_scoped(tmp_path: Path) -> None:
+    env = dict(os.environ, IPYRAD2_CHILD_TEST='child')
+    cmd = _py("import os", "print(os.environ['IPYRAD2_CHILD_TEST'])", "print(os.getcwd())")
+    before = Path.cwd()
+    _, out, _ = run_pipeline([cmd], env=env, cwd=tmp_path)
+    assert out.decode().splitlines() == ['child', str(tmp_path)]
+    assert Path.cwd() == before
+    assert 'IPYRAD2_CHILD_TEST' not in os.environ
