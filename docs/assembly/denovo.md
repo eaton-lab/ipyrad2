@@ -222,3 +222,12 @@ runtime metadata in that directory and logs its path for replay. Successful
 private scratch is removed. This does not retry a failed alignment automatically
 or change its scientific parameters. Filesystem detection is Linux-specific;
 unknown filesystems retain the selected environment helpers.
+
+For a shared Conda MAFFT installation, ipyrad2 also copies its launcher and
+native program directory to private node-local storage once per process. It
+checks every copied file against the source SHA256 and sets `MAFFT_BINARIES`
+only in the child environment. This avoids repeatedly opening the launcher and
+native programs over the shared filesystem. The copied program contents and
+scientific arguments are unchanged. The small runtime bundle and its source
+manifest are retained and their location is logged. A shared nonstandard
+installation must provide its native program directory via `MAFFT_BINARIES`.

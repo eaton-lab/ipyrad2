@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from functools import lru_cache
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 
 from loguru import logger
 
@@ -87,6 +89,47 @@ def _scratch_parent() -> str:
     raise RuntimeError('No writable local MAFFT scratch directory; set MAFFT_TMPDIR to node-local scratch')
 
 
+_RUNTIME_LOCK = threading.Lock()
+_LOCAL_RUNTIMES: dict[tuple[str, str, str], tuple[str, str]] = {}
+
+
+def _local_runtime(binary: str, env: dict[str, str], parent: str) -> str:
+    """Stage a shared Conda MAFFT runtime once, without changing its contents.
+
+    Bash reads its launcher while running, and native helpers also live on NFS.
+    Moving scratch and awk alone does not remove those shared-file accesses.
+    Retain the small private runtime bundle for failed-call diagnostics.
+    """
+    supplied = env.get('MAFFT_BINARIES')
+    prefix = Path(supplied).expanduser().absolute() if supplied else Path(binary).parent.parent/'libexec/mafft'
+    if not _network(binary) and not (prefix.is_dir() and _network(str(prefix))):
+        return binary
+    if not prefix.is_dir() or not (prefix/'version').is_file():
+        raise RuntimeError('Cannot stage shared MAFFT installation: set MAFFT_BINARIES to its native program directory')
+    key = (binary, str(prefix), parent)
+    with _RUNTIME_LOCK:
+        cached = _LOCAL_RUNTIMES.get(key)
+        if cached is None:
+            root = Path(tempfile.mkdtemp(prefix='ipyrad2-mafft-runtime-', dir=parent))
+            launcher = root/Path(binary).name
+            shutil.copy2(binary, launcher)
+            native = root/'native'
+            shutil.copytree(prefix, native)
+            files = [(Path(binary), launcher)] + [(p, native/p.relative_to(prefix)) for p in prefix.rglob('*') if p.is_file()]
+            manifest = {}
+            for source, copied in files:
+                digest = hashlib.sha256(source.read_bytes()).hexdigest()
+                if hashlib.sha256(copied.read_bytes()).hexdigest() != digest:
+                    raise RuntimeError(f'MAFFT runtime copy checksum mismatch: {source}')
+                manifest[str(source)] = digest
+            (root/'source-sha256.json').write_text(json.dumps(manifest, indent=2)+'\n')
+            cached = (str(launcher), str(native))
+            _LOCAL_RUNTIMES[key] = cached
+            logger.info('MAFFT byte-identical local runtime retained at {}', root)
+        env['MAFFT_BINARIES'] = cached[1]
+        return cached[0]
+
+
 @contextmanager
 def mafft_process_context(binary: str, input_text: str):
     """Prepare one isolated invocation without mutating process-wide environment.
@@ -96,17 +139,20 @@ def mafft_process_context(binary: str, input_text: str):
     """
     env = dict(os.environ)
     env['PATH'] = _helper_path(env.get('PATH', os.defpath))
-    work = Path(tempfile.mkdtemp(prefix='ipyrad2-mafft-', dir=_scratch_parent()))
+    parent = _scratch_parent()
+    work = Path(tempfile.mkdtemp(prefix='ipyrad2-mafft-', dir=parent))
     env.update(TMPDIR=str(work), MAFFT_TMPDIR=str(work), PWD=str(work))
     # Resolve before changing cwd, including caller-supplied relative paths.
     executable = str(Path(shutil.which(binary) or binary).absolute())
     try:
+        executable = _local_runtime(executable, env, parent)
         yield executable, env, work
     except Exception as exc:
         try:
             (work / 'input.fa').write_text(input_text)
             (work / 'failure.json').write_text(json.dumps({
                 'executable': executable, 'helper_path': env['PATH'],
+                'mafft_binaries': env.get('MAFFT_BINARIES'),
                 'scratch': str(work), 'error': str(exc),
             }, indent=2) + '\n')
         except OSError as diagnostic_error:

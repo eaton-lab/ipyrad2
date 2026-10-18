@@ -98,3 +98,30 @@ def test_relative_executable_resolved_before_child_cwd(monkeypatch, tmp_path):
     monkeypatch.setenv('MAFFT_TMPDIR', str(tmp_path))
     result = align.mafft_align_one([('a','ACGT'), ('b','ACGA')], './mafft')
     assert result == [('a','ACGT'), ('b','ACGA')]
+
+
+def test_shared_runtime_staged_once_with_identical_bytes(monkeypatch, tmp_path):
+    prefix=tmp_path/'conda'; (prefix/'bin').mkdir(parents=True)
+    native=prefix/'libexec/mafft'; native.mkdir(parents=True)
+    (native/'version').write_text('version bytes')
+    launcher=prefix/'bin/mafft'; launcher.write_text('#!/bin/sh\ncat\n'); launcher.chmod(0o700)
+    local=tmp_path/'local'; local.mkdir()
+    monkeypatch.setattr(runtime, '_network', lambda p: str(p).startswith(str(prefix)))
+    def one(_):
+        env={}
+        path=runtime._local_runtime(str(launcher),env,str(local))
+        return path,env['MAFFT_BINARIES']
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outputs=list(pool.map(one,range(24)))
+    assert len(set(outputs))==1
+    binary,programs=outputs[0]
+    assert Path(binary).read_bytes()==launcher.read_bytes()
+    assert (Path(programs)/'version').read_bytes()==(native/'version').read_bytes()
+    assert len(list(local.iterdir()))==1
+    assert (Path(binary).parent/'source-sha256.json').is_file()
+
+
+def test_shared_nonstandard_runtime_requires_native_prefix(monkeypatch,tmp_path):
+    monkeypatch.setattr(runtime, '_network', lambda p: True)
+    with pytest.raises(RuntimeError,match='MAFFT_BINARIES'):
+        runtime._local_runtime(str(tmp_path/'unknown-mafft'),{},str(tmp_path))
