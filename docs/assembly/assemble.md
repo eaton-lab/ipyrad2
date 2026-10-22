@@ -345,3 +345,8 @@ This preparation adds a collation and coordinate-sort pass for paired BAMs;
 allow additional temporary disk and I/O. Original mapped BAMs are unchanged.
 At `--min-base-q 0`, zero-quality masking no longer excludes those bases; use a
 positive base-quality threshold (the default is 13) for fragment-level counting.
+
+Both callers explicitly exclude unmapped, secondary, QC-failed, duplicate and
+supplementary records. Supplementary alignments must not add a second observation
+from the same fragment when anomalous pairs are admitted. QC-failed and duplicate
+records cannot take precedence over an eligible mate in overlap masking.

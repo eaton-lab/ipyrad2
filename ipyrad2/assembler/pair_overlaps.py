@@ -34,7 +34,7 @@ def mask_group(records: list[list[str]], counts: Counter) -> None:
     by_rg = {}
     for fields in records:
         flag = int(fields[1])
-        if not flag & 1 or flag & 0x90c:
+        if not flag & 1 or flag & 0xf0c:
             continue
         rg = next((t[5:] for t in fields[11:] if t.startswith('RG:Z:')), '')
         by_rg.setdefault(rg, []).append(fields)
@@ -44,7 +44,7 @@ def mask_group(records: list[list[str]], counts: Counter) -> None:
             continue
         a, b = pair
         fa, fb = int(a[1]), int(b[1])
-        if bool(fa & 64) == bool(fb & 64) or bool(fa & 128) == bool(fb & 128):
+        if {fa & 0xc0, fb & 0xc0} != {0x40, 0x80}:
             counts['unmatched_or_ambiguous_groups'] += 1
             continue
         if fa & 2 and fb & 2:

@@ -66,6 +66,7 @@ def call_vcf_from_bam(
         # Assemble already enforces mate, mapping and alignment filters. Do not
         # silently discard retained pairs solely because BWA omitted PROPER_PAIR.
         "--count-orphans",
+        "--skip-any-set", "UNMAP,SECONDARY,QCFAIL,DUP,SUPPLEMENTARY",
         "-f",
         str(reference_fasta),
         "-q",

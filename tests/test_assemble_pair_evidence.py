@@ -47,6 +47,10 @@ def test_both_callers_recover_retained_evidence_and_keep_overlap_correction(tmp_
         if paired:
             s2=list(seq[80:200]);s2[pos-81]=alt
             records.append(record(f'good{i}',147 if paired=='proper' else 145,81,''.join(s2),41,nm=1))
+    # Excluded records support the opposite allele; neither caller may count them.
+    for flag in (0x200,0x400,0x800):
+        for i in range(20):
+            records.append(record(f'excluded{flag}_{i}',(97 if paired else 0)|flag,41,seq[40:160],81 if paired else 0))
     bam=make_bam(tmp_path,'s',seq,records)
     filtered=prepare_filtered_analysis_bam(sname='s',bam_file=bam,is_paired=paired,
         tmpdir=tmp_path/'filter',min_map_q=30,max_tlen=1000,max_softclip=5,
@@ -118,3 +122,15 @@ def test_overlap_position_mapping_uses_cigar_gaps_and_clips():
     from ipyrad2.assembler.pair_overlaps import aligned_positions
     a=record('pair',97,41,'A'*12,81,cigar='2S3M1I2M2D4M').split('\t')
     assert aligned_positions(a)=={41:2,42:3,43:4,44:6,45:7,48:8,49:9,50:10,51:11}
+
+
+@pytest.mark.parametrize('excluded_flag', [0x200,0x400,0x800])
+def test_excluded_mate_cannot_mask_eligible_primary(excluded_flag):
+    from collections import Counter
+    from ipyrad2.assembler.pair_overlaps import mask_group
+    a=record('pair',97,41,'A'*120,81).split('\t')
+    b=record('pair',145|excluded_flag,81,'A'*120,41).split('\t')
+    b[10]='J'*120
+    mask_group([a,b],Counter())
+    assert a[10]=='I'*120
+    assert b[10]=='J'*120
