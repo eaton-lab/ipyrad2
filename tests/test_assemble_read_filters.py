@@ -240,6 +240,11 @@ def test_prepare_filtered_analysis_bam_returns_filter_counts(
 
     monkeypatch.setattr("ipyrad2.assembler.read_filters.run_pipeline", _fake_run_pipeline)
 
+    diagnostics = {"input_records": 12, "predicted_retained_records": 7}
+    monkeypatch.setattr(
+        "ipyrad2.assembler.read_filters.collect_read_filter_diagnostics",
+        lambda *args, **kwargs: dict(diagnostics),
+    )
     result = prepare_filtered_analysis_bam(
         sname="sample",
         bam_file=bam_file,
@@ -257,11 +262,11 @@ def test_prepare_filtered_analysis_bam_returns_filter_counts(
         bam_path=tmp_path / "TMP" / "analysis_bams" / "sample.analysis.filtered.bam",
         reads_before_filtering=12,
         reads_after_filtering=7,
+        filter_diagnostics={**diagnostics, "observed_retained_records": 7, "counts_reconcile": True},
     )
-    assert observed_cmds[0][0][:3] == [BIN_SAM, "view", "-c"]
-    assert observed_cmds[1][0][:3] == [BIN_SAM, "view", "-b"]
-    assert observed_cmds[2][0][:2] == [BIN_SAM, "index"]
-    assert observed_cmds[3][0][:3] == [BIN_SAM, "view", "-c"]
+    assert observed_cmds[0][0][:3] == [BIN_SAM, "view", "-b"]
+    assert observed_cmds[1][0][:2] == [BIN_SAM, "index"]
+    assert observed_cmds[2][0][:3] == [BIN_SAM, "view", "-c"]
 
 
 def test_prepare_variant_call_bam_writes_header_only_bam_when_keep_bed_is_empty(
@@ -5376,7 +5381,12 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
         sample_types={"s1": "RAD", "s2": "WGS"},
         sample_layouts={"s1": "PE", "s2": "SE"},
         sample_filter_stats={
-            "s1": {"reads_before_filtering": 20, "reads_after_filtering": 12},
+            "s1": {"reads_before_filtering": 20, "reads_after_filtering": 12,
+                   "read_filter_diagnostics": {
+                       "filter_order": ["mapping_quality", "softclip"],
+                       "independent_failures": {"mapping_quality": 3, "softclip": 7},
+                       "first_failure": {"mapping_quality": 3, "softclip": 5},
+                   }},
             "s2": {"reads_before_filtering": 15, "reads_after_filtering": 9},
         },
         shared_loci_before_min_sample_coverage_filter=14,
@@ -5509,6 +5519,10 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
     assert report_json["sample_summary"][0]["masked_by_max_hetero_frequency"] == 2
     assert "mixed_rad_wgs_diagnostics" not in report_json
 
+
+    assert report_json["read_filter_diagnostics"]["s1"]["independent_failures"]["softclip"] == 7
+    assert "s2" not in report_json["read_filter_diagnostics"]
+    assert "s1\tsoftclip\t7\t5" in outpath.read_text()
 
 def test_write_assemble_stats_report_includes_mixed_run_summary(tmp_path: Path) -> None:
     outpath = write_assemble_stats_report(

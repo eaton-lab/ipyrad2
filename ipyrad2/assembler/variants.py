@@ -1123,7 +1123,8 @@ def get_filtered_vcf(
         "AC,AN,AF,MAF,F_MISSING",
     ]
 
-    remove_tags = "FORMAT/PL,FORMAT/GQ,INFO/RPBZ,INFO/SCBZ,INFO/MQBZ,INFO/BQBZ,INFO/MQSBZ,INFO/DP4,INFO/VDB,INFO/MQ0F,INFO/SGB"
+    # Keep caller GQ, including for masked genotypes, for downstream auditing.
+    remove_tags = "FORMAT/PL,INFO/RPBZ,INFO/SCBZ,INFO/MQBZ,INFO/BQBZ,INFO/MQSBZ,INFO/DP4,INFO/VDB,INFO/MQ0F,INFO/SGB"
     cmd4 = [
         BIN_BCF,
         "annotate",

@@ -4,8 +4,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
+import json
+import re
 import sys
 
 from loguru import logger
@@ -29,6 +32,7 @@ class FilteredAnalysisBamResult:
     bam_path: Path
     reads_before_filtering: int
     reads_after_filtering: int
+    filter_diagnostics: dict = field(default_factory=dict)
 
 
 def _iter_bam_view_lines(
@@ -178,6 +182,108 @@ def _count_bam_records(bam_file: Path, threads: int) -> int:
     return int(out.decode().strip() or "0")
 
 
+def summarize_read_filter_diagnostics(
+    lines,
+    *,
+    min_map_q: int,
+    is_paired: bool,
+    max_tlen: int | None,
+    max_softclip: int | None,
+    max_nm: int | None,
+    min_aligned_len: int | None,
+) -> dict:
+    """Count diagnostic failures in one SAM stream, without selecting reads.
+
+    Independent counts may overlap. First-failure counts use the declared order
+    and sum to the total rejected records. Query length includes insertions and
+    soft clips, matching samtools qlen; aligned query length is qlen - sclen.
+    The existing samtools command remains authoritative for filtering.
+    """
+    settings = {
+        "min_map_q": min_map_q,
+        "is_paired": is_paired,
+        "max_tlen": max_tlen,
+        "max_softclip": max_softclip,
+        "max_nm": max_nm,
+        "min_aligned_len": min_aligned_len,
+    }
+    order = ["mapping_quality"]
+    if is_paired:
+        order.append("pair_geometry")
+        if max_tlen is not None:
+            order.append("template_length")
+    for key, value in (
+        ("softclip", max_softclip),
+        ("mismatch_count", max_nm),
+        ("aligned_query_length", min_aligned_len),
+    ):
+        if value is not None:
+            order.append(key)
+    independent = dict.fromkeys(order, 0)
+    first = dict.fromkeys(order, 0)
+    total = accepted = missing_nm = 0
+    flag_counts = Counter()
+    for line in lines:
+        if line.startswith("@") or not line.strip():
+            continue
+        f = line.rstrip("\n").split("\t")
+        flag, mq, tlen = int(f[1]), int(f[4]), int(f[8])
+        cigar = [(int(n), op) for n, op in re.findall(r"(\d+)([MIDNSHP=X])", f[5])]
+        qlen = sum(n for n, op in cigar if op in "MIS=X")
+        sclen = sum(n for n, op in cigar if op == "S")
+        nm = next((int(t[5:]) for t in f[11:] if t.startswith("NM:i:")), None)
+        missing_nm += nm is None
+        failures = {
+            "mapping_quality": mq < min_map_q,
+            "pair_geometry": bool(flag & 0xC) or f[6] not in ("=", f[2]),
+            "template_length": max_tlen is not None and abs(tlen) > max_tlen,
+            "softclip": max_softclip is not None and sclen > max_softclip,
+            "mismatch_count": max_nm is not None and (nm is None or nm > max_nm),
+            "aligned_query_length": min_aligned_len is not None
+            and qlen - sclen < min_aligned_len,
+        }
+        failed = [key for key in order if failures[key]]
+        for key in failed:
+            independent[key] += 1
+        total += 1
+        if failed:
+            first[failed[0]] += 1
+        else:
+            accepted += 1
+        for name, bit in (
+            ("unmapped", 4),
+            ("secondary", 0x100),
+            ("qc_fail", 0x200),
+            ("duplicate", 0x400),
+            ("supplementary", 0x800),
+        ):
+            flag_counts[name] += bool(flag & bit)
+    return {
+        "unit": "alignment_records",
+        "settings": settings,
+        "filter_order": order,
+        "input_records": total,
+        "predicted_retained_records": accepted,
+        "rejected_records": total - accepted,
+        "independent_failures": independent,
+        "first_failure": first,
+        "records_without_nm": missing_nm,
+        "input_flag_counts": dict(flag_counts),
+        "semantics": "Independent failures overlap; first_failure is exclusive in filter_order. "
+        "Flags are descriptive, not additional filters. Aligned query length includes insertions. "
+        "Missing NM fails an enabled max_nm. Counts precede overlap quality masking and paralog/locus filtering.",
+    }
+
+
+def collect_read_filter_diagnostics(
+    bam_file: Path, *, threads: int = 1, **settings
+) -> dict:
+    """Replace the input count scan with a single bounded-memory SAM scan."""
+    cmd = [BIN_SAM, "view", "-@", str(max(1, threads)), str(bam_file)]
+    with stream_pipeline_lines([cmd]) as lines:
+        return summarize_read_filter_diagnostics(lines, **settings)
+
+
 def prepare_filtered_analysis_bam(
     *,
     sname: str,
@@ -194,7 +300,11 @@ def prepare_filtered_analysis_bam(
     """Write and index one pre-paralog assemble BAM plus its filter counts."""
     out_bam = get_analysis_bam_path(tmpdir, sname)
     out_bam.parent.mkdir(parents=True, exist_ok=True)
-    reads_before_filtering = _count_bam_records(bam_file, threads)
+    diagnostics = collect_read_filter_diagnostics(
+        bam_file, threads=threads, min_map_q=min_map_q, is_paired=is_paired, max_tlen=max_tlen,
+        max_softclip=max_softclip, max_nm=max_nm, min_aligned_len=min_aligned_len,
+    )
+    reads_before_filtering = diagnostics["input_records"]
 
     if not is_paired and max_tlen is not None:
         logger.debug(
@@ -241,10 +351,18 @@ def prepare_filtered_analysis_bam(
     ]
     run_pipeline([cmd])
     reads_after_filtering = _count_bam_records(out_bam, threads)
+    diagnostics["observed_retained_records"] = reads_after_filtering
+    diagnostics["counts_reconcile"] = (
+        diagnostics["predicted_retained_records"] == reads_after_filtering
+    )
+    if not diagnostics["counts_reconcile"]:
+        logger.warning("read-filter diagnostic counts differ from samtools output for {}", sname)
+    out_bam.with_suffix(".filters.json").write_text(json.dumps(diagnostics, indent=2) + "\n")
     return FilteredAnalysisBamResult(
         bam_path=out_bam,
         reads_before_filtering=reads_before_filtering,
         reads_after_filtering=reads_after_filtering,
+        filter_diagnostics=diagnostics,
     )
 
 

@@ -844,7 +844,7 @@ def write_assemble_stats_report(
     snames: list[str],
     sample_types: dict[str, str],
     sample_layouts: dict[str, str],
-    sample_filter_stats: dict[str, dict[str, int]],
+    sample_filter_stats: dict[str, dict[str, object]],
     shared_loci_before_min_sample_coverage_filter: int | None,
     shared_loci_after_delimiting: int,
     shared_loci_after_paralog_filtering: int,
@@ -1118,6 +1118,11 @@ def write_assemble_stats_report(
         "sample_masking": sample_masking_data,
         "alignment_summary": alignment_data,
         "sample_summary": sample_summary_data,
+        "read_filter_diagnostics": {
+            sname: values["read_filter_diagnostics"]
+            for sname, values in sorted(sample_filter_stats.items())
+            if values.get("read_filter_diagnostics")
+        },
         "locus_occupancy": locus_occupancy_data,
     }
     if logged_command:
@@ -1126,6 +1131,15 @@ def write_assemble_stats_report(
         stats_json["mixed_rad_wgs_diagnostics"] = mixed_data
 
     lines: list[str] = []
+    if stats_json["read_filter_diagnostics"]:
+        lines.extend(["# Read Filter Diagnostics",
+                      "# Counts are alignment records, before paralog/locus filtering.",
+                      "# Independent failures overlap; first failures are exclusive in declared order.",
+                      "Sample\tFilter\tIndependent failures\tFirst failures"])
+        for sname, diag in stats_json["read_filter_diagnostics"].items():
+            for key in diag["filter_order"]:
+                lines.append(f"{sname}\t{key}\t{diag['independent_failures'][key]}\t{diag['first_failure'][key]}")
+        lines.append("")
     _append_key_value_section(
         lines,
         "Assemble Summary",

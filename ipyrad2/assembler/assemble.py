@@ -2238,6 +2238,7 @@ def run_assembler(
         },
         sample_filter_stats={
             sname: {
+                "read_filter_diagnostics": filtered_analysis_results[sname].filter_diagnostics,
                 "reads_before_filtering": int(
                     filtered_analysis_results[sname].reads_before_filtering
                 ),

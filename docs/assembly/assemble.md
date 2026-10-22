@@ -350,3 +350,31 @@ Both callers explicitly exclude unmapped, secondary, QC-failed, duplicate and
 supplementary records. Supplementary alignments must not add a second observation
 from the same fragment when anomalous pairs are admitted. QC-failed and duplicate
 records cannot take precedence over an eligible mate in overlap masking.
+
+
+### Genotype quality and read-filter diagnostics
+
+Final VCFs retain caller `FORMAT/GQ` alongside the existing genotype fields.
+The depth, genotype-quality and site-quality masking thresholds are unchanged.
+A masked genotype can retain its original GQ; that value does not override its
+missing GT or the site FILTER. Missing GQ stays missing.
+
+`<name>.stats.json` includes `read_filter_diagnostics` keyed by library. Each
+library records the active settings, input/retained alignment counts, independent
+failure counts and exclusive first-failure counts. Independent counts overlap;
+first failures follow the recorded order: mapping quality, paired-read geometry,
+template length, soft clipping, NM, then aligned query length (enabled criteria
+only). The first-failure counts sum to rejected records; the final BAM count is
+recorded separately and a reconciliation flag reports agreement. Input flag
+counts are descriptive and do not add filters. The text statistics include both
+failure-count views. Detailed sidecars are kept in `analysis_bams/*.filters.json`
+when intermediate output is retained.
+
+These are alignment-record counts before overlap quality masking and before
+paralog/locus filtering, not molecule counts or final genotype depths. Missing
+NM fails an enabled maximum-NM criterion. Minimum aligned length follows the
+existing `qlen - sclen` expression: insertions count toward query length, hard
+clipping does not. Single-end data ignore the paired geometry/template-length
+criteria. Diagnostics use one bounded-memory SAM scan in place of the previous
+input-count scan; filtering still uses the same samtools command and defaults.
+SAM parsing adds CPU/pipe traffic compared with count-only inspection.
