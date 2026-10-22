@@ -997,6 +997,9 @@ def get_group_called_variants_in_vcf_chunks(
     cmd1 = [
         BIN_BCF,
         "mpileup",
+        # Assemble already enforces mate, mapping and alignment filters. Do not
+        # silently discard retained pairs solely because BWA omitted PROPER_PAIR.
+        "--count-orphans",
         "-f",
         str(reference),
         "-q",

@@ -63,6 +63,9 @@ def call_vcf_from_bam(
     mpileup = [
         BIN_BCF,
         "mpileup",
+        # Assemble already enforces mate, mapping and alignment filters. Do not
+        # silently discard retained pairs solely because BWA omitted PROPER_PAIR.
+        "--count-orphans",
         "-f",
         str(reference_fasta),
         "-q",

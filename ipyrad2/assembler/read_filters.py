@@ -217,11 +217,21 @@ def prepare_filtered_analysis_bam(
     )
     if expr is not None:
         cmd.extend(["-e", expr])
-    cmd.extend([
-        "-o", str(out_bam),
-        str(bam_file),
-    ])
-    run_pipeline([cmd])
+    if is_paired:
+        # HTSlib does not correct overlaps for non-PROPER_PAIR reads even with
+        # --count-orphans. Correct only those pairs, retaining original flags.
+        cmd.extend(["-u", str(bam_file)])
+        run_pipeline([
+            cmd,
+            [BIN_SAM, "collate", "-u", "-O", "-T", str(out_bam.with_suffix(".collate")), "-"],
+            [BIN_SAM, "view", "-h", "-"],
+            [sys.executable, "-m", "ipyrad2.assembler.pair_overlaps",
+             "--stats", str(out_bam.with_suffix(".overlaps.json"))],
+            [BIN_SAM, "sort", "-@", str(max(1, threads)), "-o", str(out_bam), "-"],
+        ])
+    else:
+        cmd.extend(["-o", str(out_bam), str(bam_file)])
+        run_pipeline([cmd])
 
     cmd = [
         BIN_SAM, "index",

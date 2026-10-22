@@ -300,3 +300,48 @@ ipyrad2 assemble -w BAMS/WGS/*.bam -b loci.bed -r REF.fa -o OUT
 - [Writing Outputs](../writing-outputs/index.md)
 - [Analysis Guide](../analyses/index.md)
 - [Files and Data Types](../getting-started/files-and-data-types.md)
+
+
+## Pair flags and alignment filtering
+
+Assemble uses its explicit mapped-read filters to select eligible evidence.
+For paired data, both mates must be mapped to the same scaffold, and
+`--max-tlen` bounds the absolute template length (default 1000). Reads are not
+excluded solely because their aligner omitted the `PROPER_PAIR` flag. Both
+per-sample paralog calling and final joint calling pass `--count-orphans` to
+bcftools mpileup, consistently with the pairs available to coverage calculations.
+This changes calls relative to versions that implicitly excluded anomalous pairs.
+It does not admit unmapped mates or bypass the explicit mapped-read filters.
+Single-end calling is unaffected by this pair-flag change.
+
+Use the existing `--min-map-q`, `--max-softclip`, `--min-aligned-len` and
+`--max-nm` options to control short, clipped or poorly aligned evidence.
+Clipping, alignment-length and NM filters remain disabled unless supplied;
+this pair-flag correction does not select dataset-specific thresholds or change
+BAQ, native proper-pair overlap correction, site/genotype quality or depth thresholds.
+`--min-aligned-len` currently measures `qlen - sclen`, including inserted query
+bases; it is not a reference-span or exact-match-length threshold. In contrast,
+`--softclip-len-threshold` and `--softclip-frac-max` flag loci during paralog
+screening rather than removing individual reads. They are not substitutes for
+mapped-read clipping filters.
+
+Check both retained evidence and missingness when comparing filter settings.
+Agreement obtained by removing nearly all shared sites does not establish
+replicate identity, and anomalous-pair inclusion alone cannot resolve off-target
+mapping. Keep uncertain libraries separate until their identities are supported.
+
+
+For retained anomalous pairs, assemble additionally masks duplicated overlap
+bases in the temporary analysis BAM before either caller: agreeing mates retain
+one original-quality observation; disagreeing overlapping bases are both masked
+at quality zero. Original flags, sequences and CIGARs are preserved, and original
+qualities are retained in OQ when absent. The `*.overlaps.json` sidecar records
+how much evidence changed. Proper pairs are left to HTSlib's existing overlap
+correction. This is needed because HTSlib's overlap correction itself requires
+`PROPER_PAIR`, even when anomalous pairs are included. Read pairs must have a
+unique primary READ1/READ2 match within the same read group with reciprocal mate
+coordinates. Ambiguous/unmatched groups are counted rather than guessed.
+This preparation adds a collation and coordinate-sort pass for paired BAMs;
+allow additional temporary disk and I/O. Original mapped BAMs are unchanged.
+At `--min-base-q 0`, zero-quality masking no longer excludes those bases; use a
+positive base-quality threshold (the default is 13) for fragment-level counting.
