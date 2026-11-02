@@ -113,6 +113,7 @@ def _filter_locus_array(
     minmap: dict[str, int],
     max_sample_missing: float,
     min_length: int | None,
+    sample_max_missing: dict[str, float] | None = None,
 ) -> tuple[FilteredLocus | None, str | None]:
     """Apply locus occupancy, site coverage, row missingness, and length filters."""
     present = np.any(block != MISSING_BASE, axis=1)
@@ -126,7 +127,12 @@ def _filter_locus_array(
     if filtered.shape[1] == 0:
         return None, "rejected_site_coverage"
     row_missing = np.mean(filtered == MISSING_BASE, axis=1)
-    keep = row_missing <= max_sample_missing
+    thresholds = (
+        np.asarray([sample_max_missing[name] for name in snames])
+        if sample_max_missing is not None
+        else max_sample_missing
+    )
+    keep = row_missing <= thresholds
     if not np.any(keep):
         return None, "rejected_sample_missing"
     if min_length is not None and filtered.shape[1] < min_length:
@@ -163,6 +169,7 @@ def _filter_batch_from_phy(
     minmap: dict[str, int],
     max_sample_missing: float,
     min_length: int | None,
+    sample_max_missing: dict[str, float] | None = None,
 ) -> FilterBatchResult:
     """Read and filter one physically contiguous batch of loci."""
     block = np.asarray(
@@ -183,6 +190,7 @@ def _filter_batch_from_phy(
             minmap=minmap,
             max_sample_missing=max_sample_missing,
             min_length=min_length,
+            sample_max_missing=sample_max_missing,
         )
         offset += width
         if rejection is not None:
@@ -202,6 +210,7 @@ def _filter_locus_batch(
     minmap: dict[str, int],
     max_sample_missing: float,
     min_length: int | None,
+    sample_max_missing: dict[str, float] | None = None,
 ) -> FilterBatchResult:
     """Process-pool entry point for one locus batch."""
     with h5py.File(data, "r") as io5:
@@ -214,6 +223,7 @@ def _filter_locus_batch(
             minmap=minmap,
             max_sample_missing=max_sample_missing,
             min_length=min_length,
+            sample_max_missing=sample_max_missing,
         )
 
 
@@ -331,6 +341,7 @@ class SeqexEngine:
         include_reference=False,
         imap=None,
         minmap=None,
+        rmap=None,
         concatenate=False,
         split=False,
         append_population=False,
@@ -373,6 +384,7 @@ class SeqexEngine:
             include_reference=include_reference,
             imap=imap,
             minmap=minmap,
+            rmap=rmap,
         )
         self.selected_windows = resolve_sequence_windows(
             self.context.scaffold_table,
@@ -531,6 +543,7 @@ class SeqexEngine:
             "imap_row_indices": self.context.imap_row_indices,
             "minmap": self.context.minmap,
             "max_sample_missing": self.context.max_sample_missing,
+            "sample_max_missing": self.context.sample_max_missing,
             "min_length": self.min_length,
         }
 
@@ -638,7 +651,10 @@ class SeqexEngine:
             [np.frombuffer(bytes(buffers[name]), dtype=np.uint8) for name in names]
         )
         global_missing = np.mean(matrix == MISSING_BASE, axis=1)
-        keep = global_missing <= self.context.max_sample_missing
+        thresholds = np.asarray(
+            [self.context.sample_max_missing[name] for name in names]
+        )
+        keep = global_missing <= thresholds
         if not np.any(keep):
             raise IPyradError(
                 "No samples passed max_sample_missing across the "
@@ -731,12 +747,30 @@ class SeqexEngine:
             sample_occupancy = (
                 int(row["non_missing_bases"]) / matrix_bases if matrix_bases else 0.0
             )
+            if name in final_set:
+                reason = (
+                    "retained"
+                    if row["non_missing_bases"]
+                    else "retained_no_observed_bases"
+                )
+            elif self.concatenate and row["loci_written"]:
+                reason = "exceeds_matrix_missingness"
+            elif row["loci_dropped_by_r"]:
+                reason = "no_retained_locus_after_missingness_filter"
+            else:
+                reason = "no_data_in_written_loci"
             rows.append(
                 {
                     **row,
                     "written_final": name in final_set,
                     "matrix_bases": matrix_bases,
                     "non_missing_occupancy": sample_occupancy,
+                    "missing_fraction": 1.0 - sample_occupancy,
+                    "max_sample_missing": self.context.sample_max_missing[name],
+                    "missingness_threshold_source": self.context.sample_missing_source[
+                        name
+                    ],
+                    "retention_reason": reason,
                 }
             )
         return output_summary, rows
@@ -765,14 +799,24 @@ class SeqexEngine:
             "random_seed": self.random_seed,
             "min_length": self.min_length,
             "clipping_mode": (
-                "automatic"
-                if self.clip is None
-                else "always"
-                if self.clip
-                else "never"
+                "automatic" if self.clip is None else "always" if self.clip else "never"
             ),
             "coordinate_clipping_applied": self.coordinate_clipping_applied,
             "selected_windows": self.requested_windows,
+            "coverage_policy": {
+                "source": self.context.coverage_source,
+                "requested_min_sample_coverage": self.context.requested_min_sample_coverage,
+                "effective_minmap": self.context.minmap,
+                "imap": self.context.imap,
+                "stage": "locus_presence_and_sites_before_missingness_removal",
+            },
+            "missingness_policy": {
+                "default_max_sample_missing": self.context.max_sample_missing,
+                "group_overrides": self.context.rmap,
+                "per_locus": True,
+                "concatenated_matrix": self.concatenate,
+                "definition": "N is missing; gaps normalize to N; IUPAC ambiguity codes are observed",
+            },
         }
         partition_map = {row["locus"]: row for row in partitions}
         locus_rows = []
@@ -821,6 +865,12 @@ class SeqexEngine:
                 f"{str(self.coordinate_clipping_applied).lower()}\n",
                 f"windows_selected: {len(self.selected_windows)}\n",
                 f"selected_windows: {selected_windows_text}\n",
+                "coverage_policy: "
+                + json.dumps(seqex_summary["coverage_policy"], sort_keys=True)
+                + "\n",
+                "missingness_policy: "
+                + json.dumps(seqex_summary["missingness_policy"], sort_keys=True)
+                + "\n",
             ]
         )
         lines.extend(f"{key}: {value}\n" for key, value in self.counts.items())
@@ -847,6 +897,10 @@ class SeqexEngine:
             "matrix_bases",
             "non_missing_bases",
             "non_missing_occupancy",
+            "missing_fraction",
+            "max_sample_missing",
+            "missingness_threshold_source",
+            "retention_reason",
         )
         sample_table_rows = [
             (
@@ -858,6 +912,10 @@ class SeqexEngine:
                 str(row["matrix_bases"]),
                 str(row["non_missing_bases"]),
                 f"{float(row['non_missing_occupancy']):.6f}",
+                f"{float(row['missing_fraction']):.6f}",
+                f"{float(row['max_sample_missing']):.6f}",
+                str(row["missingness_threshold_source"]),
+                str(row["retention_reason"]),
             )
             for row in sample_rows
         ]
@@ -865,7 +923,7 @@ class SeqexEngine:
             _format_text_table(
                 sample_headers,
                 sample_table_rows,
-                right_align={3, 4, 5, 6, 7},
+                right_align={3, 4, 5, 6, 7, 8, 9},
             )
         )
         lines.append("\n# Written Loci\n")
@@ -928,17 +986,19 @@ class SeqexEngine:
         for name, count in drop_counts.items():
             if count:
                 logger.debug(
-                    "-r dropped {} from {} written locus/loci",
+                    "{} dropped {} from {} written locus/loci",
+                    self.context.sample_missing_source[name],
                     name,
                     count,
                 )
         for name, missing in global_dropped.items():
             logger.info(
-                "-r dropped {} from the concatenated alignment "
+                "{} dropped {} from the concatenated alignment "
                 "(missing={:.6f}, maximum={:.6f})",
+                self.context.sample_missing_source[name],
                 name,
                 missing,
-                self.context.max_sample_missing,
+                self.context.sample_max_missing[name],
             )
 
         fmt = {"phy": "PHYLIP", "nex": "NEXUS", "fa": "FASTA"}[self.out_format]

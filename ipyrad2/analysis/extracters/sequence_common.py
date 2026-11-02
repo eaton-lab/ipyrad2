@@ -7,6 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import itertools
+import math
 
 import h5py
 import numpy as np
@@ -35,6 +36,11 @@ class SequenceExtractionContext:
     minmap: dict[str, int | float]
     imap_row_indices: dict[str, np.ndarray]
     max_sample_missing: float
+    rmap: dict[str, float]
+    sample_max_missing: dict[str, float]
+    sample_missing_source: dict[str, str]
+    coverage_source: str
+    requested_min_sample_coverage: int | float
 
 
 def _decode_h5_names(values) -> list[str]:
@@ -142,6 +148,76 @@ def normalize_sequence_population_inputs(imap, minmap):
     return imap, minmap
 
 
+def resolve_sequence_missingness(
+    snames: list[str],
+    imap: dict[str, list[str]],
+    rmap: Path | str | dict[str, float] | None,
+    default: float,
+) -> tuple[dict[str, float], dict[str, float], dict[str, str]]:
+    """Validate group overrides and resolve thresholds in selected sample order."""
+    if rmap is None:
+        return {}, {name: default for name in snames}, {name: "-r" for name in snames}
+    if not imap:
+        raise IPyradError("--rmap requires --imap (group names must be explicit).")
+    if isinstance(rmap, (str, Path)):
+        path = Path(rmap)
+        values = {}
+        try:
+            for lineno, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), 1
+            ):
+                line = line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                parts = line.split()
+                if len(parts) != 2:
+                    raise IPyradError(f"Rmap file malformed at line {lineno}: {path}")
+                group, value = parts
+                if group in values:
+                    raise IPyradError(
+                        f"Rmap contains duplicate group '{group}': {path}"
+                    )
+                values[group] = value
+        except OSError as exc:
+            raise IPyradError(f"Failed to read rmap file: {path}") from exc
+        if not values:
+            raise IPyradError(f"Rmap file is empty: {path}")
+    elif isinstance(rmap, dict):
+        values = rmap.copy()
+    else:
+        raise IPyradError("rmap must be a Path, str, or Dict")
+    unknown = set(values).difference(imap)
+    if unknown:
+        raise IPyradError(
+            "rmap groups are not in IMAP: " + ", ".join(sorted(map(str, unknown)))
+        )
+    overrides = {}
+    for group, value in values.items():
+        try:
+            fraction = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise IPyradError(
+                f"rmap value for '{group}' must be a finite fraction in [0, 1]"
+            ) from exc
+        if (
+            isinstance(value, bool)
+            or not math.isfinite(fraction)
+            or not 0 <= fraction <= 1
+        ):
+            raise IPyradError(
+                f"rmap value for '{group}' must be a finite fraction in [0, 1]"
+            )
+        overrides[group] = fraction
+    # IMAP expansion already rejects multiply assigned samples, including glob overlaps.
+    membership = {name: group for group, names in imap.items() for name in names}
+    thresholds = {name: overrides.get(membership[name], default) for name in snames}
+    sources = {
+        name: "rmap:" + membership[name] if membership[name] in overrides else "-r"
+        for name in snames
+    }
+    return overrides, thresholds, sources
+
+
 def load_sequence_scaffold_table(data: Path | str) -> pd.DataFrame:
     """Return scaffold names and lengths from a sequence-capable HDF5."""
     with h5py.File(data, "r") as io5:
@@ -232,7 +308,11 @@ def build_sequence_imap_minmap(
         return {"all": list(snames)}, {"all": int(min_sample_coverage)}
 
     if minmap is None:
-        logger.info("No minmap provided. Assuming minimum one sample per population.")
+        logger.warning(
+            "IMAP without minmap: using minimum one sample per group; "
+            "-m={} is ignored. Supply --minmap explicitly to control group coverage.",
+            min_sample_coverage,
+        )
         minmap = {pop: 1 for pop in imap.keys()}
     if set(minmap) != set(imap):
         raise IPyradError("imap and minmap keys must match.")
@@ -254,16 +334,24 @@ def build_sequence_extraction_context(
     include_reference: bool = False,
     imap=None,
     minmap=None,
+    rmap=None,
 ) -> SequenceExtractionContext:
     """Resolve shared sequence metadata, samples, populations, and filters."""
     data = Path(data)
     imap, minmap = normalize_sequence_population_inputs(imap, minmap)
+    default_missing = min(1.0, max(0.0, float(max_sample_missing)))
+    coverage_source = "global_m" if not imap else "imap_default" if minmap is None else "minmap"
+    if rmap is not None and not imap:
+        raise IPyradError("--rmap requires --imap (group names must be explicit).")
     scaffold_table = load_sequence_scaffold_table(data)
     sample_names, sample_indices, exclude, imap = resolve_sequence_sample_subset(
         data,
         exclude=exclude,
         include_reference=include_reference,
         imap=imap,
+    )
+    overrides, sample_max_missing, sample_missing_source = resolve_sequence_missingness(
+        sample_names, imap, rmap, default_missing,
     )
     imap, minmap = build_sequence_imap_minmap(
         sample_names,
@@ -287,7 +375,12 @@ def build_sequence_extraction_context(
         imap=imap,
         minmap=minmap,
         imap_row_indices=imap_row_indices,
-        max_sample_missing=min(1.0, max(0.0, float(max_sample_missing))),
+        max_sample_missing=default_missing,
+        rmap=overrides,
+        sample_max_missing=sample_max_missing,
+        sample_missing_source=sample_missing_source,
+        coverage_source=coverage_source,
+        requested_min_sample_coverage=min_sample_coverage,
     )
 
 

@@ -629,3 +629,190 @@ def test_seqex_rejects_invalid_internal_clip_value(tmp_path: Path) -> None:
 
     with pytest.raises(IPyradError, match="clip must"):
         _run(tmp_path, h5, clip="yes")
+
+
+def test_seqex_rmap_locus_and_matrix_thresholds_and_reporting(tmp_path: Path) -> None:
+    h5 = _write_h5(
+        tmp_path / "data.hdf5",
+        ["AAAACCCCGGGG", "AAAANNNNNNNN", "AAAANNNNNNNN"],
+        [(0, 0, 4, 1, 4), (0, 4, 8, 5, 8), (0, 8, 12, 9, 12)],
+        names=["focal1", "focal2", "out1"],
+    )
+    imap = tmp_path / "imap.tsv"
+    imap.write_text("focal* ingroup\nout* outgroup\n")
+    minmap = tmp_path / "minmap.tsv"
+    minmap.write_text("ingroup 1\noutgroup 0\n")
+    rmap = tmp_path / "rmap.tsv"
+    rmap.write_text("# sparse override: other groups inherit -r\noutgroup 1.0\n")
+    _run(
+        tmp_path,
+        h5,
+        imap=imap,
+        minmap=minmap,
+        rmap=rmap,
+        max_sample_missing=0.5,
+        concatenate=True,
+    )
+    text = (tmp_path / "OUT/alignment.phy").read_text()
+    assert text.startswith("2 12\n")
+    assert "out1" in text and "focal2" not in text
+    stats = json.loads((tmp_path / "OUT/alignment.stats.json").read_text())
+    rows = {row["sample"]: row for row in stats["sample_occupancy"]}
+    assert rows["out1"]["missing_fraction"] == pytest.approx(2 / 3)
+    assert rows["out1"]["max_sample_missing"] == 1.0
+    assert rows["out1"]["missingness_threshold_source"] == "rmap:outgroup"
+    assert rows["out1"]["retention_reason"] == "retained"
+    assert rows["focal2"]["missingness_threshold_source"] == "-r"
+    assert rows["focal2"]["max_sample_missing"] == 0.5
+    assert rows["focal2"]["loci_dropped_by_r"] == 2
+    assert rows["focal2"]["retention_reason"] == "exceeds_matrix_missingness"
+    assert stats["seqex_summary"]["missingness_policy"]["group_overrides"] == {
+        "outgroup": 1.0
+    }
+    assert stats["seqex_summary"]["coverage_policy"]["effective_minmap"] == {
+        "ingroup": 1,
+        "outgroup": 0,
+    }
+    report = (tmp_path / "OUT/alignment.stats.txt").read_text()
+    assert "missing_fraction" in report and "retention_reason" in report
+    assert "rmap:outgroup" in report
+
+
+def test_seqex_rmap_nonconcatenated_override_and_iupac(tmp_path: Path) -> None:
+    h5 = _write_h5(
+        tmp_path / "data.hdf5", ["AAAA", "RNNN"], [(0, 0, 4, 1, 4)], names=["f1", "o1"]
+    )
+    kwargs = dict(
+        imap={"in": ["f1"], "out": ["o1"]},
+        minmap={"in": 1, "out": 0},
+        max_sample_missing=0.5,
+    )
+    baseline = _run(tmp_path, h5, outdir=tmp_path / "BASELINE", **kwargs)
+    assert baseline[0].names == ["f1"]
+    loci = _run(tmp_path, h5, rmap={"out": 1.0}, **kwargs)
+    assert loci[0].names == ["f1", "o1"]
+    assert "RNNN" in (tmp_path / "OUT/alignment.phy").read_text()
+    stats = json.loads((tmp_path / "OUT/alignment.stats.json").read_text())
+    assert stats["sample_occupancy"][1]["missing_fraction"] == 0.75
+    assert stats["seqex_summary"]["missingness_policy"]["concatenated_matrix"] is False
+
+
+@pytest.mark.parametrize(
+    "value", [-0.01, 1.01, float("nan"), float("inf"), "bad", True]
+)
+def test_seqex_rmap_rejects_invalid_fractions(tmp_path: Path, value) -> None:
+    h5 = _write_h5(tmp_path / "data.hdf5", ["AAAA", "AAAA"], [(0, 0, 4, 1, 4)])
+    with pytest.raises(IPyradError, match="finite fraction"):
+        _run(tmp_path, h5, imap={"group": ["s1", "s2"]}, rmap={"group": value})
+
+
+@pytest.mark.parametrize(
+    "contents,match",
+    [
+        ("group 0.9\ngroup 1.0\n", "duplicate"),
+        ("absent 0.9\n", "not in IMAP"),
+        ("group\n", "malformed"),
+        ("# empty\n", "empty"),
+    ],
+)
+def test_seqex_rmap_rejects_invalid_files(tmp_path: Path, contents, match) -> None:
+    h5 = _write_h5(tmp_path / "data.hdf5", ["AAAA", "AAAA"], [(0, 0, 4, 1, 4)])
+    rmap = tmp_path / "rmap.tsv"
+    rmap.write_text(contents)
+    with pytest.raises(IPyradError, match=match):
+        _run(tmp_path, h5, imap={"group": ["s1", "s2"]}, rmap=rmap)
+
+
+def test_seqex_rmap_requires_imap_and_rejects_overlapping_globs(tmp_path: Path) -> None:
+    h5 = _write_h5(tmp_path / "data.hdf5", ["AAAA", "AAAA"], [(0, 0, 4, 1, 4)])
+    with pytest.raises(IPyradError, match="requires --imap"):
+        _run(tmp_path, h5, rmap={"group": 1.0})
+    with pytest.raises(IPyradError, match="multiple times"):
+        _run(tmp_path, h5, imap={"a": ["s*"], "b": ["s1"]}, rmap={"a": 0.9, "b": 1.0})
+
+
+def test_seqex_imap_default_coverage_is_reported_without_changing_policy(
+    tmp_path: Path,
+) -> None:
+    h5 = _write_h5(tmp_path / "data.hdf5", ["AAAA", "AAAA"], [(0, 0, 4, 1, 4)])
+    _run(tmp_path, h5, imap={"group": ["s1", "s2"]}, min_sample_coverage=10)
+    stats = json.loads((tmp_path / "OUT/alignment.stats.json").read_text())
+    assert stats["seqex_summary"]["coverage_policy"] == {
+        "source": "imap_default",
+        "requested_min_sample_coverage": 10,
+        "effective_minmap": {"group": 1},
+        "imap": {"group": ["s1", "s2"]},
+        "stage": "locus_presence_and_sites_before_missingness_removal",
+    }
+
+
+def test_seqex_rmap_parallel_and_serial_match(tmp_path: Path) -> None:
+    h5 = _write_h5(
+        tmp_path / "data.hdf5",
+        ["ACNNACNN", "RNNNRNNN"],
+        [(0, 0, 2, 1, 2), (0, 4, 6, 5, 6)],
+        names=["f", "o"],
+    )
+    for cores in (1, 2):
+        _run(
+            tmp_path,
+            h5,
+            outdir=tmp_path / f"C{cores}",
+            windows=["chr1:1-2", "chr1:5-6"],
+            imap={"in": ["f"], "out": ["o"]},
+            minmap={"in": 1, "out": 0},
+            rmap={"out": 1.0},
+            max_sample_missing=0.0,
+            cores=cores,
+            concatenate=True,
+        )
+    assert (tmp_path / "C1/alignment.phy").read_bytes() == (
+        tmp_path / "C2/alignment.phy"
+    ).read_bytes()
+    a, b = [
+        json.loads((tmp_path / f"C{n}/alignment.stats.json").read_text())
+        for n in (1, 2)
+    ]
+    assert a["sample_occupancy"] == b["sample_occupancy"]
+
+
+def test_seqex_rmap_cli_alias_and_dispatch(monkeypatch) -> None:
+    from ipyrad2.cli import cli_analysis
+
+    parser = setup_parsers()
+    args = parser.parse_args(
+        ["seqex", "-d", "data.h5", "--max-sample-missing-map", "rmap.tsv"]
+    )
+    received = {}
+    monkeypatch.setattr(
+        cli_analysis, "_load_runner", lambda name: lambda **kw: received.update(kw)
+    )
+    cli_analysis.run_analysis_tool(args, _exit=False)
+    assert received["rmap"] == Path("rmap.tsv")
+    help_text = parser._subparsers._group_actions[0].choices["seqex"].format_help()
+    assert "--rmap" in help_text
+    assert "one sample per group instead of -m" in " ".join(help_text.split())
+
+
+def test_seqex_empty_override_matches_scalar_and_reports_zero_data(
+    tmp_path: Path,
+) -> None:
+    h5 = _write_h5(
+        tmp_path / "data.hdf5", ["AAAA", "NNNN"], [(0, 0, 4, 1, 4)], names=["f", "o"]
+    )
+    common = dict(
+        imap={"in": ["f"], "out": ["o"]},
+        minmap={"in": 1, "out": 0},
+        concatenate=True,
+        max_sample_missing=0.9,
+    )
+    for name, overrides in [("NONE", None), ("EMPTY", {}), ("EXEMPT", {"out": 1.0})]:
+        _run(tmp_path, h5, outdir=tmp_path / name, rmap=overrides, **common)
+    assert (tmp_path / "NONE/alignment.phy").read_bytes() == (
+        tmp_path / "EMPTY/alignment.phy"
+    ).read_bytes()
+    stats = json.loads((tmp_path / "EXEMPT/alignment.stats.json").read_text())
+    out = stats["sample_occupancy"][1]
+    assert out["written_final"] is True
+    assert out["missing_fraction"] == 1.0
+    assert out["retention_reason"] == "retained_no_observed_bases"

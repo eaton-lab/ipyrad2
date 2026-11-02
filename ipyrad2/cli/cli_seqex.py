@@ -12,6 +12,7 @@ $ ipyrad2 seqex -d assembly.hdf5 -o OUT/
 $ ipyrad2 seqex -d assembly.hdf5 -w Chr1 -N 100 -s 123 -c 4 -O nex
 $ ipyrad2 seqex -d assembly.hdf5 -L 150 -C -O fa
 $ ipyrad2 seqex -d assembly.hdf5 -i imap.tsv -a -X
+$ ipyrad2 seqex -d assembly.hdf5 -i imap.tsv -g minmap.tsv -r 0.9 --rmap missingness.tsv -C
 """
 
 
@@ -110,6 +111,18 @@ def _setup_seqex_subparser(subparsers, header=None):
         help="Maximum missing fraction per locus and, with -C, across the final matrix. [default=1.0]",
     )
     filtering.add_argument(
+        "--rmap",
+        "--max-sample-missing-map",
+        dest="rmap",
+        metavar="Path",
+        type=Path,
+        help=(
+            "Group-to-maximum-missing-fraction map (0..1); requires --imap. "
+            "Overrides -r for listed groups within loci and with -C across the matrix; "
+            "unlisted groups inherit -r. Does not change coverage rules."
+        ),
+    )
+    filtering.add_argument(
         "-e",
         "--exclude",
         metavar="str",
@@ -127,14 +140,14 @@ def _setup_seqex_subparser(subparsers, header=None):
         "--imap",
         metavar="Path",
         type=Path,
-        help="Sample-to-population mapping file.",
+        help="Sample-to-group mapping file; selects listed samples. Without minmap, uses one sample per group instead of -m.",
     )
     filtering.add_argument(
         "-g",
         "--minmap",
         metavar="Path",
         type=Path,
-        help="Population-to-minimum-coverage mapping; overrides -m.",
+        help="Group-to-minimum-coverage mapping (all IMAP groups required); overrides -m. IMAP alone defaults to one per group. A pops file may supply these minima.",
     )
     filtering.add_argument(
         "-c",
