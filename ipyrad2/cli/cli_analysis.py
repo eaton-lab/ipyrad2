@@ -186,6 +186,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
             include_reference=args.include_reference,
             imap=args.imap,
             minmap=args.minmap,
+            rmap=args.rmap,
             exclude=args.exclude,
             concatenate=args.concatenate,
             split=args.split,

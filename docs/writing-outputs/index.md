@@ -68,7 +68,7 @@ ipyrad2 snpex \
 
 | Command | Input | Output | Main filtering controls | Missing-data handling | Imputation availability | Typical downstream use |
 | --- | --- | --- | --- | --- | --- | --- |
-| `seqex` | HDF5 | one or many locus alignments | windows, number of loci, minimum locus length, `-m`, `-r`, `-e`, `-R`, `imap`, `minmap` | explicit locus, sample, and site filtering before export | none | multilocus sequence analyses and locus-based phylogenetic workflows |
+| `seqex` | HDF5 | one or many locus alignments | windows, number of loci, minimum locus length, `-m`, `-r`, `-e`, `-R`, `imap`, `minmap`, `rmap` | explicit locus, sample, and site filtering before export | none | multilocus sequence analyses and locus-based phylogenetic workflows |
 | `snpex` | HDF5 | filtered SNP matrices or supported formatted  | `-m`, `-r`, `-a`, `-e`, `-R`, `imap`, `minmap`, linked vs unlinked SNPs | explicit sample and SNP filtering before export | optional, and applied to every written output in that run | SNP-based external tools such as PLINK, TreeMix, EEMS, or SNP-alignment workflows |
 -->
 
@@ -104,3 +104,11 @@ If you plan to stay inside ipyrad2, these export tools are often unnecessary. Th
 - Return to [Assemble](../assembly/assemble.md) if you are not yet at the HDF5 stage.
 - Read the [Analysis Guide](../analyses/index.md) if you want to stay inside ipyrad2 instead of writing external-format files.
 - See [Recipes](../recipes/index.md) for worked examples once that section is filled in. For now, Recipes is a visible TODO section where export and downstream workflow examples will live.
+
+### Seqex group-filter note
+
+In [seqex](./seqex.md#group-coverage-and-missingness), IMAP without a supplied
+minmap uses one sample per group rather than scalar `-m`. Use an explicit
+minmap when assigning groups for `--rmap`; rmap changes missingness thresholds,
+not coverage. Unlisted rmap groups inherit `-r`. The text and JSON statistics
+record both effective policies and per-sample threshold/retention details.
