@@ -32,6 +32,32 @@ def test_run_pipeline_basic_stdout_transform() -> None:
     assert err == b""
 
 
+@pytest.mark.parametrize("delay,exitcode,timeout", [(1.8, 0, 10), (1.8, 0, .3), (.2, 17, 10)])
+def test_upstream_exit_after_stdout_eof(tmp_path, delay, exitcode, timeout):
+    """Late upstream exit remains subject to the deadline and atomic publication."""
+    output = tmp_path / "coverage.bed"
+    output.write_bytes(b"previous\n")
+    emitter = _py(
+        "import os,sys,time", "os.write(1,b'coverage\\n')", "os.close(1)",
+        f"time.sleep({delay})", "sys.stderr.write('upstream end\\n')",
+        f"sys.exit({exitcode})",
+    )
+    reader = _py("import sys", "sys.stdout.buffer.write(sys.stdin.buffer.read())")
+    if delay > timeout:
+        with pytest.raises(PipelineTimeoutError):
+            run_pipeline([emitter, reader], output, timeout_s=timeout)
+        assert output.read_bytes() == b"previous\n"
+    elif exitcode:
+        with pytest.raises(RuntimeError, match="rc=17"):
+            run_pipeline([emitter, reader], output, timeout_s=timeout)
+        assert output.read_bytes() == b"previous\n"
+    else:
+        rc, stdout, stderr = run_pipeline([emitter, reader], output, timeout_s=timeout)
+        assert rc == 0 and stdout == b"" and b"upstream end" in stderr
+        assert output.read_bytes() == b"coverage\n"
+    assert not list(tmp_path.glob(".coverage.bed.*.tmp"))
+
+
 def test_run_pipeline_stdin_text_roundtrip() -> None:
     payload = "XYZ-123\n"
     cmd = _py("import sys; sys.stdout.write(sys.stdin.read())")

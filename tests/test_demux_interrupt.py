@@ -108,6 +108,8 @@ def _write_interrupt_driver(path: Path) -> Path:
         "    pigz=pigz,\n"
         ")\n"
         "try:\n"
+        "    if len(sys.argv) > 7:\n"
+        "        Path(sys.argv[7]).touch()\n"
         "    tool.run()\n"
         "except KeyboardInterrupt as exc:\n"
         "    raise SystemExit(130) from exc\n",
@@ -171,9 +173,19 @@ def _run_subprocess_and_sigint(
     start_delay: float = 0.25,
     repeat_delay: float = 0.20,
     epsilon: float = 0.25,
+    ready_file: Path | None = None,
 ) -> int:
     """Run a Python subprocess, interrupt it, and return its exit code."""
     proc = subprocess.Popen(cmd)
+    if ready_file is not None:
+        deadline = time.monotonic() + 15
+        while not ready_file.exists() and proc.poll() is None and time.monotonic() < deadline:
+            time.sleep(.02)
+        if not ready_file.exists():
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait(timeout=3)
+            raise AssertionError("demux driver did not finish initialization")
     time.sleep(start_delay)
 
     try:
@@ -334,6 +346,7 @@ def test_repeated_fast_shutdown_demux_pipeline_subprocess_does_not_grow_mp_child
         raw = _write_many_inline_reads(case_dir / "lane.fastq.gz", n_reads=20_000)
         barcodes = case_dir / "barcodes.tsv"
         barcodes.write_text("sample1 ACGT\nsample2 TGCA\n", encoding="utf-8")
+        ready_file = case_dir / "ready"
 
         code = _run_subprocess_and_sigint(
             [
@@ -345,9 +358,11 @@ def test_repeated_fast_shutdown_demux_pipeline_subprocess_does_not_grow_mp_child
                 "0",
                 "",
                 "",
+                str(ready_file),
             ],
             grace=3.0,
             start_delay=0.20,
+            ready_file=ready_file,
         )
         _assert_interrupted_exit(code)
         assert not _demux_spool_dir(case_dir / "out").exists()

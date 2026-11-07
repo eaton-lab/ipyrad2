@@ -581,16 +581,24 @@ def run_pipeline(
 
         primary_fail: tuple[int, int] | None = None
 
-        while not comm_done.is_set():
+        # EOF from the final stage does not prove upstream processes have exited.
+        # Keep every stage under the caller's deadline until exit is confirmed.
+        while True:
+            all_exited = True
             for idx, proc in enumerate(procs):
                 rc = proc.poll()
-                if rc is None or rc == 0:
+                if rc is None:
+                    all_exited = False
+                    continue
+                if rc == 0:
                     continue
                 if ignore_sigpipe and idx < len(procs) - 1 and _is_sigpipe_rc(rc, sigpipe):
                     continue
                 primary_fail = (idx, rc)
                 break
-            if primary_fail is not None:
+            if primary_fail is not None or (
+                comm_done.is_set() and (all_exited or comm_exc is not None)
+            ):
                 break
             if timeout_s is not None:
                 elapsed_s = time.monotonic() - start_time
@@ -609,7 +617,7 @@ def run_pipeline(
                 primary_fail = (idx, rc)
                 break
 
-        if primary_fail is not None or timed_out:
+        if primary_fail is not None or timed_out or comm_exc is not None:
             _terminate_pipeline(procs)
 
         comm_done.wait(timeout=1.0)
