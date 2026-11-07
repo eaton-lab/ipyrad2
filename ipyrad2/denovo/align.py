@@ -18,6 +18,8 @@ from ipyrad2.utils.progress import ProgressBar
 from ipyrad2.utils.parallel import PipelineTimeoutError, run_pipeline
 from ipyrad2.utils.parallel import pipeline as pipeline_module
 
+from .mafft_runtime import mafft_process_context
+
 from .common import (
     DENOVO_MAPPING_FILENAME,
     OUTPUT_JOINED_SPACER_LEN,
@@ -212,13 +214,22 @@ def mafft_align_one(
         "--adjustdirection",
         "-",
     ]
+    input_text = fasta_text(surrogate_record)
     try:
-        rc, out, err = run_pipeline(
-            [argv],
-            outfile=None,
-            stdin_text=fasta_text(surrogate_record),
-            timeout_s=timeout_s,
-        )
+        with mafft_process_context(mafft_binary, input_text) as (binary, env, cwd):
+            argv[0] = binary
+            rc, out, err = run_pipeline(
+                [argv],
+                outfile=None,
+                stdin_text=input_text,
+                timeout_s=timeout_s,
+                env=env,
+                cwd=cwd,
+            )
+            if rc != 0 or not out:
+                raise RuntimeError(
+                    f"mafft failed rc={rc} stderr={err.decode('utf-8', 'replace')}"
+                )
     except PipelineTimeoutError as exc:
         nseq, min_len, max_len = _record_length_summary(record)
         locus_label = f"locus_{locus_id}" if locus_id is not None else "unknown_locus"
@@ -226,11 +237,6 @@ def mafft_align_one(
             f"mafft timed out for {locus_label} after {timeout_s:.0f}s "
             f"(nseq={nseq}, min_len={min_len}, max_len={max_len})"
         ) from exc
-    if rc != 0 or not out:
-        raise RuntimeError(
-            f"mafft failed rc={rc} stderr={err.decode('utf-8', 'replace')}"
-        )
-
     aligned: list[tuple[str, str]] = []
     returned_surrogates: list[str] = []
     name, buf = None, []

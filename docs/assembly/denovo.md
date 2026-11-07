@@ -205,3 +205,29 @@ See the [Empiricial SE denovo tutorial](tutorial-ped.md) for an example run on r
 - [trim](./trim.md)
 - [map](./map.md)
 - [assemble](./assemble.md)
+
+### MAFFT on shared HPC filesystems
+
+MAFFT uses shell helper programs as well as its native alignment binaries. The
+MAFFT child process receives its own environment and working directory, including
+when the selected MAFFT executable has an absolute Conda path. On Linux, when the
+environment's `awk` resolves to recognized shared storage, ipyrad2 checks a local
+system awk and puts local system helpers first in the child's PATH. The parent
+Conda environment and MAFFT alignment arguments remain unchanged.
+
+MAFFT uses a private local temporary directory. Existing local `MAFFT_TMPDIR`,
+`SLURM_TMPDIR`, and `TMPDIR` locations are preferred in that order; recognized
+network locations are skipped. A failed invocation retains its input FASTA and
+runtime metadata in that directory and logs its path for replay. Successful
+private scratch is removed. This does not retry a failed alignment automatically
+or change its scientific parameters. Filesystem detection is Linux-specific;
+unknown filesystems retain the selected environment helpers.
+
+For a shared Conda MAFFT installation, ipyrad2 also copies its launcher and
+native program directory to private node-local storage once per process. It
+checks every copied file against the source SHA256 and sets `MAFFT_BINARIES`
+only in the child environment. This avoids repeatedly opening the launcher and
+native programs over the shared filesystem. The copied program contents and
+scientific arguments are unchanged. The small runtime bundle and its source
+manifest are retained and their location is logged. A shared nonstandard
+installation must provide its native program directory via `MAFFT_BINARIES`.

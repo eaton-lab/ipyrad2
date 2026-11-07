@@ -997,6 +997,10 @@ def get_group_called_variants_in_vcf_chunks(
     cmd1 = [
         BIN_BCF,
         "mpileup",
+        # Assemble already enforces mate, mapping and alignment filters. Do not
+        # silently discard retained pairs solely because BWA omitted PROPER_PAIR.
+        "--count-orphans",
+        "--skip-any-set", "UNMAP,SECONDARY,QCFAIL,DUP,SUPPLEMENTARY",
         "-f",
         str(reference),
         "-q",
@@ -1119,7 +1123,8 @@ def get_filtered_vcf(
         "AC,AN,AF,MAF,F_MISSING",
     ]
 
-    remove_tags = "FORMAT/PL,FORMAT/GQ,INFO/RPBZ,INFO/SCBZ,INFO/MQBZ,INFO/BQBZ,INFO/MQSBZ,INFO/DP4,INFO/VDB,INFO/MQ0F,INFO/SGB"
+    # Keep caller GQ, including for masked genotypes, for downstream auditing.
+    remove_tags = "FORMAT/PL,INFO/RPBZ,INFO/SCBZ,INFO/MQBZ,INFO/BQBZ,INFO/MQSBZ,INFO/DP4,INFO/VDB,INFO/MQ0F,INFO/SGB"
     cmd4 = [
         BIN_BCF,
         "annotate",

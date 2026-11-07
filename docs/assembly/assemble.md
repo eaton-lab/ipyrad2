@@ -316,3 +316,81 @@ ipyrad2 assemble -w BAMS/WGS/*.bam -b loci.bed -r REF.fa -o OUT
 - [Writing Outputs](../writing-outputs/index.md)
 - [Analysis Guide](../analyses/index.md)
 - [Files and Data Types](../getting-started/files-and-data-types.md)
+
+
+## Pair flags and alignment filtering
+
+Assemble uses its explicit mapped-read filters to select eligible evidence.
+For paired data, both mates must be mapped to the same scaffold, and
+`--max-tlen` bounds the absolute template length (default 1000). Reads are not
+excluded solely because their aligner omitted the `PROPER_PAIR` flag. Both
+per-sample paralog calling and final joint calling pass `--count-orphans` to
+bcftools mpileup, consistently with the pairs available to coverage calculations.
+This changes calls relative to versions that implicitly excluded anomalous pairs.
+It does not admit unmapped mates or bypass the explicit mapped-read filters.
+Single-end calling is unaffected by this pair-flag change.
+
+Use the existing `--min-map-q`, `--max-softclip`, `--min-aligned-len` and
+`--max-nm` options to control short, clipped or poorly aligned evidence.
+Clipping, alignment-length and NM filters remain disabled unless supplied;
+this pair-flag correction does not select dataset-specific thresholds or change
+BAQ, native proper-pair overlap correction, site/genotype quality or depth thresholds.
+`--min-aligned-len` currently measures `qlen - sclen`, including inserted query
+bases; it is not a reference-span or exact-match-length threshold. In contrast,
+`--softclip-len-threshold` and `--softclip-frac-max` flag loci during paralog
+screening rather than removing individual reads. They are not substitutes for
+mapped-read clipping filters.
+
+Check both retained evidence and missingness when comparing filter settings.
+Agreement obtained by removing nearly all shared sites does not establish
+replicate identity, and anomalous-pair inclusion alone cannot resolve off-target
+mapping. Keep uncertain libraries separate until their identities are supported.
+
+
+For retained anomalous pairs, assemble additionally masks duplicated overlap
+bases in the temporary analysis BAM before either caller: agreeing mates retain
+one original-quality observation; disagreeing overlapping bases are both masked
+at quality zero. Original flags, sequences and CIGARs are preserved, and original
+qualities are retained in OQ when absent. The `*.overlaps.json` sidecar records
+how much evidence changed. Proper pairs are left to HTSlib's existing overlap
+correction. This is needed because HTSlib's overlap correction itself requires
+`PROPER_PAIR`, even when anomalous pairs are included. Read pairs must have a
+unique primary READ1/READ2 match within the same read group with reciprocal mate
+coordinates. Ambiguous/unmatched groups are counted rather than guessed.
+This preparation adds a collation and coordinate-sort pass for paired BAMs;
+allow additional temporary disk and I/O. Original mapped BAMs are unchanged.
+At `--min-base-q 0`, zero-quality masking no longer excludes those bases; use a
+positive base-quality threshold (the default is 13) for fragment-level counting.
+
+Both callers explicitly exclude unmapped, secondary, QC-failed, duplicate and
+supplementary records. Supplementary alignments must not add a second observation
+from the same fragment when anomalous pairs are admitted. QC-failed and duplicate
+records cannot take precedence over an eligible mate in overlap masking.
+
+
+### Genotype quality and read-filter diagnostics
+
+Final VCFs retain caller `FORMAT/GQ` alongside the existing genotype fields.
+The depth, genotype-quality and site-quality masking thresholds are unchanged.
+A masked genotype can retain its original GQ; that value does not override its
+missing GT or the site FILTER. Missing GQ stays missing.
+
+`<name>.stats.json` includes `read_filter_diagnostics` keyed by library. Each
+library records the active settings, input/retained alignment counts, independent
+failure counts and exclusive first-failure counts. Independent counts overlap;
+first failures follow the recorded order: mapping quality, paired-read geometry,
+template length, soft clipping, NM, then aligned query length (enabled criteria
+only). The first-failure counts sum to rejected records; the final BAM count is
+recorded separately and a reconciliation flag reports agreement. Input flag
+counts are descriptive and do not add filters. The text statistics include both
+failure-count views. Detailed sidecars are kept in `analysis_bams/*.filters.json`
+when intermediate output is retained.
+
+These are alignment-record counts before overlap quality masking and before
+paralog/locus filtering, not molecule counts or final genotype depths. Missing
+NM fails an enabled maximum-NM criterion. Minimum aligned length follows the
+existing `qlen - sclen` expression: insertions count toward query length, hard
+clipping does not. Single-end data ignore the paired geometry/template-length
+criteria. Diagnostics use one bounded-memory SAM scan in place of the previous
+input-count scan; filtering still uses the same samtools command and defaults.
+SAM parsing adds CPU/pipe traffic compared with count-only inspection.
