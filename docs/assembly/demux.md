@@ -93,11 +93,42 @@ If you do not supply cutsite motifs, ipyrad2 tries to infer them from barcoded r
 ### Performance and testing
 
 - `-c, --cores`: maximum parallel workers, default `4`
-- `-k, --chunksize`: reads per write batch, default `10000000`
+- `-k, --chunksize`: maximum matched reads per batch, default `10000000`; batches also flush at 4 MiB
 - `-x, --max_reads`: stop after N reads per file for a test run
-- `--pigz`: use `pigz` for final FASTQ compression
+- `--pigz`: compress temporary plain FASTQs with `pigz`
+- `--tmpdir`: existing scratch directory for `--pigz`; defaults to private output staging
 
-`--pigz` leads to big speed improvements, but larger disk usage temporarily before the FASTQs are ultimately compressed.
+Python gzip is the default and writes compressed outputs directly, without disk-backed
+handoff shards. Parallel runs use at most two readers and two writers; one input with
+Python gzip uses one writer. A one-core run stays in the main process. More cores do
+not necessarily improve performance on shared storage.
+
+Reader batches are capped at 4 MiB or `chunksize` matched records. Each writer buffers
+at most 16 MiB, flushing individual outputs at 1 MiB or earlier under memory pressure.
+These are payload limits, with up to one incoming batch/record of overshoot; Python,
+queue serialization, compression state, barcode maps, and process overhead consume
+additional memory. Open output handles use a bounded LRU cache (at most 128 per writer,
+reduced for the operating system's descriptor limit). Reopened gzip outputs may contain
+multiple valid gzip members.
+
+`--pigz` adds an uncompressed write and read before compression. It may help when CPU
+compression is the bottleneck and local scratch is fast, but can be slower on shared
+storage. Compression uses at most two jobs with one thread each. For example:
+
+```bash
+ipyrad2 demux -d RAW/*.fastq.gz -b BARCODES.tsv -o DEMUX --pigz --tmpdir /local/scratch
+```
+
+The scratch root must already exist. Demux creates and removes only its own private
+subdirectory. Supplying `--tmpdir` without `--pigz` is an error. Ensure scratch has room
+for the full uncompressed matched dataset.
+
+All consumed FASTQ records are checked for four-line structure and equal sequence and
+quality lengths. Paired inputs must have equal record counts and matching IDs after
+normalizing `/1`, `/2`, and Illumina mate annotations. Invalid inputs fail with the file
+and record number; they are not silently truncated. `--max_reads` validates only the
+requested prefix. Mate pairing is preserved, but within-sample read order can vary
+across concurrent input files. Compare decompressed read pairs, not compressed bytes.
 
 ### Logging
 
@@ -112,11 +143,22 @@ At normal verbosity, ipyrad2 reports the chosen demux mode, inferred or manual c
 - `SAMPLE_R1.fastq.gz`
 - `SAMPLE_R2.fastq.gz` for paired-end data
 
-When `--pigz` is used, temporary plain `.fastq` files may appear during compression, but the intended final outputs are still the per-sample demultiplexed FASTQs.
+Outputs and reports are written privately, then published after processing and file
+closure succeed. `--force` preserves previous outputs until their replacements are ready.
+Publication uses per-file atomic renames and a recovery manifest; the complete output
+set is not atomically swapped. An interrupted publication must be recovered with
+`--force`. Handled failures roll back and remove this run's staging files. Unrelated
+files and previous numbered reports are preserved. A persistent `.ipyrad_demux.lock`
+file coordinates runs sharing the destination directory.
+
+With `--pigz`, plain FASTQs live only in private staging or the selected scratch directory.
+An unclean shutdown can leave private run directories; do not delete a recovery manifest
+before recovering its outputs.
 
 It also writes a numbered demux report:
 
 - `ipyrad_demux_stats_N.txt`
+- `ipyrad_demux_stats_N.json`
 
 That report includes:
 
@@ -200,3 +242,28 @@ ipyrad2 demux -d RAW/*.fastq.gz -b BARCODES.tsv -x 500000 -o DEMUX_TEST/
 - [Quick Guide](./index.md)
 - [trim](./trim.md)
 - [Files and Data Types](../getting-started/files-and-data-types.md)
+
+Unmatched-barcode and boundary-ambiguity detail retains up to 4,096 distinct observations per input; additional distinct observations are counted in an explicit overflow row. Total reads remain exact. Suspected missing barcode counts remain bounded-memory estimates.
+
+### Reproducible comparisons
+
+`scripts/benchmark_demux.py` compares two source checkouts using the same input options.
+Its optional `psutil` dependency is used only for measurement, not by demux. It records
+elapsed time, sampled aggregate process RSS, sampled temporary disk usage, and SHA-256
+multiset fingerprints of complete FASTQ records or read pairs, including duplicate
+multiplicity. Compressed bytes and read order are not compared. Statistics must also
+match. Use a frozen candidate checkout and avoid concurrent tests or jobs when timing.
+
+```bash
+python scripts/benchmark_demux.py \
+  --baseline /path/to/baseline --candidate /path/to/candidate \
+  --cases /path/to/cases.json --out /path/to/new-results \
+  --cores 1 2 4 8 --repeats 3
+```
+
+The script's `--help` describes the case JSON format. `--synthetic --reads 100000`
+generates the 96/384-sample, SE/PE, one/two-input, balanced/skewed matrix. Measurements
+are local to the filesystem used; local NVMe results do not establish shared/HPC
+performance. Summed RSS includes shared pages more than once, and sampled peaks can
+miss short-lived allocations. Output staging with `--force` requires room for both the
+old and new compressed outputs until publication completes.

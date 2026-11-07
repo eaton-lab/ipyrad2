@@ -33,29 +33,9 @@ def _sleep_pipeline_worker(seconds: float) -> float:
     return seconds
 
 
-def _write_chunk_fail(path: Path, data: list[bytes]) -> None:
-    raise RuntimeError(f"intentional write failure for {Path(path).name}")
-
-
 class _OneChunkMatcher(BarMatching):
-    def _format_check(self) -> None:
-        pass
-
-    def _iter_matched_barcode(self):
-        return iter(())
-
-    def _iter_matched_chunks(self):
-        yield {"sample": [b"@r1\nAAAA\n+\n!!!!\n"]}, {"sample": [b"@r2\nTTTT\n+\n!!!!\n"]}
-
-
-class _FailingChunkMatcher(_OneChunkMatcher):
-    def _build_write_jobs(self, read1s, read2s):
-        return {
-            "sample_R1": (
-                _write_chunk_fail,
-                {"path": self.outdir / "sample_R1.fastq.gz", "data": read1s["sample"]},
-            ),
-        }
+    def iter_output_records(self):
+        yield "sample", b"@r1\nAAAA\n+\n!!!!\n", b"@r1\nTTTT\n+\n!!!!\n"
 
 
 def test_run_with_pool_empty_jobs_returns_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -239,11 +219,12 @@ def test_run_with_pool_iter_progress_uses_custom_increment(
         )
     )
 
-    assert results == [("a", 3), ("b", 7)]
+    assert sorted(results) == [("a", 3), ("b", 7)]
     assert ("init", 5, "Aligning loci - total jobs: 5") in events
-    assert ("update", 0) in events
-    assert ("update", 2) in events
-    assert ("update", 5) in events
+    expected_updates = [0]
+    for key, _result in results:
+        expected_updates.append(expected_updates[-1] + (2 if key == "a" else 3))
+    assert [event[1] for event in events if event[0] == "update"] == expected_updates
     assert events[-1] == ("close", 5)
 
 
@@ -358,7 +339,7 @@ def test_failure_path_does_not_emit_resource_tracker_or_afterfork(tmp_path: Path
 def test_bar_matching_run_writes_chunk_outputs(tmp_path: Path) -> None:
     matcher = _OneChunkMatcher(
         fastqs=(tmp_path / "in_R1.fastq.gz", None),
-        barcodes_to_names={},
+        barcodes_to_names={b"AAAA": "sample"},
         barcode_lengths1=(),
         barcode_lengths2=(),
         cuts1=[],
@@ -375,28 +356,19 @@ def test_bar_matching_run_writes_chunk_outputs(tmp_path: Path) -> None:
     with gzip.open(tmp_path / "sample_R1.fastq.gz", "rb") as indata:
         assert indata.read() == b"@r1\nAAAA\n+\n!!!!\n"
     with gzip.open(tmp_path / "sample_R2.fastq.gz", "rb") as indata:
-        assert indata.read() == b"@r2\nTTTT\n+\n!!!!\n"
+        assert indata.read() == b"@r1\nTTTT\n+\n!!!!\n"
 
 
-def test_bar_matching_run_raises_parallel_job_error_on_write_failure(tmp_path: Path) -> None:
-    matcher = _FailingChunkMatcher(
-        fastqs=(tmp_path / "in_R1.fastq.gz", None),
-        barcodes_to_names={},
-        barcode_lengths1=(),
-        barcode_lengths2=(),
-        cuts1=[],
-        cuts2=[],
-        merge_technical_replicates=False,
-        outdir=tmp_path,
-        log_level="WARNING",
-        workers=1,
-        chunksize=10,
+def test_bar_matching_run_propagates_direct_write_failure(tmp_path: Path, monkeypatch) -> None:
+    from ipyrad2.demuxer import demux_pipeline
+    def fail(*args):
+        raise OSError("intentional write failure")
+    monkeypatch.setattr(demux_pipeline, "_open_writer_handle", fail)
+    matcher = _OneChunkMatcher(
+        fastqs=(tmp_path / "unused.gz", None), barcodes_to_names={b"AAAA": "sample"},
+        barcode_lengths1=(), barcode_lengths2=(), cuts1=[], cuts2=[],
+        merge_technical_replicates=False, outdir=tmp_path, log_level="WARNING",
+        workers=1, chunksize=10,
     )
-
-    with pytest.raises(ParallelJobError) as excinfo:
+    with pytest.raises(OSError, match="intentional write failure"):
         matcher.run()
-
-    exc = excinfo.value
-    assert exc.key == "sample_R1"
-    assert exc.func_name == "_write_chunk_fail"
-    assert "<list len=1>" in str(exc)

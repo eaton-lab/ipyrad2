@@ -5,6 +5,8 @@
 from typing import Dict, Tuple, List, Iterator
 import itertools
 import shutil
+import tempfile
+from dataclasses import replace
 from pathlib import Path
 from collections import Counter
 from collections import defaultdict
@@ -25,16 +27,20 @@ from ipyrad2.utils.exceptions import IPyradError
 from ipyrad2.demuxer.demux_pipeline import _demux_spool_dir, run_demux_pipeline
 from ipyrad2.demuxer.demux_report import (
     DEMUX_STATS_PREFIX,
+    next_demux_stats_paths,
     format_logged_motif_set,
     format_preserved_file_preview,
     warn_multi_motif_inference,
     write_demux_stats,
 )
-from ipyrad2.demuxer.match import DemuxRunConfig, get_demux_mode_label, run_serial_demux
+from ipyrad2.demuxer.match import DemuxRunConfig
 from ipyrad2.demuxer.sample_names import (
     is_technical_replicate_name,
     technical_replicate_base_name,
 )
+
+
+from .transaction import DemuxTransaction, pending_runs, recover_runs, output_lock
 
 
 BASES = set("ACGTN")
@@ -286,6 +292,7 @@ class Demux:
     allow_leading_barcode_deletion: bool = False
     """: Recover exact barcode[1:] observations for inline barcode demux."""
     pigz: bool = False
+    tmpdir: Path | None = None
     force: bool = False
 
     # attrs to be filled ----------------------------------------------
@@ -374,25 +381,51 @@ class Demux:
         if not self.i7:
             self._check_barcode_boundary_collisions()
 
-    def _warn_partial_outputs(self) -> None:
-        """Warn that demux may have left partial outputs behind after a failure."""
-        logger.warning(
-            "demux failed; output directory '{}' may contain partial files and should be removed before rerun.",
-            self.outdir,
-        )
-
     def run(self):
-        """Run each file (pair) on separate demux engine(s)."""
-        try:
-            self._demultiplex()
-        except KeyboardInterrupt:
-            self._warn_partial_outputs()
-            raise
-        except Exception:
-            self._warn_partial_outputs()
-            raise
-        self._write_stats()
-        self._merge_cleanup()
+        """Process privately, then publish only successfully finalized outputs."""
+        with output_lock(self.outdir):
+            self._check_for_existing_outputs()
+            if self.force:
+                recover_runs(self.outdir)
+            # Preserve old output files until all new files and reports are ready.
+            managed = self._managed_output_artifacts()
+            tx = DemuxTransaction(self.outdir, self.tmpdir if self.pigz else None)
+            self._active_transaction = tx
+            try:
+                self._demultiplex()
+                original_outdir = self.outdir
+                staged_reports = next_demux_stats_paths(tx.outputs)
+                try:
+                    self.outdir = tx.outputs
+                    self._write_stats()
+                finally:
+                    self.outdir = original_outdir
+                report_targets = next_demux_stats_paths(self.outdir)
+                replacements = []
+                for path in sorted(tx.outputs.iterdir()):
+                    if path.name == staged_reports[0].name:
+                        target = report_targets[0]
+                    elif path.name == staged_reports[1].name:
+                        target = report_targets[1]
+                    else:
+                        target = self.outdir / path.name
+                    replacements.append((path, target))
+                tx.publish(replacements, managed if self.force else ())
+            except BaseException:
+                tx.abort()
+                logger.warning('demux failed; new outputs were not published or publication was rolled back; inspect any retained recovery directory reported above.')
+                raise
+            finally:
+                self._active_transaction = None
+            tx.cleanup()
+            logger.info("demultiplexing statistics published to {} and {}", *report_targets)
+            if self.force:
+                spool = _demux_spool_dir(self.outdir)
+                if spool.is_dir():
+                    shutil.rmtree(spool)
+                elif spool.exists():
+                    spool.unlink()
+            self._merge_cleanup()
 
     def _load_input_fastqs(self) -> None:
         self._filenames_to_fastqs = get_name_to_fastq_dict(
@@ -413,6 +446,21 @@ class Demux:
 
     def _validate_runtime_args(self) -> None:
         """Validate demux runtime arguments."""
+        if self.tmpdir is not None and not self.pigz:
+            raise IPyradError("tmpdir requires pigz.")
+        if self.pigz:
+            if shutil.which("pigz") is None:
+                raise IPyradError("--pigz requires pigz to be installed and on PATH.")
+            if self.tmpdir is not None:
+                self.tmpdir = Path(self.tmpdir).expanduser().resolve()
+                if not self.tmpdir.is_dir():
+                    raise IPyradError(f"Scratch directory does not exist: {self.tmpdir}")
+                try:
+                    with tempfile.TemporaryFile(dir=self.tmpdir) as probe:
+                        probe.write(b"demux scratch check")
+                        probe.flush()
+                except OSError as exc:
+                    raise IPyradError(f"Scratch directory is not writable: {self.tmpdir}") from exc
         if self.cores < 1:
             raise IPyradError("cores must be >= 1.")
         if self.chunksize < 1:
@@ -701,23 +749,10 @@ class Demux:
                 "One or more files matching the expected output names exist in outdir. "
                 "Use --force to overwrite."
             )
-        if existing_artifacts and self.force:
-            logger.info(
-                "removing {} existing demux output artifact(s) from {} because --force was set",
-                len(existing_artifacts),
-                self.outdir,
+        if pending_runs(self.outdir) and not self.force:
+            raise IPyradError(
+                f"Interrupted demux run found in {self.outdir}. Use --force to recover before rerunning."
             )
-            for artifact in existing_artifacts:
-                artifact.unlink()
-        if spool_dir.exists() and self.force:
-            logger.info(
-                "removing existing demux spool directory from {} because --force was set",
-                self.outdir,
-            )
-            if spool_dir.is_dir():
-                shutil.rmtree(spool_dir)
-            else:
-                spool_dir.unlink()
 
     def _validate_user_cutsite_motifs(self) -> None:
         """Validate explicit user-provided cutsite motifs."""
@@ -1041,23 +1076,10 @@ class Demux:
         """Demultiplex each raw FASTQ tuple through the serial or pipeline runner."""
         config = self._build_run_config()
 
-        # single reader that intermittently writes pipeline
-        if self.cores == 1 and not self.pigz:
-            logger.info(f"demultiplexing on {get_demux_mode_label(config)}")
-            jobs = {}
-            for fname, fastq_tuple in self._filenames_to_fastqs.items():
-                short = tuple(i.name if i else "" for i in fastq_tuple)
-                logger.info(f"processing {fname} {short}")
-                jobs[fname] = run_serial_demux(fastq_tuple, config, workers=self.cores)
-            self._file_stats = jobs
-
-        # multiple readers and writers pipeline
-        else:
-            self._file_stats = run_demux_pipeline(
-                self._filenames_to_fastqs,
-                config,
-                self.cores,
-            )
+        transaction = getattr(self, "_active_transaction", None)
+        if transaction is not None:
+            config = replace(config, outdir=transaction.outputs, tmpdir=transaction.scratch)
+        self._file_stats = run_demux_pipeline(self._filenames_to_fastqs, config, self.cores)
 
         # record of stats per sample from barmatch returned objects
         self._collect_sample_stats()

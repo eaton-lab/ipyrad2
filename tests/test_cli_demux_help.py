@@ -211,3 +211,13 @@ def test_demux_parser_validation(argv: list[str], message: str, capsys: pytest.C
     with pytest.raises(SystemExit):
         validate_demux_args(args, subparsers.choices["demux"])
     assert message in capsys.readouterr().err
+
+
+def test_demux_tmpdir_parsing_and_pigz_requirement():
+    parser = setup_parsers()
+    args = parser.parse_args(["demux", "-d", "a.gz", "-b", "bars.tsv", "--pigz", "--tmpdir", "/tmp"])
+    assert str(args.tmpdir) == "/tmp"
+    assert args.pigz
+    args.pigz = False
+    with pytest.raises(SystemExit):
+        validate_demux_args(args, parser)

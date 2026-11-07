@@ -171,11 +171,27 @@ The main final outputs are:
 - `NAME.loci`
 - `NAME.hdf5`
 - `NAME.vcf.gz`
+- `NAME.evidence.bcf` and its CSI index when `--export-genotype-evidence` is enabled
 - `NAME.bed`
 - `NAME.stats.txt`
 
 The final HDF5 is the main downstream project database.
 See the [Writing Outputs](writing-outputs) and [Analysis][analysis] sections for example usage.
+
+Use `--export-genotype-evidence` to preserve the caller's read depth (`DP`),
+allele depths (`AD`), genotype quality (`GQ`), and phred-scaled genotype
+likelihoods (`PL`) alongside the final hard call (`GT`). The companion BCF
+covers retained SNP records whose position and ordered alleles match the
+original caller record. Assembly reports how many records it skips.
+
+`FORMAT/FT` distinguishes a retained hard call (`PASS`), covered evidence
+without a hard call (`NoHardCall`), absent read support (`NoRead`), and an
+explicit exclusion (`HardMask`). Excluded cells have missing evidence.
+Likelihoods describe support for genotypes given the reads. To turn them into
+posterior probabilities, supply a genotype prior in the downstream analysis.
+Positions absent from this SNP-only file have no exported evidence. The
+standard VCF, HDF5, and locus files use the usual calling and filtering
+settings with or without the option.
 
 ## Stats
 

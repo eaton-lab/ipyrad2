@@ -120,7 +120,7 @@ def test_reader_writer_counts_cap_single_input_and_multi_input_writers() -> None
     assert _reader_writer_counts(1, 4, pigz=False) == (1, 1)
     assert _reader_writer_counts(1, 4, pigz=True) == (1, 2)
     assert _reader_writer_counts(2, 4, pigz=False) == (2, 2)
-    assert _reader_writer_counts(3, 8, pigz=False) == (3, 2)
+    assert _reader_writer_counts(3, 8, pigz=False) == (2, 2)
 
 
 def test_put_with_supervision_raises_if_writer_is_dead() -> None:
@@ -567,7 +567,7 @@ def test_demux_force_preserves_unrelated_files_and_warns(tmp_path: Path, monkeyp
     assert not any("sample1_R1.fastq.gz" in message and "will not be overwritten" in message for message in logger.messages)
 
 
-def test_demux_warns_about_partial_outputs_on_generic_failure(
+def test_demux_reports_rollback_on_generic_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -598,7 +598,7 @@ def test_demux_warns_about_partial_outputs_on_generic_failure(
     with pytest.raises(RuntimeError, match="boom"):
         tool.run()
 
-    assert any("may contain partial files" in message for message in logger.messages)
+    assert any("new outputs were not published" in message for message in logger.messages)
 
 
 def test_demux_warns_for_multi_motif_auto_inference_message(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1973,8 +1973,9 @@ def test_demux_force_removes_existing_spool_dir(tmp_path: Path) -> None:
         force=True,
     )
 
-    assert not spool_dir.exists()
+    assert spool_dir.exists()  # Construction must not delete existing artifacts.
     tool.run()
+    assert not spool_dir.exists()
     assert _read_fastq_sequences(outdir / "sample1_R1.fastq.gz") == ["ATCGGAAAA"]
 
 
@@ -2016,100 +2017,40 @@ def test_demux_pipeline_does_not_log_progress_before_full_chunk(
     assert not any("demux active:" in message for message in logger.messages)
 
 
-def test_bar_matching_uses_configured_log_level_for_writer_pool(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_bar_matching_serial_uses_bounded_writer_without_a_pool(tmp_path, monkeypatch):
     raw = _write_fastq(tmp_path / "lane.fastq.gz", ["ACGTATCGGAAAA"])
-    seen: dict[str, object] = {}
-
-    class _PoolStub:
-        def __init__(self, *, log_level: str, max_workers: int) -> None:
-            seen["log_level"] = log_level
-            seen["max_workers"] = max_workers
-
-        def iter_results(self, items, max_inflight=None):
-            return iter(())
-
-        def abort(self, fast: bool = False) -> None:
-            seen["aborted"] = fast
-
-        def close(self, wait: bool = True) -> None:
-            seen["close_wait"] = wait
-
-    monkeypatch.setattr(match_module, "_ManagedProcessPool", _PoolStub)
-
+    monkeypatch.setattr("ipyrad2.utils.parallel.pool._ManagedProcessPool", lambda **kw: pytest.fail("serial path started a pool"))
     matcher = BarMatchingSingleInline(
-        fastqs=(raw, None),
-        barcodes_to_names={b"ACGT": "sample1"},
-        barcode_lengths1=(4,),
-        barcode_lengths2=(),
-        cuts1=[b"ATCGG"],
-        cuts2=[],
-        merge_technical_replicates=False,
-        outdir=tmp_path / "out",
-        log_level="DEBUG",
-        workers=2,
-        chunksize=1,
-        max_reads=10,
+        fastqs=(raw, None), barcodes_to_names={b"ACGT": "sample1"},
+        barcode_lengths1=(4,), barcode_lengths2=(), cuts1=[b"ATCGG"], cuts2=[],
+        merge_technical_replicates=False, outdir=tmp_path / "out", log_level="WARNING",
+        workers=1, chunksize=1, max_reads=10,
     )
     matcher.run()
-
-    assert seen["log_level"] == "DEBUG"
-    assert seen["max_workers"] == 2
-    assert seen["close_wait"] is True
+    assert _read_fastq_sequences(tmp_path / "out/sample1_R1.fastq.gz") == ["ATCGGAAAA"]
 
 
-def test_bar_matching_interrupt_cleanup_does_not_print(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_bar_matching_interrupt_aborts_writer_without_flushing(tmp_path, monkeypatch):
     raw = _write_fastq(tmp_path / "lane.fastq.gz", ["ACGTATCGGAAAA"])
-    seen: dict[str, object] = {}
-
-    class _PoolStub:
-        def __init__(self, *, log_level: str, max_workers: int) -> None:
-            seen["log_level"] = log_level
-            seen["max_workers"] = max_workers
-
-        def iter_results(self, items, max_inflight=None):
-            raise KeyboardInterrupt
-
-        def abort(self, fast: bool = False) -> None:
-            seen["aborted"] = fast
-
-        def close(self, wait: bool = True) -> None:
-            seen["close_wait"] = wait
-
-    monkeypatch.setattr(match_module, "_ManagedProcessPool", _PoolStub)
-    monkeypatch.setattr(
-        "builtins.print",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("print should not be called")),
-    )
-
+    seen = []
+    class Writer:
+        def __init__(self, *args): pass
+        def add(self, records): raise KeyboardInterrupt
+        def finish(self): pytest.fail("finished interrupted writer")
+        def abort(self): seen.append("aborted")
+    monkeypatch.setattr(pipeline_module, "BufferedDemuxWriter", Writer)
     matcher = BarMatchingSingleInline(
-        fastqs=(raw, None),
-        barcodes_to_names={b"ACGT": "sample1"},
-        barcode_lengths1=(4,),
-        barcode_lengths2=(),
-        cuts1=[b"ATCGG"],
-        cuts2=[],
-        merge_technical_replicates=False,
-        outdir=tmp_path / "out",
-        log_level="WARNING",
-        workers=2,
-        chunksize=1,
-        max_reads=10,
+        fastqs=(raw, None), barcodes_to_names={b"ACGT": "sample1"},
+        barcode_lengths1=(4,), barcode_lengths2=(), cuts1=[b"ATCGG"], cuts2=[],
+        merge_technical_replicates=False, outdir=tmp_path / "out", log_level="WARNING",
+        workers=1, chunksize=1, max_reads=10,
     )
-
     with pytest.raises(KeyboardInterrupt):
         matcher.run()
-
-    assert seen["aborted"] is True
-    assert seen["close_wait"] is False
+    assert seen == ["aborted"]
 
 
-def test_demux_pipeline_logs_cumulative_chunk_progress_across_files(
+def test_demux_pipeline_logs_final_cumulative_totals_across_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2148,10 +2089,10 @@ def test_demux_pipeline_logs_cumulative_chunk_progress_across_files(
 
     progress_messages = [
         message for message in logger.messages
-        if message.startswith("demux progress:")
+        if message.startswith("demux complete:")
     ]
 
-    assert progress_messages == ["demux progress: raw_reads=4 matched_reads=4"]
+    assert progress_messages == ["demux complete: raw_reads=4 matched_reads=4"]
     assert not any("demux active:" in message for message in logger.messages)
 
 
@@ -2231,9 +2172,15 @@ def test_demux_pipeline_pigz_writer_outputs_complete_temp_fastqs(
     unrelated_fastq = outdir / "unrelated.fastq"
     unrelated_fastq.write_text("UNRELATED\n", encoding="utf-8")
     captured_paths: list[Path] = []
+    captured_sequences = {}
 
     def _capture_temp_fastqs(temp_fastqs, *args, **kwargs) -> None:
         captured_paths.extend(temp_fastqs)
+        for path in temp_fastqs:
+            captured_sequences[path.name] = path.read_text().splitlines()[1::4]
+            with gzip.open(kwargs["outdir"] / (path.name + ".gz"), "wb") as out:
+                out.write(path.read_bytes())
+            path.unlink()
 
     monkeypatch.setattr(pipeline_module, "_compress_demux_outputs_with_pigz", _capture_temp_fastqs)
 
@@ -2260,10 +2207,10 @@ def test_demux_pipeline_pigz_writer_outputs_complete_temp_fastqs(
         lines = path.read_text(encoding="utf-8").splitlines()
         return [lines[idx] for idx in range(1, len(lines), 4)]
 
-    assert Counter(_read_plain_fastq_sequences(outdir / "sample1_R1.fastq")) == Counter(
+    assert Counter(captured_sequences["sample1_R1.fastq"]) == Counter(
         ["ATCGGAAAA", "ATCGGTTTT", "ATCGGAAAA"]
     )
-    assert Counter(_read_plain_fastq_sequences(outdir / "sample2_R1.fastq")) == Counter(
+    assert Counter(captured_sequences["sample2_R1.fastq"]) == Counter(
         ["ATCGGCCCC", "ATCGGGGGG"]
     )
     assert sorted(path.name for path in captured_paths) == ["sample1_R1.fastq", "sample2_R1.fastq"]

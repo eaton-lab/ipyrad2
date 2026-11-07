@@ -181,6 +181,10 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="File mapping BAM basenames to group names for population-level variant calls",
     )
     naming.add_argument(
+        "--export-genotype-evidence", action="store_true",
+        help="Also write an indexed .evidence.bcf with read depths and genotype likelihoods for retained SNPs",
+    )
+    naming.add_argument(
         "--rename", metavar="Path", type=Path,
         help="File mapping BAM basenames to new names for outputs; overrides BAM headers",
     )

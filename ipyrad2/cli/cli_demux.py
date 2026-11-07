@@ -26,6 +26,7 @@ def _parser_error_if(parser: ArgumentParser, condition: bool, message: str) -> N
 
 def validate_demux_args(args: Namespace, parser: ArgumentParser) -> None:
     """Validate demux CLI arguments after parsing."""
+    _parser_error_if(parser, args.tmpdir is not None and not args.pigz, "--tmpdir requires --pigz")
     _parser_error_if(parser, args.cores < 1, "--cores must be >= 1")
     _parser_error_if(parser, args.chunksize < 1, "--chunksize must be >= 1")
     _parser_error_if(
@@ -138,7 +139,7 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
     )
     performance.add_argument(
         "-k", "--chunksize", metavar="int", type=intlike, default=int(1e7),
-        help="Reads per write batch; larger values use more RAM. [default=%(default)s]",
+        help="Maximum matched reads per batch; batches are also capped at 4 MiB. [default=%(default)s]",
     )
     performance.add_argument(
         "-x", "--max_reads", metavar="int", type=intlike,
@@ -150,7 +151,12 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
     )
     performance.add_argument(
         "--pigz", action="store_true",
-        help="Use pigz for final demux FASTQ compression.",
+        help="Compress temporary FASTQs with pigz; local scratch (--tmpdir) is recommended.",
+    )
+
+    performance.add_argument(
+        "--tmpdir", metavar="Path", type=Path,
+        help="Existing scratch directory for --pigz; defaults to private output staging.",
     )
 
     logging.add_argument(

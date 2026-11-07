@@ -72,6 +72,7 @@ from .variants import (
     load_variant_resolution_stats,
     write_vcf,
 )
+from .genotype_evidence import write_genotype_evidence
 from .write_snps import write_snps_hdf5
 from ..utils.parallel import run_pipeline, run_with_pool, run_with_pool_iter
 from ..utils.exceptions import IPyradError
@@ -174,7 +175,9 @@ def _build_consensus_output_artifacts(name: str, tmpdir: Path) -> ConsensusOutpu
 
 def existing_results_force_or_raise(outdir, tmpdir, name, force):
     """Apply assemble overwrite policy for the current output prefix."""
-    if (outdir / f"{name}.loci.gz").exists() or tmpdir.exists():
+    evidence = outdir / f"{name}.evidence.bcf"
+    evidence_index = evidence.with_suffix(".bcf.csi")
+    if any(path.exists() for path in (outdir / f"{name}.loci.gz", tmpdir, evidence, evidence_index)):
         if not force:
             raise IPyradError(
                 f"outfiles with prefix {name} already exist in {outdir}. Use --force to overwrite."
@@ -196,6 +199,8 @@ def existing_results_force_or_raise(outdir, tmpdir, name, force):
                 outdir / f"{name}.stats_counts.tsv",
                 outdir / f"{name}.stats_sample_cov.txt",
                 outdir / f"{name}.stats_locus_coverage.txt",
+                evidence,
+                evidence_index,
             ]
             for r in rfiles:
                 if r.exists():
@@ -1542,6 +1547,7 @@ def _write_consensus_and_outputs(
     sample_layout_labels: dict[str, str] | None = None,
     sample_filter_stats: dict[str, dict[str, int]] | None = None,
     min_sample_observed_fraction: float = 0.10,
+    export_genotype_evidence: bool = False,
 ) -> None:
     """Write consensus sequences, final locus outputs, and the SNP database."""
     output_artifacts = _build_consensus_output_artifacts(name, tmpdir)
@@ -1776,6 +1782,17 @@ def _write_consensus_and_outputs(
         overlap_stats=load_variant_resolution_stats(tmpdir),
         mixed_run_summary=mixed_run_summary,
     )
+    if export_genotype_evidence:
+        write_genotype_evidence(
+            raw_vcf=tmpdir / "vcfs" / "loci.raw.vcf.gz",
+            final_vcf=final_vcf,
+            out_bcf=outdir / f"{name}.evidence.bcf",
+            hard_masks=(
+                {sample: getattr(artifacts, attribute) for sample, artifacts in sample_artifacts.items()}
+                for attribute in ("paralog_mask_bed", "indel_overlap_mask_bed", "consensus_sample_mask_bed")
+            ),
+            shared_mask=output_artifacts.restriction_mask_bed,
+        )
 
 
 def run_assembler(
@@ -1820,6 +1837,7 @@ def run_assembler(
     logged_command: str | None = None,
     keep_tmpdir: bool = False,
     min_sample_observed_fraction: float = 0.10,
+    export_genotype_evidence: bool = False,
 ):
     # Normalize the top-level input/output paths first so later stages can
     # treat everything as concrete local files.
@@ -2236,6 +2254,7 @@ def run_assembler(
             sname: ("PE" if sample_layouts[sname] else "SE")
             for sname in snames
         },
+        export_genotype_evidence=export_genotype_evidence,
         sample_filter_stats={
             sname: {
                 "reads_before_filtering": int(

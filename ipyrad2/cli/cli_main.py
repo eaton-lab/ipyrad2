@@ -303,6 +303,7 @@ def run_subcommand(args, _exit=True):
             max_reads_kmer=args.max_reads_kmer,
             log_level=args.log_level,
             pigz=args.pigz,
+            tmpdir=args.tmpdir,
             force=args.force,
             logged_command=logged_command,
         )
@@ -458,6 +459,7 @@ def run_subcommand(args, _exit=True):
             paralog_fail_frac_max=args.paralog_fail_frac_max,
             subsample=args.subsample,
             populations=args.populations,
+            export_genotype_evidence=args.export_genotype_evidence,
             rename=args.rename,
             masks=args.masks,
             cores=args.cores,

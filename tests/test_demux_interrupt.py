@@ -123,12 +123,21 @@ def _spawn_and_sigint(
     start_delay: float = 0.25,
     repeat_delay: float = 0.20,
     epsilon: float = 0.25,
+    ready_file: Path | None = None,
 ) -> int:
     ctx = mp.get_context("spawn")
     proc = ctx.Process(target=target, args=args)
     proc.start()
 
     time.sleep(start_delay)
+    if ready_file is not None:
+        deadline = time.monotonic() + 15
+        while not ready_file.exists() and proc.is_alive() and time.monotonic() < deadline:
+            time.sleep(.05)
+        if not ready_file.exists():
+            proc.terminate()
+            proc.join(3)
+            raise AssertionError("pigz did not reach the compression stage")
 
     try:
         os.kill(proc.pid, signal.SIGINT)
@@ -268,6 +277,7 @@ def test_fast_shutdown_demux_pipeline(tmp_path: Path) -> None:
     )
     _assert_interrupted_exit(code)
     assert not _demux_spool_dir(tmp_path / "out").exists()
+    _assert_no_new_mp_children(before)
 
 
 def test_fast_shutdown_demux_pigz_stage(tmp_path: Path) -> None:
@@ -302,6 +312,7 @@ def test_fast_shutdown_demux_pigz_stage(tmp_path: Path) -> None:
         pid_file,
         grace=3.0,
         start_delay=0.60,
+        ready_file=pid_file,
     )
     _assert_interrupted_exit(code)
 

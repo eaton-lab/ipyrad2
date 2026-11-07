@@ -8,7 +8,7 @@ from ipyrad2.utils.logger import set_log_level
 from ipyrad2.utils.progress import ProgressBar
 
 
-def test_progress_bar_uses_log_prefix_and_caller_file(capsys, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_progress_bar_is_compact_without_log_prefix(capsys, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stderr.isatty", lambda: True)
     monkeypatch.setattr(logger_mod, "color_support", lambda: False)
     set_log_level("INFO")
@@ -20,8 +20,10 @@ def test_progress_bar_uses_log_prefix_and_caller_file(capsys, monkeypatch: pytes
     prog.close()
 
     err = capsys.readouterr().err
-    assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \| INFO\s+\|", err)
-    assert "test_progress_logging.py" in err
+    assert not re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", err)
+    assert "test_progress_logging.py" not in err
+    assert "[#####               ]  25%" in err
+    assert "[##########          ]  50%" in err
     assert "Processing jobs" in err
     assert "% | Processing jobs" in err
     assert "0:00:05" not in err
