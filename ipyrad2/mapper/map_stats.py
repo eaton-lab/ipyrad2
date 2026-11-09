@@ -33,11 +33,12 @@ class MappingJobResult:
     sname: str
     bam_path: Path
     is_paired: bool
-    nreads_processed: int
+    nreads_processed: int  # Primary records, one per input read.
     nreads_filtered_before_bam_by_unmapped_or_nonprimary: int
     nreads_written_before_duplicate_removal: int
     duplicate_stats: dict[str, int]
     nreads_filtered_before_bam_by_mate_unmapped_or_cross_scaffold: int = 0
+    nonprimary_alignment_records_removed: int = 0
 
 
 @dataclass(frozen=True)
@@ -249,6 +250,7 @@ def collect_single_end_bam_stats(job_result: MappingJobResult) -> dict:
         "reads_removed_unmapped_or_nonprimary": int(
             job_result.nreads_filtered_before_bam_by_unmapped_or_nonprimary
         ),
+        "nonprimary_alignment_records_removed": int(job_result.nonprimary_alignment_records_removed),
         "reads_in_final_bam": int(nreads_in_final_bam),
         "fraction_input_reads_retained_in_final_bam": _safe_ratio(
             nreads_in_final_bam,
@@ -356,6 +358,7 @@ def collect_paired_bam_stats(job_result: MappingJobResult) -> dict:
         "reads_removed_unmapped_or_nonprimary": int(
             job_result.nreads_filtered_before_bam_by_unmapped_or_nonprimary
         ),
+        "nonprimary_alignment_records_removed": int(job_result.nonprimary_alignment_records_removed),
         "reads_removed_same_scaffold_pairing": int(
             job_result.nreads_filtered_before_bam_by_mate_unmapped_or_cross_scaffold
         ),
@@ -454,6 +457,7 @@ def build_map_stats_payload(
         applied_columns = [
             "input_templates",
             "reads_removed_unmapped_or_nonprimary",
+            "nonprimary_alignment_records_removed",
             "reads_removed_same_scaffold_pairing",
             "duplicate_records_removed",
             "templates_in_final_bam",
@@ -487,6 +491,7 @@ def build_map_stats_payload(
         applied_columns = [
             "input_reads",
             "reads_removed_unmapped_or_nonprimary",
+            "nonprimary_alignment_records_removed",
             "reads_in_final_bam",
             "fraction_input_reads_retained_in_final_bam",
         ]
@@ -568,7 +573,9 @@ def render_map_stats_payload_report(payload: dict[str, object]) -> str:
         command_header
         + _report_header(is_paired)
         + "## Applied mapping summary\n"
-        + "# These counts describe filters already applied during ipyrad2 map.\n\n"
+        + "# These counts describe filters already applied during ipyrad2 map.\n"
+        + "# Input totals exclude secondary and supplementary alignment records.\n"
+        + "# Nonprimary records removed are also included in reads_removed_unmapped_or_nonprimary.\n\n"
         + _format_frame(applied_frame)
         + "\n## Assemble read-filter preview (not applied during mapping)\n"
         + f"# {preview['description']}\n"

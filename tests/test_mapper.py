@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+
+import pytest
 
 from ipyrad2.mapper.map_samples_prep import MapperSamplePlan
 from ipyrad2.mapper.map_stats import MappingJobResult
@@ -236,6 +239,63 @@ def test_run_mapper_unmate_uses_single_end_stats_and_threads_flag(monkeypatch, t
     assert "# Paired-end final BAMs keep only mapped mates on the same scaffold." not in report
     assert "input_reads" in report
     assert "command" not in report_json
+
+
+@pytest.mark.parametrize("paired", [False, True])
+def test_map_input_counts_exclude_nonprimary_records(monkeypatch, tmp_path: Path, paired: bool) -> None:
+    if not Path(mapper_module.BIN_SAMTOOLS).is_file():
+        pytest.skip("mapper samtools is not installed")
+
+    outdir = tmp_path / "mapped"
+    (outdir / "tmpdir").mkdir(parents=True)
+    sam = tmp_path / "alignments.sam"
+    if paired:
+        records = [
+            "keep\t99\tchr1\t1\t60\t4M\t=\t9\t12",
+            "keep\t147\tchr1\t9\t60\t4M\t=\t1\t-12",
+            "keep\t355\tchr1\t25\t0\t4M\t=\t9\t0",
+            "keep\t2147\tchr1\t30\t60\t2S2M\t=\t9\t0",
+            "drop\t77\t*\t0\t0\t*\t*\t0\t0",
+            "drop\t141\t*\t0\t0\t*\t*\t0\t0",
+        ]
+    else:
+        records = [
+            "keep\t0\tchr1\t1\t60\t4M\t*\t0\t0",
+            "keep\t256\tchr1\t25\t0\t4M\t*\t0\t0",
+            "keep\t2048\tchr1\t30\t60\t2S2M\t*\t0\t0",
+            "drop\t4\t*\t0\t0\t*\t*\t0\t0",
+        ]
+    sam.write_text(
+        "@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:100\n"
+        + "".join(line + "\tACGT\tIIII\tNM:i:0\n" for line in records)
+    )
+    monkeypatch.setattr(
+        mapper_module, "_bwa_mem_cmd",
+        lambda *_: [sys.executable, "-c", "import sys; sys.stdout.write(open(sys.argv[1]).read())", str(sam)],
+    )
+    plan = _sample_plan("sample", ((tmp_path / "r1.fastq", tmp_path / "r2.fastq" if paired else None),))
+    result = mapper_module._map_sample(
+        sname="sample",
+        sample_plan=plan,
+        reference=tmp_path / "ref.fa",
+        outdir=outdir,
+        threads=1,
+        is_paired=paired,
+        unmate=False,
+        mark_dups_by_coords=False,
+        mark_dups_by_umis=False,
+    )
+    assert result.nreads_processed == (4 if paired else 2)
+    assert result.nreads_written_before_duplicate_removal == (2 if paired else 1)
+    assert result.nreads_filtered_before_bam_by_unmapped_or_nonprimary == (4 if paired else 3)
+    collect = mapper_module.collect_paired_bam_stats if paired else mapper_module.collect_single_end_bam_stats
+    stats = collect(result)
+    summary, = mapper_module.build_map_stats_payload({"sample": stats}, is_paired=paired)["applied_mapping_summary"]
+    unit = "templates" if paired else "reads"
+    assert summary[f"input_{unit}"] == 2
+    assert summary[f"fraction_input_{unit}_retained_in_final_bam"] == 0.5
+    assert summary["nonprimary_alignment_records_removed"] == 2
+    assert not list((outdir / "tmpdir").iterdir())
 
 
 def test_map_sample_unmate_cleans_temp_fastq_after_success(monkeypatch, tmp_path: Path) -> None:

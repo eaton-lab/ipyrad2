@@ -108,6 +108,9 @@ For paired-end data, it also reports:
 - duplicate-removal totals when duplicate marking was enabled
 - pair-level reporting summaries for MAPQ, soft clipping, NM, and insert size
 
+`input_reads` and `input_templates` count each input read or pair once, including reads that did not map. Retention fractions use these totals as their denominators.
+`nonprimary_alignment_records_removed` counts secondary and supplementary alignments. It is also included in the combined `reads_removed_unmapped_or_nonprimary` field, which includes unmapped and QC-failed primary records.
+
 The MAPQ, soft-clipping, NM, and TLEN thresholds in this report are reporting thresholds only. They are not additional mapper filters applied during BAM generation.
 
 ## Common Failures and Interpretation Notes

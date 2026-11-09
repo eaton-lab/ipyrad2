@@ -175,16 +175,26 @@ def _bwa_mem_cmd(
     return cmd
 
 
+def _primary_alignment_filter_cmd(counts_path: Path) -> list[str]:
+    """Retain one primary record per input read, including unmapped reads."""
+    return [
+        BIN_SAMTOOLS, "view",
+        "-b",
+        "-u",
+        "-F", "0x900",
+        "--save-counts", str(counts_path),
+        "-o", "-",
+    ]
+
+
 def _structural_filter_cmd(counts_path: Path) -> list[str]:
-    """Build the primary mapped-read filter used before BAM writing."""
+    """Remove unmapped and QC-failed primary records before BAM writing."""
     return [
         BIN_SAMTOOLS, "view",
         "-b",
         "-u",
         "-F", "0x4",
-        "-F", "0x100",
         "-F", "0x200",
-        "-F", "0x800",
         "--save-counts", str(counts_path),
         "-o", "-",
     ]
@@ -296,6 +306,7 @@ def _map_sample(
     out_bam_tmp = outdir / f"{sname}.trimmed.sorted.tmp.bam"
     tmpdir = outdir / "tmpdir"
     tmp_prefix = tmpdir / f"{sname}.tmp.pre"
+    primary_counts_path = tmpdir / f"{sname}.tmp.primary_counts.json"
     structural_counts_path = tmpdir / f"{sname}.tmp.structural_counts.json"
     same_scaffold_counts_path = tmpdir / f"{sname}.tmp.same_scaffold_counts.json"
     dup_stats_path = tmpdir / f"{sname}.tmp.markdup_stats.txt"
@@ -307,6 +318,7 @@ def _map_sample(
     temp_paths = [
         out_bam_tmp,
         _output_index_path(out_bam_tmp),
+        primary_counts_path,
         structural_counts_path,
         same_scaffold_counts_path,
         dup_stats_path,
@@ -331,9 +343,11 @@ def _map_sample(
             unmate=unmate,
         )
 
-        cmd1 = _bwa_mem_cmd(sname, effective_fastqs, reference, bwa_threads)
-        cmd2 = _structural_filter_cmd(structural_counts_path)
-        filter_pipeline = [cmd1, cmd2]
+        filter_pipeline = [
+            _bwa_mem_cmd(sname, effective_fastqs, reference, bwa_threads),
+            _primary_alignment_filter_cmd(primary_counts_path),
+            _structural_filter_cmd(structural_counts_path),
+        ]
         if is_paired:
             filter_pipeline.append(_paired_same_scaffold_filter_cmd(same_scaffold_counts_path))
 
@@ -369,6 +383,7 @@ def _map_sample(
             cmd3 = _coord_sort_cmd(tmp_prefix, sort_threads, out_bam_tmp)
             run_pipeline(filter_pipeline + [cmd3])
 
+        primary_counts = _load_save_counts(primary_counts_path)
         structural_counts = _load_save_counts(structural_counts_path)
         same_scaffold_counts = (
             _load_save_counts(same_scaffold_counts_path)
@@ -381,8 +396,11 @@ def _map_sample(
             sname=sname,
             bam_path=out_bam,
             is_paired=is_paired,
-            nreads_processed=structural_counts["records_processed"],
-            nreads_filtered_before_bam_by_unmapped_or_nonprimary=structural_counts["records_filter_rejected"],
+            nreads_processed=primary_counts["records_filter_accepted"],
+            nreads_filtered_before_bam_by_unmapped_or_nonprimary=(
+                primary_counts["records_filter_rejected"] + structural_counts["records_filter_rejected"]
+            ),
+            nonprimary_alignment_records_removed=primary_counts["records_filter_rejected"],
             nreads_filtered_before_bam_by_mate_unmapped_or_cross_scaffold=same_scaffold_counts["records_filter_rejected"],
             nreads_written_before_duplicate_removal=same_scaffold_counts["records_filter_accepted"],
             duplicate_stats=duplicate_stats,
