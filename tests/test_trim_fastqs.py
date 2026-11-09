@@ -223,6 +223,25 @@ def test_validate_trim_config_requires_fastp_binary(
         )
 
 
+def test_validate_trim_config_rejects_mean_window_quality_above_fastp_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(trim_fastqs, "FASTP_BINARY", _write_executable(tmp_path / "fastp"))
+    with pytest.raises(IPyradError, match="min_mean_window_quality must be between 1 and 30"):
+        trim_fastqs._validate_trim_config(
+            max_reads=None,
+            min_trimmed_length=35,
+            min_quality=20,
+            max_unqualified_percent=15,
+            min_mean_window_quality=31,
+            cut_window_size=5,
+            max_reads_kmer=500_000,
+            max_ns=5,
+            cores=6,
+            threads=3,
+        )
+
+
 def test_write_stats_summary_raises_when_stats_are_missing(tmp_path: Path) -> None:
     with pytest.raises(IPyradError, match="Missing fastp stats report"):
         trim_fastqs.write_stats_summary(["sampleA"], tmp_path)

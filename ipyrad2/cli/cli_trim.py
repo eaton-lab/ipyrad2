@@ -37,8 +37,8 @@ def validate_trim_args(args: Namespace, parser: ArgumentParser) -> None:
     _parser_error_if(parser, args.min_quality < 0, "--min-quality must be >= 0")
     _parser_error_if(
         parser,
-        not 1 <= args.min_mean_window_quality <= 36,
-        "--min-mean-window-quality must be between 1 and 36",
+        not 1 <= args.min_mean_window_quality <= 30,
+        "--min-mean-window-quality must be between 1 and 30 (fastp limit)",
     )
     _parser_error_if(
         parser,
@@ -95,7 +95,7 @@ def _setup_trim_subparser(subparsers: argparse._SubParsersAction, header: str = 
     )
     filtering.add_argument(
         "-M", "--min-mean-window-quality", metavar="int", type=int, default=30,
-        help="Minimum sliding-window mean quality for tail trimming. [default=%(default)s]",
+        help="Minimum sliding-window mean quality for tail trimming (1–30). [default=%(default)s]",
     )
     filtering.add_argument(
         "-W", "--cut-window-size", metavar="int", type=int, default=5,

@@ -74,8 +74,8 @@ def _validate_trim_config(
         "max_unqualified_percent must be between 0 and 100.",
     )
     _require(
-        1 <= min_mean_window_quality <= 36,
-        "min_mean_window_quality must be between 1 and 36.",
+        1 <= min_mean_window_quality <= 30,
+        "min_mean_window_quality must be between 1 and 30 (fastp limit).",
     )
     _require(
         1 <= cut_window_size <= 1000,

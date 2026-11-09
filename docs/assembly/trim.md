@@ -47,7 +47,7 @@ These options control the main `fastp` quality path:
 
 - `-q, --min-quality`: minimum qualified base quality, default `20`
 - `-u, --max-unqualified-percent`: maximum percent low-quality bases allowed in a read, default `15`
-- `-M, --min-mean-window-quality`: mean quality required in the sliding window used for front and tail cutting, default `30`
+- `-M, --min-mean-window-quality`: mean quality required in the sliding window used for tail trimming, from `1` to `30` (fastp limit), default `30`
 - `-W, --cut-window-size`: sliding-window size for quality cutting, default `5`
 - `-n, --max-ns`: maximum number of `N` bases allowed in a read, default `5`
 - `-e, --min-trimmed-length`: minimum retained read length after trimming, default `35`
