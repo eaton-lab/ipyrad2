@@ -137,27 +137,30 @@ def build_sample_summary(
     return df
 
 
-def concat_summaries(outdir: Path) -> pd.DataFrame:
-    """Concatenate per-sample summary TSVs into one DataFrame."""
+def concat_summaries(outdir: Path) -> int:
+    """Write summaries in filename order using 4,096-row chunks."""
     out_tsv = outdir / "concat.summary.tsv"
-    tsvs = sorted(outdir.glob("*.summary.tsv"))
-    dfs = []
-    for p in tsvs:
-        df = pd.read_csv(p, sep="	", dtype={
-            "sample": "string",
-            "cluster_id": "string",
-            "length": "Int64",
-            "cluster_length": "Int64",
-            "seed": "string",
-            "n_unique": "Int64",
-            "n_reads": "Int64",
-            "record_type": "string",
-            "cluster_sequence": "string",
-            "arm_boundary": "Int64",
-        })
-        dfs.append(df)
-    all_df = pd.concat(dfs, ignore_index=True)
-    if out_tsv:
-        all_df.to_csv(out_tsv, sep="	", index=False)
-        logger.debug("wrote concatenated summaries to {}", out_tsv)
-    return all_df
+    tsvs = sorted(p for p in outdir.glob("*.summary.tsv") if p != out_tsv)
+    if not tsvs:
+        raise ValueError("No sample summaries to concatenate")
+    dtypes = {
+        "sample": "string", "cluster_id": "string", "length": "Int64",
+        "cluster_length": "Int64", "seed": "string", "n_unique": "Int64",
+        "n_reads": "Int64", "record_type": "string", "cluster_sequence": "string",
+        "arm_boundary": "Int64",
+    }
+    columns = None
+    count = 0
+    with out_tsv.open("wt", encoding="utf-8", newline="") as out:
+        for path in tsvs:
+            with pd.read_csv(path, sep="\t", dtype=dtypes, chunksize=4096) as chunks:
+                for chunk in chunks:
+                    first = columns is None
+                    if first:
+                        columns = list(chunk.columns)
+                    elif list(chunk.columns) != columns:
+                        raise ValueError(f"Inconsistent sample summary columns: {path}")
+                    chunk.to_csv(out, sep="\t", index=False, header=first)
+                    count += len(chunk)
+    logger.debug("wrote concatenated summaries to {}", out_tsv)
+    return count

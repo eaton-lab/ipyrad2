@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import shlex
+
 
 MAX_LOGGED_MATCHED_PATH_CHARS = 240
 
@@ -14,6 +16,51 @@ _PATH_LIST_FLAGS_BY_SUBCOMMAND = {
     "map": {"-d", "--fastqs"},
     "assemble": {"-d", "--rad-bams", "-w", "--wgs-bams"},
 }
+
+
+def format_stats_command(argv: list[str], max_chars: int = 120) -> str:
+    """Return one bounded display line; the original argv belongs in JSON.
+
+    Placeholders and truncation are deliberately labelled as a summary, not
+    presented as a runnable command. Control characters are escaped for display.
+    """
+    if max_chars < 32:
+        raise ValueError("A stats command line needs at least 32 characters.")
+
+    def display(token):
+        return ''.join(c if c.isprintable() else c.encode('unicode_escape').decode('ascii')
+                       for c in shlex.quote(str(token)))
+
+    tokens = [display(t) for t in argv]
+    escaped = any(not c.isprintable() for token in argv for c in str(token))
+    full = ("Command (summary): " if escaped else "Command: ") + " ".join(tokens)
+    if len(full) <= max_chars:
+        return full
+    subcommand = str(argv[1]) if len(argv) > 1 else ""
+    path_flags = _PATH_LIST_FLAGS_BY_SUBCOMMAND.get(subcommand, set())
+    unit = "BAMs" if subcommand == "assemble" else "FASTQs"
+    groups = []
+    idx = 0
+    while idx < len(argv):
+        token = str(argv[idx])
+        idx += 1
+        group = [display(token)]
+        if token in path_flags:
+            start = idx
+            while idx < len(argv) and not str(argv[idx]).startswith("-"):
+                idx += 1
+            if idx > start:
+                group.append(f"<{idx - start} {unit}>")
+        elif token.startswith("-") and idx < len(argv) and not str(argv[idx]).startswith("-"):
+            group.append(display(argv[idx]))
+            idx += 1
+        groups.append(" ".join(group))
+    line = "Command (summary):"
+    for group in groups:
+        if len(line) + 1 + len(group) + 4 > max_chars:
+            return line + " ..."
+        line += " " + group
+    return line
 
 
 def _truncate_path_tokens(paths: list[str], max_chars: int) -> list[str]:

@@ -35,7 +35,7 @@ def _run_pool_until_interrupted(
         run_with_pool(jobs, log_level, max_workers=2)
         return
 
-    if mode == "with_pool_iter":
+    if mode in {"with_pool_iter", "ordered"}:
         def _job_iter():
             for idx in range(n_jobs):
                 yield f"job-{idx}", (_sleep_worker, {"seconds": sleep_each})
@@ -45,6 +45,7 @@ def _run_pool_until_interrupted(
             log_level,
             max_workers=2,
             max_inflight=2,
+            ordered=mode == "ordered",
         ):
             pass
         return
@@ -144,10 +145,11 @@ def test_fast_shutdown_with_pool() -> None:
     _assert_interrupted_exit(code)
 
 
-def test_fast_shutdown_with_pool_iter() -> None:
+@pytest.mark.parametrize("mode", ["with_pool_iter", "ordered"])
+def test_fast_shutdown_with_pool_iter(mode) -> None:
     code = _spawn_and_sigint(
         _run_pool_until_interrupted,
-        "with_pool_iter",
+        mode,
         200,
         3.0,
         "WARNING",

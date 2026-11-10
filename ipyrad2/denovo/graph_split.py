@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from itertools import combinations
 from typing import Iterable
 
 
@@ -57,16 +56,12 @@ def subset_edges_above_threshold(
     threshold: float,
 ) -> dict[tuple[str, str], tuple[float, float]]:
     """Return only edges above one PID threshold for one node subset."""
-    out: dict[tuple[str, str], tuple[float, float]] = {}
-    for left, right in combinations(sorted(nodes), 2):
-        edge = tuple(sorted((left, right)))
-        value = edges.get(edge)
-        if value is None:
-            continue
-        pid, qcov = value
-        if pid >= threshold:
-            out[edge] = (pid, qcov)
-    return out
+    # Preserve the original canonical pair order without visiting absent edges.
+    return dict(sorted(
+        (edge, score) for edge, score in edges.items()
+        if edge[0] < edge[1] and edge[0] in nodes and edge[1] in nodes
+        and score[0] >= threshold
+    ))
 
 
 def sort_components(
@@ -226,10 +221,10 @@ def split_component(
     for (left, right), _score in ordered_edges:
         union(left, right)
 
-    forest_components = sort_components(
-        ({node for node in nodes if find(node) == root} for root in {find(node) for node in nodes}),
-        node_order,
-    )
+    root_members: dict[str, set[str]] = {}
+    for node in nodes:
+        root_members.setdefault(find(node), set()).add(node)
+    forest_components = sort_components(root_members.values(), node_order)
 
     out: list[set[str]] = []
     residue_nodes: set[str] = set()

@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import json
+import shlex
+import time
 import os
 import pty
 import shutil
@@ -22,6 +24,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
+
+from .runtime import StageRecorder, OutputTransaction, tool_version, write_runtime_report
+from ..utils.reporting import jsonable, utc_now
+from .. import __version__
 
 from .align import AlignmentRunSummary, write_ordered_consensus_stream_to_file
 from .cluster import build_sample_summary, concat_summaries
@@ -82,11 +88,11 @@ def _validate_runtime_args(
         raise IPyradError("threads must be >= 1")
     if threads > cores:
         raise IPyradError("threads cannot exceed cores")
-    if delim_idx < 1:
-        raise IPyradError("delim_idx must be >= 1")
+    if delim_idx == 0:
+        raise IPyradError("delim_idx cannot be 0")
 
 
-def _validate_required_binaries() -> str:
+def _validate_required_binaries() -> None:
     """Validate one required denovo runtime binary in the active env."""
     for binary, name in [(BIN_VSEARCH, "vsearch"), (BIN_MAFFT, "mafft")]:
         path = Path(binary)
@@ -122,6 +128,8 @@ def _iter_denovo_outputs(outdir: Path) -> list[Path]:
         outdir / "denovo.stats.txt",
         outdir / "denovo.stats.json",
         outdir / "denovo.audit",
+        # Legacy owned output: archive it on --force, never create it.
+        outdir / "denovo.read_audit",
     ]
 
 
@@ -219,14 +227,6 @@ def _log_sample_selection(
     logger.debug("selected samples: {}", ", ".join(sorted(selected_fastq_dict)))
     if dropped:
         logger.debug("excluded samples: {}", ", ".join(dropped))
-
-
-def _count_concat_summary_rows(summary_tsv: Path) -> int:
-    """Return the number of data rows in one concat.summary.tsv file."""
-    if not summary_tsv.exists():
-        return 0
-    with open(summary_tsv, "rt", encoding="utf-8", newline="") as infile:
-        return max(0, sum(1 for _ in infile) - 1)
 
 
 def _cleanup_post_derep_work_files(
@@ -902,116 +902,6 @@ def _format_report_quantile(value: int | float) -> str:
     return _format_report_float(float(value))
 
 
-def _append_report_key_value_section(
-    lines: list[str],
-    title: str,
-    rows: list[tuple[str, str]],
-) -> None:
-    """Append one assemble-style aligned key/value section."""
-    lines.append(f"# {title}")
-    if rows:
-        width = max(len(key) for key, _value in rows)
-        for key, value in rows:
-            lines.append(f"{key.ljust(width)}  {value}")
-    lines.append("")
-
-
-def _append_report_table_section(
-    lines: list[str],
-    title: str,
-    headers: list[str],
-    rows: list[list[str]],
-) -> None:
-    """Append one assemble-style whitespace-aligned table section."""
-    lines.append(f"# {title}")
-    widths = [len(header) for header in headers]
-    for row in rows:
-        for idx, value in enumerate(row):
-            widths[idx] = max(widths[idx], len(value))
-    lines.append("  ".join(header.ljust(widths[idx]) for idx, header in enumerate(headers)))
-    for row in rows:
-        lines.append("  ".join(value.ljust(widths[idx]) for idx, value in enumerate(row)))
-    lines.append("")
-
-
-def _human_denovo_report_label(key: str) -> str:
-    """Return the human-readable label for one denovo stats key or header."""
-    labels = {
-        "fastq_count": "FASTQ files",
-        "selected_sample_count": "Selected samples",
-        "total_input_sample_count": "Total input samples",
-        "sample_selection_mode": "Sample selection mode",
-        "paired_mode": "Read layout",
-        "within_similarity": "Within-sample similarity",
-        "across_similarity": "Across-sample similarity",
-        "query_cov": "Minimum VSEARCH query coverage",
-        "min_derep_size": "Minimum dereplication size",
-        "min_length": "Minimum read length",
-        "min_merge_overlap": "Minimum merge overlap",
-        "max_merge_diffs": "Maximum merge differences",
-        "allow_reverse_complement": "Allow reverse complement",
-        "consensus_records": "Consensus records",
-        "loci_written": "Loci written",
-        "single_sequence_loci": "Single-sequence loci",
-        "identical_sequence_loci": "Identical-sequence loci",
-        "mafft_required_loci": "Loci requiring MAFFT",
-        "joined_spacer_loci": "Joined-spacer loci",
-        "mixed_reconciled_spacer_loci": "Mixed reconciled spacer loci",
-        "stripped_output_loci": "Spacer-stripped output loci",
-        "duplicated_components_seen": "Duplicated components seen",
-        "same_sample_reconciliation_attempted": "Same-sample reconciliation attempted",
-        "components_reconciled": "Components reconciled",
-        "joined_only_reconciled_loci": "Joined-only reconciled loci",
-        "mixed_reconciled_loci": "Mixed reconciled loci",
-        "mixed_reconciled_groups": "Mixed reconciled groups",
-        "singleton_loci": "Singleton loci",
-        "singleton_locus_fraction": "Singleton locus fraction",
-        "loci_with_2plus_samples": "Loci with 2+ samples",
-        "loci_with_half_or_more_selected_samples": "Loci with half or more selected samples",
-        "loci_with_all_selected_samples": "Loci with all selected samples",
-        "mean_samples_per_locus": "Mean samples per locus",
-        "median_samples_per_locus": "Median samples per locus",
-        "max_samples_per_locus": "Maximum samples per locus",
-        "mean_cores_per_locus": "Mean cores per locus",
-        "median_cores_per_locus": "Median cores per locus",
-        "max_cores_per_locus": "Maximum cores per locus",
-        "multi_core_single_sample_loci": "Multi-core single-sample loci",
-        "duplicated_component_loci": "Duplicated-component loci",
-        "reconciled_loci": "Reconciled loci",
-        "audited_components": "Audited components",
-        "processed_components": "Processed components",
-        "oversize_unsplit_components": "Oversize unsplit components",
-        "largest_component_nodes": "Largest component nodes",
-        "quantile": "Quantile",
-        "input_nodes": "Input nodes",
-        "contracted_nodes": "Contracted nodes",
-        "sample": "Sample",
-        "n_reads_sum": "Read count",
-        "joined_records": "Joined records",
-        "merged_records": "Merged records",
-        "single_records": "Single records",
-        "samples_with_data": "Samples with data",
-        "loci": "Loci",
-        "fraction_of_final_loci": "Fraction of final loci",
-        "cores": "Cores",
-        "vsearch_threads_per_job": "VSEARCH threads per job",
-        "vsearch_worker_processes": "VSEARCH worker processes",
-        "mafft_threads_per_job": "MAFFT threads per job",
-        "mafft_worker_processes": "MAFFT worker processes",
-        "alignment_mode": "Alignment mode",
-        "mafft_timeout_seconds": "MAFFT timeout (seconds)",
-        "keep_intermediates": "Keep intermediates",
-        "reference": "Reference FASTA",
-        "mapping": "Locus mapping table",
-        "loci_stats": "Locus stats table",
-        "sample_graph_summary": "Sample graph summary",
-        "run_stats": "Run summary report",
-        "audit_dir": "Audit directory",
-        "intermediates": "Intermediate files",
-    }
-    return labels.get(key, key.replace("_", " ").capitalize())
-
-
 def _write_denovo_stats(
     outpath: Path,
     *,
@@ -1212,65 +1102,6 @@ def _write_denovo_stats(
         ),
     ]
 
-    lines: list[str] = []
-    _append_report_key_value_section(
-        lines,
-        "Inputs",
-        [(_human_denovo_report_label(key), value) for key, value in inputs_rows],
-    )
-    _append_report_key_value_section(
-        lines,
-        "Clustering Parameters",
-        [(_human_denovo_report_label(key), value) for key, value in clustering_rows],
-    )
-    _append_report_key_value_section(
-        lines,
-        "Denovo Summary",
-        [(_human_denovo_report_label(key), value) for key, value in summary_rows],
-    )
-    _append_report_key_value_section(
-        lines,
-        "Locus QC",
-        [(_human_denovo_report_label(key), value) for key, value in locus_qc_rows],
-    )
-    _append_report_key_value_section(
-        lines,
-        "Component QC",
-        [(_human_denovo_report_label(key), value) for key, value in component_qc_rows],
-    )
-    _append_report_table_section(
-        lines,
-        "Component Node Summary",
-        [_human_denovo_report_label(header) for header in component_node_headers],
-        component_node_rows,
-    )
-    _append_report_table_section(
-        lines,
-        "Selected Sample Summary",
-        [_human_denovo_report_label(header) for header in selected_sample_headers],
-        selected_sample_rows,
-    )
-    _append_report_table_section(
-        lines,
-        "Locus Occupancy",
-        [_human_denovo_report_label(header) for header in occupancy_headers],
-        occupancy_rows,
-    )
-    _append_report_key_value_section(
-        lines,
-        "Runtime",
-        [(_human_denovo_report_label(key), value) for key, value in runtime_rows],
-    )
-    _append_report_key_value_section(
-        lines,
-        "Outputs",
-        [(_human_denovo_report_label(key), value) for key, value in output_rows],
-    )
-
-    report_text = "\n".join(lines).rstrip() + "\n"
-    if logged_command:
-        report_text = f"CMD: {logged_command}\n\n{report_text}"
-    outpath.write_text(report_text, encoding="utf-8")
     stats_json: dict[str, object] = {
         "inputs": {key: value for key, value in inputs_rows},
         "clustering_parameters": {key: value for key, value in clustering_rows},
@@ -1294,6 +1125,9 @@ def _write_denovo_stats(
     }
     if logged_command:
         stats_json["command"] = logged_command
+    from .reporting import DEFINITIONS, render_report
+    stats_json["definitions"] = dict(DEFINITIONS)
+    outpath.write_text(render_report(stats_json), encoding="utf-8")
     run_stats_json.write_text(
         json.dumps(stats_json, indent=2) + "\n",
         encoding="utf-8",
@@ -1488,6 +1322,7 @@ def vsearch_cluster_across(
     across_similarity: float,
     query_cov: float,
     threads: int,
+    allow_reverse_complement: bool = False,
 ) -> None:
     """Cluster all sample-level consensus sequences across samples."""
 
@@ -1514,6 +1349,8 @@ def vsearch_cluster_across(
         "--fasta_width", "0",
         "--threads", str(threads),
     ]
+    if allow_reverse_complement:
+        cmd1.extend(["--strand", "both"])
     _run_vsearch_with_progress(cmd1, message="Across-sample clustering")
 
 
@@ -1539,163 +1376,214 @@ def run_denovo(
     keep_intermediates: bool,
     log_level: str,
     logged_command: str | None = None,
+    invocation: dict | None = None,
 ) -> None:
     """Run the denovo reference construction workflow."""
-    # check cli arg values
-    _validate_runtime_args(
-        within_similarity=within_similarity,
-        across_similarity=across_similarity,
-        query_cov=query_cov,
-        min_derep_size=min_derep_size,
-        min_length=min_length,
-        min_merge_overlap=min_merge_overlap,
-        max_merge_diffs=max_merge_diffs,
-        cores=cores,
-        threads=threads,
-        delim_idx=delim_idx,
-    )
-
-    # create outdir and clear old files if --force
-    outdir = outdir.expanduser().absolute()
-    workdir, outputs = _prepare_output_paths(outdir, force=force)
-
-    # parse input fastqs/pairs, subselect, and report
-    logger.info("loading FASTQ inputs")
-    full_fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx)
-    full_fastq_dict = normalize_parsed_fastq_sample_names(full_fastq_dict)
-    logger.info("loaded {} denovo input samples", len(full_fastq_dict))
-    _validate_fastq_layout(full_fastq_dict)
-    logger.info("selecting denovo samples")
-    fastq_dict, selection_mode = _select_denovo_samples(
-        full_fastq_dict,
-        imap_path=imap,
-        use_all_samples=use_all_samples,
-    )
-    _log_sample_selection(full_fastq_dict, fastq_dict, selection_mode)
-    is_paired = _validate_fastq_layout(fastq_dict)
-    _validate_required_binaries()
-    workers = max(1, cores // threads)
-
-    # I REMOVED THIS ON PURPOSE. DO NOT ADD IT BACK IN.
-    # vsearch_path = _validate_required_binary(BIN_VSEARCH, "vsearch")
-    # logger.info("paired mode: {}", "paired-end" if is_paired else "single-end")
-    # logger.info("using vsearch binary: {}", vsearch_path)
-    # logger.info("using mafft binary: {}", mafft_path)
-
-    # perform within-samples operations to get within-sample consensus loci
-    logger.info("clustering within samples")
-    msg = "Clustering within samples"
-    jobs: dict[str, tuple[object, dict[str, object]]] = {}
-    for sname, fastq_tuple in fastq_dict.items():
-        kwargs = dict(
-            sname=sname,
-            r1=fastq_tuple[0],
-            r2=fastq_tuple[1],
-            outdir=workdir,
+    params = jsonable(dict(locals()))
+    params.pop('invocation', None)
+    params.pop('logged_command', None)
+    started, start = utc_now(), time.monotonic()
+    recorder = StageRecorder()
+    with recorder.stage('preflight'):
+        # check cli arg values
+        _validate_runtime_args(
+            within_similarity=within_similarity,
+            across_similarity=across_similarity,
+            query_cov=query_cov,
             min_derep_size=min_derep_size,
             min_length=min_length,
             min_merge_overlap=min_merge_overlap,
             max_merge_diffs=max_merge_diffs,
-            allow_reverse_complement=allow_reverse_complement,
-            within_similarity=within_similarity,
-            query_cov=query_cov,
+            cores=cores,
             threads=threads,
-            keep_intermediates=keep_intermediates,
-            paired=is_paired,
+            delim_idx=delim_idx,
         )
-        jobs[sname] = (vsearch_pairs, kwargs)
-    run_with_pool(jobs, log_level, workers, msg=msg)
-    logger.info("within-sample clustering complete for {} selected samples", len(fastq_dict))
 
-    # write '.concat.summary.tsv' (this is a tmp file for debugging)
-    logger.info("combining per-sample summaries")
-    concat_summaries(workdir)
-    logger.info(
-        "combined {} consensus records across {} selected samples",
-        _count_concat_summary_rows(workdir / "concat.summary.tsv"),
-        len(fastq_dict),
-    )
+        # parse input fastqs/pairs, subselect, and report
+        logger.info("loading FASTQ inputs")
+        full_fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx)
+        full_fastq_dict = normalize_parsed_fastq_sample_names(full_fastq_dict)
+        logger.info("loaded {} denovo input samples", len(full_fastq_dict))
+        _validate_fastq_layout(full_fastq_dict)
+        logger.info("selecting denovo samples")
+        fastq_dict, selection_mode = _select_denovo_samples(
+            full_fastq_dict,
+            imap_path=imap,
+            use_all_samples=use_all_samples,
+        )
+        _log_sample_selection(full_fastq_dict, fastq_dict, selection_mode)
+        is_paired = _validate_fastq_layout(fastq_dict)
+        _validate_required_binaries()
+        workers = max(1, cores // threads)
 
-    # perform across-sample clustering and write a summary
-    logger.info("clustering consensus sequences across samples")
-    vsearch_cluster_across(
-        outdir=workdir,
-        summary_tsv=workdir / "concat.summary.tsv",
-        across_similarity=across_similarity,
-        query_cov=query_cov,
-        threads=cores,
-    )
+    outdir = outdir.expanduser().absolute()
+    run = dict(status='RUNNING', started_utc=started, finished_utc=None,
+               elapsed_seconds=None, ipyrad2_version=__version__, parameters=params,
+               working_directory=str(Path.cwd()),
+               invocation=dict(invocation, command=shlex.join(invocation['argv'])) if invocation else
+                          dict(kind='python_api', argv=None, command=None),
+               supplied_command=logged_command if invocation is None else None,
+               inputs=jsonable(full_fastq_dict), selected_inputs=jsonable(fastq_dict),
+               selection_mode=selection_mode,
+               tools={'vsearch': tool_version(BIN_VSEARCH), 'mafft': tool_version(BIN_MAFFT)})
+    names = [p.name for p in _iter_denovo_outputs(outdir)] + [WORKDIR_NAME]
+    with OutputTransaction(outdir, names, force) as transaction:
+        run.update(id=transaction.id, attempt_directory=str(transaction.attempt), output_directory=str(outdir))
+        workdir, outputs = _prepare_output_paths(transaction.attempt, force=False)
+        try:
+            with recorder.stage('within_samples'):
+                # I REMOVED THIS ON PURPOSE. DO NOT ADD IT BACK IN.
+                # vsearch_path = _validate_required_binary(BIN_VSEARCH, "vsearch")
+                # logger.info("paired mode: {}", "paired-end" if is_paired else "single-end")
+                # logger.info("using vsearch binary: {}", vsearch_path)
+                # logger.info("using mafft binary: {}", mafft_path)
 
-    # perform graph splitting on the across samples clusters
-    logger.info("building denovo locus tables")
-    graph_summary = make_global_tables(
-        workdir,
-        cores=cores,
-        log_level=log_level,
-        within_similarity=within_similarity,
-    )
+                # perform within-samples operations to get within-sample consensus loci
+                logger.info("clustering within samples")
+                msg = "Clustering within samples"
+                jobs: dict[str, tuple[object, dict[str, object]]] = {}
+                for sname, fastq_tuple in fastq_dict.items():
+                    kwargs = dict(
+                        sname=sname,
+                        r1=fastq_tuple[0],
+                        r2=fastq_tuple[1],
+                        outdir=workdir,
+                        min_derep_size=min_derep_size,
+                        min_length=min_length,
+                        min_merge_overlap=min_merge_overlap,
+                        max_merge_diffs=max_merge_diffs,
+                        allow_reverse_complement=allow_reverse_complement,
+                        within_similarity=within_similarity,
+                        query_cov=query_cov,
+                        threads=threads,
+                        keep_intermediates=keep_intermediates,
+                        paired=is_paired,
+                    )
+                    jobs[sname] = (vsearch_pairs, kwargs)
+                run_with_pool(jobs, log_level, workers, msg=msg)
+                logger.info("within-sample clustering complete for {} selected samples", len(fastq_dict))
 
-    # optionally perform alignment on the across-sample clusters
-    alignment_mode = "none" if no_alignment else "mafft"
-    if no_alignment:
-        logger.info("building denovo reference (no alignment)")
-    else:
-        logger.info("building denovo reference (MAFFT)")
-    alignment_summary = write_ordered_consensus_stream_to_file(
-        mapping_tsv=outputs["mapping"],
-        summary_tsv=workdir / "concat.summary.tsv",
-        out_fa=outputs["reference"],
-        mafft_binary=BIN_MAFFT,
-        cores=cores,
-        alignment_mode=alignment_mode,
-    )
+            with recorder.stage('combine_summaries'):
+                # write '.concat.summary.tsv' (this is a tmp file for debugging)
+                logger.info("combining per-sample summaries")
+                consensus_records = concat_summaries(workdir)
+                logger.info(
+                    "combined {} consensus records across {} selected samples",
+                    consensus_records,
+                    len(fastq_dict),
+                )
 
-    logger.info("collecting final denovo QC")
-    qc_summary = _collect_denovo_qc(
-        selected_fastq_dict=fastq_dict,
-        total_input_sample_count=len(full_fastq_dict),
-        graph_summary=graph_summary,
-        outputs=outputs,
-    )
-    _write_denovo_sample_graph_summary(
-        outputs["sample_graph_summary"],
-        mapping_tsv=outputs["mapping"],
-        loci_stats_tsv=outputs["loci_stats"],
-        sample_names=sorted(fastq_dict),
-    )
+            with recorder.stage('across_samples'):
+                # perform across-sample clustering and write a summary
+                logger.info("clustering consensus sequences across samples")
+                vsearch_cluster_across(
+                    outdir=workdir,
+                    summary_tsv=workdir / "concat.summary.tsv",
+                    across_similarity=across_similarity,
+                    query_cov=query_cov,
+                    threads=cores,
+                    allow_reverse_complement=allow_reverse_complement,
+                )
 
-    # collect and write stats on the denovo assembly
-    logger.info("writing denovo summary report")
-    _write_denovo_stats(
-        outputs["run_stats"],
-        logged_command=logged_command,
-        all_fastq_dict=full_fastq_dict,
-        selected_fastq_dict=fastq_dict,
-        selection_mode=selection_mode,
-        paired=is_paired,
-        within_similarity=within_similarity,
-        across_similarity=across_similarity,
-        query_cov=query_cov,
-        min_derep_size=min_derep_size,
-        min_length=min_length,
-        min_merge_overlap=min_merge_overlap,
-        max_merge_diffs=max_merge_diffs,
-        allow_reverse_complement=allow_reverse_complement,
-        cores=cores,
-        threads=threads,
-        workers=workers,
-        alignment_summary=alignment_summary,
-        keep_intermediates=keep_intermediates,
-        workdir=workdir,
-        graph_summary=graph_summary,
-        qc_summary=qc_summary,
-        outputs=outputs,
-    )
+            with recorder.stage('graph') as graph_stage:
+                # perform graph splitting on the across samples clusters
+                logger.info("building denovo locus tables")
+                graph_summary = make_global_tables(
+                    workdir,
+                    cores=cores,
+                    log_level=log_level,
+                    within_similarity=within_similarity,
+                    allow_reverse_complement=allow_reverse_complement,
+                )
+                graph_stage['details'] = graph_summary.performance
 
-    if not keep_intermediates:
-        _cleanup_denovo_workdir_stage_files(workdir)
-        shutil.rmtree(workdir)
-    logger.info("denovo complete; outputs written to {}", outdir)
+            with recorder.stage('alignment') as alignment_stage:
+                alignment_stage['details'] = {}
+                # optionally perform alignment on the across-sample clusters
+                alignment_mode = "none" if no_alignment else "mafft"
+                if no_alignment:
+                    logger.info("building denovo reference (no alignment)")
+                else:
+                    logger.info("building denovo reference (MAFFT)")
+                alignment_summary = write_ordered_consensus_stream_to_file(
+                    mapping_tsv=outputs["mapping"],
+                    summary_tsv=workdir / "concat.summary.tsv",
+                    out_fa=outputs["reference"],
+                    mafft_binary=BIN_MAFFT,
+                    cores=cores,
+                    alignment_mode=alignment_mode,
+                    performance=alignment_stage['details'],
+                )
+
+            with recorder.stage('final_qc'):
+                logger.info("collecting final denovo QC")
+                qc_summary = _collect_denovo_qc(
+                    selected_fastq_dict=fastq_dict,
+                    total_input_sample_count=len(full_fastq_dict),
+                    graph_summary=graph_summary,
+                    outputs=outputs,
+                )
+                _write_denovo_sample_graph_summary(
+                    outputs["sample_graph_summary"],
+                    mapping_tsv=outputs["mapping"],
+                    loci_stats_tsv=outputs["loci_stats"],
+                    sample_names=sorted(fastq_dict),
+                )
+
+            with recorder.stage('summary'):
+                # collect and write stats on the denovo assembly
+                logger.info("writing denovo summary report")
+                _write_denovo_stats(
+                    outputs["run_stats"],
+                    logged_command=logged_command,
+                    all_fastq_dict=full_fastq_dict,
+                    selected_fastq_dict=fastq_dict,
+                    selection_mode=selection_mode,
+                    paired=is_paired,
+                    within_similarity=within_similarity,
+                    across_similarity=across_similarity,
+                    query_cov=query_cov,
+                    min_derep_size=min_derep_size,
+                    min_length=min_length,
+                    min_merge_overlap=min_merge_overlap,
+                    max_merge_diffs=max_merge_diffs,
+                    allow_reverse_complement=allow_reverse_complement,
+                    cores=cores,
+                    threads=threads,
+                    workers=workers,
+                    alignment_summary=alignment_summary,
+                    keep_intermediates=keep_intermediates,
+                    workdir=workdir,
+                    graph_summary=graph_summary,
+                    qc_summary=qc_summary,
+                    outputs=outputs,
+                )
+
+            with recorder.stage('cleanup'):
+                if not keep_intermediates:
+                    _cleanup_denovo_workdir_stage_files(workdir)
+                    shutil.rmtree(workdir)
+            run.update(status='COMPLETE', finished_utc=utc_now(), elapsed_seconds=time.monotonic()-start)
+            write_runtime_report(outputs, run, recorder.stages)
+            transaction.publish()
+        except BaseException as error:
+            if transaction.publication_status == 'PUBLISHED':
+                # A cleanup interruption cannot undo an already committed run.
+                raise
+            recovery_required = transaction.publication_status == 'RECOVERY_REQUIRED'
+            run.update(status='RECOVERY_REQUIRED' if recovery_required else 'FAILED',
+                       finished_utc=utc_now(), elapsed_seconds=time.monotonic()-start,
+                       error=dict(type=type(error).__name__, message=str(error)))
+            try:
+                body = ('Publication rollback failed. The output directory may contain mixed generations; '
+                        'inspect the retained lock, publication journal and backups before recovery.\n'
+                        if recovery_required else
+                        'Previous published outputs are unchanged. Failed attempt files are retained.\n')
+                write_runtime_report(outputs, run, recorder.stages, body=body)
+            except Exception:
+                logger.exception('Could not write denovo failure report; original error follows')
+            raise
+    logger.info('denovo complete; outputs written to {}', outdir)
 
 
 if __name__ == "__main__":

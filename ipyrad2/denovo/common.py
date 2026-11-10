@@ -73,3 +73,9 @@ def insert_joined_spacer(
     if not right_arm:
         return cluster_sequence
     return left_arm + ("N" * spacer_len) + right_arm
+
+
+def reverse_complement(sequence: str) -> str:
+    """Reverse complement DNA, including IUPAC ambiguity codes."""
+    return sequence.translate(str.maketrans(
+        'ACGTRYMKBDHVNacgtrymkbdhvn', 'TGCAYRKMVHDBNtgcayrkmvhdbn'))[::-1]

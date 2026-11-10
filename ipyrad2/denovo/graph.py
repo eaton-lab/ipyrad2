@@ -15,8 +15,9 @@ final denovo loci in five phases:
 from __future__ import annotations
 
 import csv
+import json
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import time
 from typing import Iterable
@@ -36,6 +37,12 @@ from ..utils.parallel import run_with_pool_iter
 RECONCILE_QCOV = 0.75
 OVERSIZE_COMPONENT_FACTOR = 10
 FLUSH_STALL_LOG_SECONDS = 30.0
+# Bound transport payloads while amortizing dispatch for many small components.
+# A component above any budget travels alone; it is never split to fit a batch.
+COMPONENT_BATCH_SIZE = 32
+COMPONENT_BATCH_NODES = 256
+COMPONENT_BATCH_BASES = 65536
+COMPONENT_BATCH_EDGES = 4096
 AUDIT_SUMMARY_FIELDS = [
     "component_id",
     "n_input_nodes",
@@ -131,9 +138,10 @@ class GraphTableSummary:
     rescued_oversize_components: int = 0
     raw_oversize_placeholder_components: int = 0
     post_contraction_oversize_placeholder_components: int = 0
+    performance: dict = field(default_factory=dict, compare=False, repr=False)
 
 
-def get_edges_dict(outdir: Path) -> dict[tuple[str, str], tuple[float, float]]:
+def get_edges_dict(outdir: Path, strands: dict | None = None) -> dict[tuple[str, str], tuple[float, float]]:
     """Return graph edges mapped to their strongest `(pid, qcov)` score."""
     uc_path = outdir / "global_hits.uc.tsv"
     edges: dict[tuple[str, str], tuple[float, float]] = {}
@@ -150,7 +158,48 @@ def get_edges_dict(outdir: Path) -> dict[tuple[str, str], tuple[float, float]]:
             prev = edges.get(edge)
             if prev is None or score > prev:
                 edges[edge] = score
+                if strands is not None:
+                    strands[edge] = _qstrand
+            elif strands is not None and score == prev and _qstrand == '+':
+                strands[edge] = '+'  # deterministic ties favor no reversal
     return edges
+
+
+def _orient_seeds(nodes, edges, strands, seed_order):
+    """Orient a maximum-support forest, anchored on the earliest seed per tree.
+
+    This establishes coordinate orientation only, not an orthology assertion.
+    Contradictory weaker edges are counted and do not override stronger paths.
+    """
+    parent = {node: node for node in nodes}
+    parity = {node: 0 for node in nodes}
+
+    def find(node):
+        root, sign = node, 0
+        path = []
+        while parent[root] != root:
+            path.append((root, sign))
+            sign ^= parity[root]
+            root = parent[root]
+        for member, prefix_sign in path:
+            parent[member] = root
+            parity[member] = sign ^ prefix_sign
+        return root, sign
+
+    conflicts = 0
+    for (a, b), score in sorted(edges.items(), key=lambda item:
+            (-item[1][0], -item[1][1], min(seed_order[x] for x in item[0]), max(seed_order[x] for x in item[0]))):
+        ra, sa = find(a)
+        rb, sb = find(b)
+        reverse = int(strands[(a, b)] == '-')
+        if ra == rb:
+            conflicts += int((sa ^ sb) != reverse)
+            continue
+        if seed_order[ra] > seed_order[rb]:
+            ra, rb = rb, ra
+        parent[rb] = ra
+        parity[rb] = sa ^ sb ^ reverse
+    return {node: find(node)[1] for node in nodes}, conflicts
 
 
 def _load_summary_records(
@@ -334,22 +383,23 @@ def _build_contracted_component(
         node_order[node_id] = min(seed_order[core] for core in ordered_members)
         node_modes[node_id] = mode
 
-    ordered_node_ids = sorted(node_members, key=node_order.get)
-    contracted_edges: dict[tuple[str, str], tuple[float, float]] = {}
-    for left_idx, left in enumerate(ordered_node_ids):
-        left_members = node_members[left]
-        for right in ordered_node_ids[left_idx + 1:]:
-            best: tuple[float, float] | None = None
-            # Lift raw-seed edges up to contracted nodes by keeping the strongest
-            # supporting edge between the two same-sample groups.
-            for left_core in left_members:
-                for right_core in node_members[right]:
-                    edge = tuple(sorted((left_core, right_core)))
-                    score = edges.get(edge)
-                    if score is not None and (best is None or score > best):
-                        best = score
-            if best is not None:
-                contracted_edges[(left, right)] = best
+    # Lift only existing raw edges. Canonical node order and max-score tie
+    # behavior match the old nested group/member traversal exactly.
+    raw_to_node = {core: node for node, members in node_members.items() for core in members}
+    lifted: dict[tuple[str, str], tuple[float, float]] = {}
+    for (left_core, right_core), score in edges.items():
+        if left_core >= right_core:
+            continue
+        left, right = raw_to_node.get(left_core), raw_to_node.get(right_core)
+        if left is None or right is None or left == right:
+            continue
+        if node_order[left] > node_order[right]:
+            left, right = right, left
+        pair = (left, right)
+        if pair not in lifted or score > lifted[pair]:
+            lifted[pair] = score
+    contracted_edges = dict(sorted(lifted.items(), key=lambda item:
+                                  (node_order[item[0][0]], node_order[item[0][1]])))
 
     return ContractedComponent(
         component_id=component_id,
@@ -386,12 +436,12 @@ def _bucket_component_edges(
         for node in component:
             node_to_component[node] = component_id
 
-    component_edges = {component_id: {} for component_id, _component in components}
+    component_edges = {}
     for edge, score in edges.items():
         component_id = node_to_component.get(edge[0])
         if component_id is None:
             continue
-        component_edges[component_id][edge] = score
+        component_edges.setdefault(component_id, {})[edge] = score
     return component_edges
 
 
@@ -431,6 +481,10 @@ def _part_output_form(
     contracted: ContractedComponent,
 ) -> str:
     """Return the output form for one final locus part."""
+    # Same-sample reconciliation also applies to SE records. Its historical
+    # "mixed" mode tag does not imply that a locus has paired-end arms.
+    if all(row["record_type"] == "single" for row in mapping_rows):
+        return "stripped"
     if all(row["record_type"] == "joined" for row in mapping_rows):
         return "spaced"
     if any(contracted.node_modes[node] in {"joined_only", "mixed"} for node in ordered_nodes):
@@ -958,6 +1012,7 @@ def _write_component_audit_result(
     audit_dir: Path,
     summary_path: Path,
     result: ComponentResult,
+    summary_writer: csv.DictWriter | None = None,
 ) -> None:
     """Append one duplicated-component audit result to disk."""
     if (
@@ -966,9 +1021,12 @@ def _write_component_audit_result(
     ):
         return
 
-    with open(summary_path, "at", encoding="utf-8", newline="") as out:
-        writer = csv.DictWriter(out, delimiter="	", fieldnames=AUDIT_SUMMARY_FIELDS)
-        writer.writerow(result.audit_summary)
+    if summary_writer is None:
+        with open(summary_path, "at", encoding="utf-8", newline="") as out:
+            writer = csv.DictWriter(out, delimiter="	", fieldnames=AUDIT_SUMMARY_FIELDS)
+            writer.writerow(result.audit_summary)
+    else:
+        summary_writer.writerow(result.audit_summary)
 
     if result.audit_summary["status"] != "processed":
         return
@@ -1010,7 +1068,7 @@ def _iter_component_jobs(
     within_similarity: float,
     max_component_nodes: int,
 ):
-    """Yield per-component jobs lazily to avoid duplicating full graph state."""
+    """Yield jobs lazily, transferring owned edge buckets into each job."""
     for component_id, component in components:
         ordered = tuple(sorted(component, key=seed_order.get))
         if component_id in raw_oversize_component_ids:
@@ -1033,12 +1091,58 @@ def _iter_component_jobs(
                 # Ship only the per-component slices each worker needs rather
                 # than broadcasting the full summary/edge tables to every job.
                 "summary_records": {seed: summary_records[seed] for seed in ordered},
-                "component_edges": component_edges[component_id],
+                "component_edges": component_edges.pop(component_id, {}),
                 "seed_order": {seed: seed_order[seed] for seed in ordered},
                 "within_similarity": within_similarity,
                 "max_component_nodes": max_component_nodes,
             },
         )
+
+
+def _process_component_batch(jobs):
+    """Run unchanged component functions, retaining the failing component ID."""
+    started, cpu_started = time.perf_counter(), time.process_time()
+    results = []
+    for component_id, (func, kwargs) in jobs:
+        try:
+            key, result = func(**kwargs)
+        except Exception as error:
+            raise RuntimeError(f"graph component {component_id} failed") from error
+        if key != component_id or result.component_id != component_id:
+            raise RuntimeError(f"graph component {component_id} returned an inconsistent ID")
+        results.append(result)
+    return (tuple(results), time.perf_counter() - started,
+            time.process_time() - cpu_started)
+
+
+def _iter_component_batches(jobs, batch_size):
+    """Pack consecutive jobs lazily within count/node/sequence/edge budgets."""
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
+    batch = []
+    nodes = bases = edges = 0
+    for job in jobs:
+        kwargs = job[1][1]
+        n = len(kwargs['component'])
+        b = sum(len(r.cluster_sequence) for r in kwargs['summary_records'].values())
+        e = len(kwargs.get('component_edges', {}))
+        if batch and (len(batch) >= batch_size or nodes + n > COMPONENT_BATCH_NODES
+                      or bases + b > COMPONENT_BATCH_BASES
+                      or edges + e > COMPONENT_BATCH_EDGES):
+            yield batch[0][0], (_process_component_batch, {'jobs': tuple(batch)})
+            batch = []
+            nodes = bases = edges = 0
+        batch.append(job)
+        nodes += n
+        bases += b
+        edges += e
+        if (n > COMPONENT_BATCH_NODES or b > COMPONENT_BATCH_BASES
+                or e > COMPONENT_BATCH_EDGES):
+            yield batch[0][0], (_process_component_batch, {'jobs': tuple(batch)})
+            batch = []
+            nodes = bases = edges = 0
+    if batch:
+        yield batch[0][0], (_process_component_batch, {'jobs': tuple(batch)})
 
 
 def _subset_component_edges(
@@ -1094,17 +1198,46 @@ def make_global_tables(
     cores: int = 1,
     log_level: str = "INFO",
     within_similarity: float = 0.95,
+    allow_reverse_complement: bool = False,
 ) -> GraphTableSummary:
     """Build locus mapping/stats tables from the across-sample denovo graph."""
     if cores < 1:
         raise ValueError("cores must be >= 1")
+    started, parent_cpu_started = time.perf_counter(), time.process_time()
+    phase_started = started
+    phases = {}
+
+    def finish_phase(name):
+        nonlocal phase_started
+        now = time.perf_counter()
+        phases[name] = now - phase_started
+        phase_started = now
+
+    performance = dict(
+        schema_version='1.0', phases_seconds=phases, batches_submitted=0,
+        components_completed=0, worker_compute_seconds_sum=0.0,
+        worker_cpu_seconds_sum=0.0, dispatch_collect_seconds=0.0,
+        job_build_seconds=0.0, audit_write_seconds=0.0, table_write_seconds=0.0,
+        output_flush_seconds=0.0,
+        peak_buffered_components=0, audit_components=0,
+        batch_size_limit=0, workers=0, max_inflight_batches=0,
+    )
     out_mapping_tsv = outdir.parent / DENOVO_MAPPING_FILENAME
     out_stats_tsv = outdir.parent / DENOVO_STATS_FILENAME
     audit_dir = outdir.parent / "denovo.audit"
 
     ordered_seeds, summary_records, seed_order, sample_count = _load_summary_records(outdir)
+    finish_phase('read_summary')
     # return graph of strongest edges for every seed pair [big data object]
-    edges = get_edges_dict(outdir)
+    strands = {} if allow_reverse_complement else None
+    edges = get_edges_dict(outdir, strands) if strands is not None else get_edges_dict(outdir)
+    performance.update(seeds=len(ordered_seeds), edges=len(edges))
+    finish_phase('read_edges')
+    orientation, orientation_conflicts = ({}, 0)
+    if strands is not None:
+        orientation, orientation_conflicts = _orient_seeds(ordered_seeds, edges, strands, seed_order)
+        del strands
+    finish_phase('orient_seeds')
 
     # Component ids are assigned in stable seed order and must stay stable even
     # when later processing runs in parallel.
@@ -1113,6 +1246,7 @@ def make_global_tables(
         seed_order,
     )
     max_component_nodes = OVERSIZE_COMPONENT_FACTOR * sample_count
+    finish_phase('connected_components')
 
     component_entries = list(enumerate(components, start=1))
     raw_oversize_component_ids = {
@@ -1128,7 +1262,14 @@ def make_global_tables(
         ],
         edges,
     )
+    del edges  # component buckets now own the required references
+    finish_phase('bucket_edges')
     audit_summary_path = _write_component_audits(audit_dir)
+    if allow_reverse_complement:
+        (audit_dir / 'orientation.json').write_text(json.dumps(dict(
+            policy='maximum_support_forest', anchor='earliest seed in each forest tree; each final locus reanchored on its earliest core',
+            conflicting_weaker_edges=orientation_conflicts,
+            reverse_oriented_seeds=sum(orientation.values())), indent=2)+'\n')
     component_meta = {
         component_id: {
             "raw_nodes": len(component),
@@ -1136,6 +1277,9 @@ def make_global_tables(
         }
         for component_id, component in component_entries
     }
+    performance.update(components=len(component_entries),
+                       singleton_components=sum(len(c) == 1 for c in components))
+    finish_phase('prepare_outputs')
 
     # counters for ...
     total_loci = 0
@@ -1160,18 +1304,22 @@ def make_global_tables(
 
     def _flush_result(result: ComponentResult) -> int:
         nonlocal mapping_writer, stats_writer, total_loci, total_mapping_rows
+        write_started = time.perf_counter()
         loci_written = 0
         for part in result.parts:
             total_loci += 1
             loci_written += 1
             total_mapping_rows += len(part.mapping_rows)
             locus_name = f"locus_{part.component_id}_{part.subcomponent_id}"
+            anchor = orientation.get(part.mapping_rows[0]['core'], 0) if part.mapping_rows else 0
             for row in part.mapping_rows:
                 data = {
                     "locus": int(total_loci),
                     "locus_name": locus_name,
                     **row,
                 }
+                if allow_reverse_complement:
+                    data['orientation'] = '-' if orientation[row['core']] ^ anchor else '+'
                 if mapping_writer is None:
                     mapping_writer = csv.DictWriter(
                         mapping_out,
@@ -1193,6 +1341,7 @@ def make_global_tables(
                 )
                 stats_writer.writeheader()
             stats_writer.writerow(stats_data)
+        performance['table_write_seconds'] += time.perf_counter() - write_started
         return loci_written
 
     def _flush_pending_results() -> None:
@@ -1236,7 +1385,13 @@ def make_global_tables(
         nonlocal raw_oversize_results, raw_oversize_nodes
         nonlocal contracted_oversize_results, contracted_oversize_nodes
         nonlocal rescued_oversize_results
-        _write_component_audit_result(audit_dir, audit_summary_path, result)
+        write_started = time.perf_counter()
+        _write_component_audit_result(audit_dir, audit_summary_path, result, audit_writer)
+        performance['audit_write_seconds'] += time.perf_counter() - write_started
+        performance['components_completed'] += 1
+        performance['audit_components'] += int(
+            result.audit_summary['status'] != 'processed'
+            or result.audit_summary['n_duplicate_samples'] > 0)
         duplicated_components_seen += int(int(result.audit_summary["n_duplicate_samples"]) > 0)
         same_sample_reconciliation_attempted += int(
             bool(result.audit_summary["same_sample_reconciliation_attempted"])
@@ -1257,6 +1412,8 @@ def make_global_tables(
             mixed_reconciled_loci += int(reconcile_mode == "mixed")
             mixed_reconciled_groups += int(part.stats_row.get("n_reconciled_groups", 0))
         pending_results[result.component_id] = _strip_component_audit_payload(result)
+        performance['peak_buffered_components'] = max(
+            performance['peak_buffered_components'], len(pending_results))
         _flush_pending_results()
         _maybe_log_blocked_flush()
 
@@ -1265,7 +1422,15 @@ def make_global_tables(
         "wt",
         encoding="utf-8",
         newline="",
-    ) as stats_out:
+    ) as stats_out, open(audit_summary_path, 'at', encoding='utf-8', newline='') as audit_out:
+        audit_writer = csv.DictWriter(audit_out, delimiter='\t', fieldnames=AUDIT_SUMMARY_FIELDS)
+
+        def flush_outputs(*streams):
+            flush_started = time.perf_counter()
+            for stream in streams:
+                stream.flush()
+            performance['output_flush_seconds'] += time.perf_counter() - flush_started
+
         if component_entries:
             jobs_iter = _iter_component_jobs(
                 component_entries,
@@ -1276,26 +1441,75 @@ def make_global_tables(
                 within_similarity=within_similarity,
                 max_component_nodes=max_component_nodes,
             )
-            if cores == 1 or len(component_entries) == 1:
+            parallel = cores > 1 and len(component_entries) > 1
+            workers = min(cores, len(component_entries)) if parallel else 1
+            # Keep several independent batches per worker on small inputs.
+            batch_size = min(COMPONENT_BATCH_SIZE, max(1, len(component_entries) // (4 * workers)))
+            performance.update(batch_size_limit=batch_size, workers=workers,
+                               max_inflight_batches=2 * workers if parallel else 1,
+                               max_outstanding_batches=2 * workers if parallel else 1,
+                               ordered_batch_results=True)
+            batches = iter(_iter_component_batches(jobs_iter, batch_size))
+
+            def timed_batches():
+                while True:
+                    build_started = time.perf_counter()
+                    try:
+                        job = next(batches)
+                    except StopIteration:
+                        performance['job_build_seconds'] += time.perf_counter() - build_started
+                        return
+                    performance['job_build_seconds'] += time.perf_counter() - build_started
+                    performance['batches_submitted'] += 1
+                    yield job
+
+            def record_batch(batch):
+                results, elapsed, cpu = batch
+                performance['worker_compute_seconds_sum'] += elapsed
+                performance['worker_cpu_seconds_sum'] += cpu
+                for result in results:
+                    _record_completed_result(result)
+                # Keep live audit summaries visible without reopening per row.
+                flush_outputs(audit_out)
+
+            if not parallel:
                 # Keep the serial path explicit so the output-ordering logic is
                 # identical to the parallel path, just without worker dispatch.
-                for _component_id, (func, kwargs) in jobs_iter:
-                    _key, result = func(**kwargs)
-                    _record_completed_result(result)
+                for _component_id, (func, kwargs) in timed_batches():
+                    record_batch(func(**kwargs))
             else:
-                for _key, (_component_id, result) in run_with_pool_iter(
-                    jobs_iter,
+                results_iter = run_with_pool_iter(
+                    timed_batches(),
                     log_level=log_level,
-                    max_workers=min(cores, len(component_entries)),
+                    max_workers=workers,
+                    max_inflight=2 * workers,
+                    ordered=True,
                     msg="Splitting global clusters",
                     njobs=len(component_entries),
-                ):
-                    _record_completed_result(result)
+                    progress_increment=lambda _key, batch: len(batch[0]),
+                )
+                try:
+                    while True:
+                        dispatch_started = time.perf_counter()
+                        try:
+                            _key, batch = next(results_iter)
+                        except StopIteration:
+                            break
+                        finally:
+                            performance['dispatch_collect_seconds'] += time.perf_counter() - dispatch_started
+                        record_batch(batch)
+                        del batch
+                finally:
+                    results_iter.close()
 
         if mapping_writer is None:
             pd.DataFrame().to_csv(out_mapping_tsv, sep="	", index=False)
         if stats_writer is None:
             pd.DataFrame().to_csv(out_stats_tsv, sep="	", index=False)
+        flush_outputs(mapping_out, stats_out, audit_out)
+    finish_phase('process_and_write')
+    performance.update(elapsed_seconds=time.perf_counter() - started,
+                       parent_cpu_seconds=time.process_time() - parent_cpu_started)
 
     if raw_oversize_results:
         logger.warning(
@@ -1331,4 +1545,5 @@ def make_global_tables(
         rescued_oversize_components=rescued_oversize_results,
         raw_oversize_placeholder_components=raw_oversize_results,
         post_contraction_oversize_placeholder_components=contracted_oversize_results,
+        performance=performance,
     )

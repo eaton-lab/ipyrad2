@@ -15,7 +15,7 @@ Do not use `denovo` when you already have a trusted reference FASTA that is appr
 
 ## Overview
 
-Reads are first clustered within samples at a high threshold (``--similarity-within``) to dereplicate and group reads representing alleles at the same locus into a consensus sequence. The consensus sequences are then clustered across samples at a lower threshold (``--similarity-across``) to group homologous loci, putatively including orthologs and paralogs. Using a similarity graph among samples, we apply a graph-splitting algorithm to separate duplicated components. The final set of graph components includes sets of sequences that include at most one sequence per sample, all of which are within the across-sample similarity threshold of each other. An alignment is performed on each set to generate a consensus that will serve as a locus in the pseudoreference. (See further details below).
+Reads are first clustered within samples at a high threshold (``--within-similarity``) to dereplicate and group reads representing alleles at the same locus into a consensus sequence. The consensus sequences are then clustered across samples at a lower threshold (``--across-similarity``) to group homologous loci, putatively including orthologs and paralogs. Using a similarity graph among samples, we apply a graph-splitting algorithm to separate duplicated components. The final set of graph components includes sets of sequences that include at most one sequence per sample, connected through accepted similarity edges; not every pair in a component must meet the similarity threshold. An alignment is performed on each set to generate a consensus that will serve as a locus in the pseudoreference. (See further details below).
 
 ## Prerequisites
 
@@ -46,7 +46,7 @@ That tells `ipyrad2` to parse sample names from the FASTQ filenames, run the den
 - `-i, --min-length`: minimum retained sequence length after merge or join, default `35`
 - `-g, --min-merge-overlap`: minimum overlap required to merge paired reads, default `20`
 - `-e, --max-merge-diffs`: maximum mismatches allowed in the merged region, default `4`
-- `--no-alignment`: skip MAFFT in the final locus step and use the longest stripped sequence per locus
+- `--no-alignment`: skip MAFFT and use longest-sequence selection while retaining paired-end arm handling
 
 ### Sample Naming
 
@@ -57,7 +57,7 @@ That tells `ipyrad2` to parse sample names from the FASTQ filenames, run the den
 
 - `-c, --cores`: maximum total cores to use, default `6`
 - `-t, --threads`: threads per `vsearch` job, default `3`
-- `--imap`: optional IMAP file used to choose one representative sample per group for denovo
+- `--imap`: optional IMAP file selecting all matching samples for denovo
 - `--use-all-samples`: disable automatic downselection and use every parsed sample
 - `--keep-intermediates`: retain the internal denovo working directory instead of cleaning it on success
 
@@ -70,7 +70,7 @@ That tells `ipyrad2` to parse sample names from the FASTQ filenames, run the den
 3. write sample consensus fastas
 4. cluster across-samples using vsearch all-by-all search among spacer-stripped consensus fastas
 5. build graph of connected components
-6. reconcile duplicated components that are below within-sample clustering threshold
+6. reconcile eligible same-sample records with direct support at or above the within-sample threshold (and required overlap), or identical sequences
 7. split graph clusters into components using a maximum spanning forests algorithm
 8. align sequences within each component using mafft and store the consensus as a pseudoreference locus
 9. write pseudoreference loci to FASTA and write stats summary of graph splitting
@@ -78,18 +78,18 @@ That tells `ipyrad2` to parse sample names from the FASTQ filenames, run the den
 
 ## Performance
 
-Two key parameter settings most significantly impact the runtime of the `denovo` step: `--imap` and `--min-dereplication-size`. Assembling a pseudoreference does not require every read from every sample. These options allow subselecting which samples and reads will be used to construct it.
+Two key parameter settings most significantly impact the runtime of the `denovo` step: `--imap` and `--min-derep-size`. Assembling a pseudoreference does not require every read from every sample. These options allow subselecting which samples and reads will be used to construct it.
 
 ### Dereplication
 
 During this step, reads are dereplicated within each sample to retain only one copy of
-each unique sequence, and reads that occur fewer than (`--min_dereplication_size`)
+each unique sequence, and reads that occur fewer than (`--min-dereplication-size`)
 are discarded. This is an important heuristic. We find that a min dereplication size
 of 5 typically performs well. For very low depth datasets you may want to reduce this.
 
 ### Sample selection
 
-The goal of psuedoreference construction is to represent every ortholog in the dataset
+The goal of pseudoreference construction is to represent every ortholog in the dataset
 by detecting it from at least one sample during this step. Analyzing and comparing
 multiple samples increases the chances you will find more orthologs, and detect paralogs
 that can be separated. However, there are usually diminishing returns from adding more and
@@ -107,9 +107,9 @@ The current default auto-subsampling behavior is:
 You can override this in two ways:
 
 - `--use-all-samples`: disable downselection and use every parsed input sample
-- `--imap`: provide a two-column IMAP file and `denovo` will select one representative sample per group, choosing the largest available sample within each group
+- `--imap`: provide a two-column IMAP file and `denovo` will select all input samples matching its sample names or patterns
 
-The IMAP path is the recommended way to steer denovo toward phylogenetically diverse representatives while still keeping the pseudoreference construction set relatively small. IMAP selection may still exceed 10 representatives, in which case `denovo` emits an advisory warning rather than truncating the set.
+An IMAP lets you choose phylogenetically diverse builders explicitly. It does not automatically choose one representative per group. IMAP selection may exceed 10 builders, in which case `denovo` emits an advisory warning rather than truncating the set.
 
 
 ## Outputs and Intermediates
@@ -117,9 +117,10 @@ The IMAP path is the recommended way to steer denovo toward phylogenetically div
 The primary result is the pseudoreference FASTA used for downstream mapping, named
 `denovo_reference.fa`.
 
-The `denovo` step also writes five curated outputs that can be optionally inspected.
+The `denovo` step also writes six curated outputs that can be optionally inspected.
 
-- `denovo.stats.txt`: human-readable run summary with inputs, parameters, binaries, runtime settings, QC summaries, and output paths
+- `denovo.stats.txt`: human-readable library summary, builder representation, group audit, settings, outputs, and timing/memory measurements
+- `denovo.stats.json`: machine-readable scientific counters, parameters, provenance, and timing/memory measurements
 - `denovo.loci.mapping.tsv`: mapping from final loci to the contributing sample-level consensus records
 - `denovo.loci.stats.tsv`: per-locus summary table for the final denovo loci
 - `denovo.sample_graph_summary.tsv`: per-sample burden of split, duplicated, and reconciled graph components
@@ -171,12 +172,6 @@ ipyrad2 denovo -d TRIMMED/*.fastq.gz -o output-denovo
 ipyrad2 denovo -d TRIMMED/*.fastq.gz -o OUT -s 0.95 -S 0.85 -c 12 -t 3
 ```
 
-### Select the graph refinement algorithm explicitly
-
-```bash
-ipyrad2 denovo -d TRIMMED/*.fastq.gz -o OUT
-```
-
 ### Use delimiter-based sample naming
 
 ```bash
@@ -197,7 +192,7 @@ ipyrad2 denovo -d TRIMMED/*.fastq.gz -o OUT --no-alignment
 
 ### Empirical example
 
-See the [Empiricial SE denovo tutorial](tutorial-ped.md) for an example run on real data.
+See the [Empirical SE denovo tutorial](tutorial-ped.md) for an example run on real data.
 
 ## Related Pages
 
@@ -231,3 +226,152 @@ native programs over the shared filesystem. The copied program contents and
 scientific arguments are unchanged. The small runtime bundle and its source
 manifest are retained and their location is logged. A shared nonstandard
 installation must provide its native program directory via `MAFFT_BINARIES`.
+
+## Run safety and profiling
+
+Inputs, pairing, sample selection and required executables are checked before
+preparing a new output attempt. Each run writes into a unique
+`.denovo-attempt-ID` directory under the output directory. With `--force`, the
+previous published reference and tables remain available while the new run is
+computing. A successful run publishes the new files, retaining `_denovo_work`
+only with `--keep-intermediates`. Unrelated files are left alone.
+
+A failure after preflight retains its attempt directory, remaining intermediate files and a
+`FAILED` `denovo.stats.txt`/`.json` report. It does not replace the previous
+successful outputs. Publication uses atomic file renames, a journal, and rollback
+for ordinary errors; it is not an atomic snapshot of the whole directory.
+A `.denovo.lock` prevents simultaneous writers. After an abrupt machine failure
+or SIGKILL, inspect the lock, attempt, `PUBLICATION.json` and any `_previous`
+backup before taking recovery action. Runs never blindly resume an old attempt.
+If publication rollback itself fails, the attempt report is marked
+`RECOVERY_REQUIRED` and the lock is retained; the output directory must be
+inspected before its files are used or another run is started.
+
+Run reports use statistics schema `2.0`. The text report follows the trim and
+assemble conventions: a short command, aligned sections and tables, explicit
+units, percentages with denominators, and `N/A` for unavailable values. The
+reference-library summary comes first; timing and memory details follow the
+scientific summary. JSON retains the full argv as received,
+shell-quoted invocation, resolved parameters, input/selected-sample mapping,
+tool versions, UTC timestamps, completion state, and numeric stage measurements.
+Stage timings cover preflight, within-sample clustering, combining summaries,
+across-sample search, graph processing, alignment, final QC, summary writing and
+cleanup. The run timing ends before publication of these reports.
+
+The report distinguishes **builders** (selected samples used to construct the
+library), **input representative sequences** (seeds/cores from within-sample
+read clusters), **similarity groups** (graph components), and output **reference
+loci**. Sequence-to-locus memberships count mapping-table rows, not FASTA
+entries. Builder representation is measured before downstream mapping of all
+samples; it does not describe whole-cohort coverage or genotype completeness.
+The group audit covers only groups with same-builder duplicates or oversized
+groups. Its processed-group counts and size quantiles are explicitly labeled as
+that subset. Large unsplit placeholders are included in the reference count and
+identified separately; they are not resolved individual loci.
+
+Scientific counters remain available in JSON, with a
+`definitions` dictionary explaining their interpretation. Text fractions use
+percentages; undefined denominators and uncomputed alignment categories display
+`N/A`. Detailed counters and complete output paths remain available in JSON.
+
+On Linux, memory is sampled every 0.25 seconds and at each stage boundary. The
+reported value is the largest sampled sum of RSS for the process and its live
+descendants, including Python pool workers and native tools. Shared memory may be
+counted more than once, and brief peaks between samples may be missed. This is
+not a scheduler MaxRSS, not a lifetime high-water-mark difference, and stage
+values must not be added together. Unsupported or unavailable measurements are
+`null` in JSON and `N/A` in text. Sample counts and unavailable-sample counts are
+recorded so measurement coverage is explicit.
+
+The graph stage also records execution details in its JSON `details` field
+(schema `1.0`), with a compact summary in the text report. These include input
+and component counts, worker batches, peak buffered components, sequential
+preparation phases, parent table/audit writing and stream flushing time,
+dispatch/collection time, and summed worker computation and CPU time. Dispatch/collection includes pool
+startup/shutdown, waiting, serialization and result transport; job construction
+is included in this interval and reported separately. Worker computation can
+overlap parent activity and other workers, so these measurements must not be
+added together as a wall-time breakdown. Parent writing includes formatting
+and buffered writes, not guaranteed physical-disk write time. Detailed graph
+measurements describe completed graph stages; a failed stage retains its usual
+failure status and stage-level measurements.
+
+Small graph components share bounded worker batches to reduce dispatch overhead.
+A batch contains at most 32 components, 256 nodes, 65,536 sequence bases and
+4,096 edges. A single component above a transport budget runs alone with its
+original graph rules; these budgets never discard or split biological data.
+Smaller inputs use smaller batches to retain parallelism. The audit summary
+uses one open stream, flushed after each completed batch. Canonical mapping,
+locus IDs and scientific decisions retain their original order. Graph batches
+are delivered in input order, with running and completed-but-unconsumed batches
+limited to twice the worker count. Older audit summaries used completion order;
+join their rows by `component_id` when comparing runs.
+
+The alignment stage records its own `details` schema `1.0`. JSON separates
+summary loading, planning, job preparation, ordered FASTA writing, and
+dispatch/collection from summed worker times for MAFFT setup/cleanup,
+launch/execution, output parsing, and consensus construction. Actual MAFFT
+invocations, successes and failures are counted: a paired-end or reconciled
+locus may require several invocations. A bounded histogram records complete
+call durations in seconds, including failed attempts, with explicit bin upper
+bounds (the final `null` means no upper bound). Empty duration summaries are
+`null`, not zero. The text report shows the main counts and timings.
+
+The alignment scheduler admits at most twice the MAFFT worker count in
+outstanding loci, including both running jobs and completed results awaiting
+their turn in the FASTA. It also reserves at most 8 MiB of output payload,
+using the input sequence lengths plus the output spacer and locus name as a
+conservative bound. A locus larger than this budget runs intact and alone.
+These limits do not change MAFFT arguments, consensus rules, or locus order.
+They can pause new submissions behind a slow earlier locus, trading some
+worker utilization for bounded output accumulation. Backpressure events and
+waiting time are reported, along with peak outstanding loci, completed-result
+count, actual buffered payload bytes and reserved payload bytes.
+
+The byte budget covers UTF-8 locus names and consensus strings, **not total
+memory**: Python object overhead, the loaded sequence catalogue, plans, one
+lookahead input record, and MAFFT workspace are separate. Use sampled process
+tree RSS to assess overall memory. MAFFT launch/execution includes subprocess
+launch and waiting, not native CPU time alone. Dispatch/collection includes
+job preparation and ordered writing; worker timings overlap across loci and
+with parent activity. Do not add these measurements as a wall-time breakdown.
+Alignment details gathered before a failure remain in the failed run report.
+
+Single-end loci use the ordinary consensus path even when older mapping tables
+label a reconciled group as `spaced`. Compatible records in a same-sample
+contract group are first reduced to one sequence; the locus consensus is then
+constructed from those group sequences. Reconciliation alone does not imply
+paired-end arms or an output spacer.
+
+The spacer counts in `denovo.stats.txt` and `denovo.stats.json` describe padding
+actually inserted in completed output sequences, including any fallback during
+alignment. Joined-only PE, mixed PE and no-spacer counts sum to the number of
+written loci. Naturally occurring ambiguity Ns do not count as inserted spacers.
+
+### Reverse-complement orientation
+
+`--allow-reverse-complement` enables both-strand search within and across
+samples. With this option, final mapping rows include an `orientation` column.
+A deterministic maximum-support forest orients seeds using identity, coverage,
+and stable input order; each output locus is anchored on its earliest core.
+Conflicting weaker orientation edges are counted in
+`denovo.audit/orientation.json`. This establishes sequence coordinates, not an
+orthology guarantee. Reversing a joined sequence also swaps its left and right
+arms and adjusts the arm boundary before consensus construction. The ordinary
+plus-strand workflow retains its existing sequences, locus IDs, mapping columns,
+and graph decisions.
+
+The sparse graph implementation visits existing edges and preserves canonical
+edge order, maximum-score selection and deterministic tie rules. It does not
+change similarity thresholds, sample selection, reconciliation rules, oversized
+component placeholders or the majority-base consensus policy.
+
+Sample summaries are concatenated in sorted filename order using 4,096-row
+chunks. Component edge dictionaries are allocated only for components with
+edges and released from the parent catalogue as jobs take ownership. These
+changes preserve table serialization and graph decisions. Graph batches are
+delivered in component order, with running and completed-but-unconsumed
+batches together limited to twice the worker count. Existing batch budgets
+and component boundaries are preserved. This bound can pause submissions
+behind a slow component; it limits result accumulation, not total process
+memory. Worker failures are checked even when an earlier batch is unfinished.

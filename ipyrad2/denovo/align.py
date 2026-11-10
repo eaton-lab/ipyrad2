@@ -5,9 +5,9 @@
 from __future__ import annotations
 
 import csv
-from collections import Counter, OrderedDict
+from collections import Counter, OrderedDict, deque
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import time
 from typing import Iterator, Sequence, TextIO
@@ -19,16 +19,20 @@ from ipyrad2.utils.parallel import PipelineTimeoutError, run_pipeline
 from ipyrad2.utils.parallel import pipeline as pipeline_module
 
 from .mafft_runtime import mafft_process_context
+from .alignment_metrics import AlignmentMetrics, add_seconds, measured_mafft, timed_phase
 
 from .common import (
     DENOVO_MAPPING_FILENAME,
     OUTPUT_JOINED_SPACER_LEN,
     split_cluster_sequence_at_boundary,
+    reverse_complement,
 )
 
 
 DEFAULT_MAFFT_TIMEOUT_SECONDS = 900.0
 STALL_HEARTBEAT_SECONDS = 60.0
+# Admission limits include running jobs and completed-but-unwritten results.
+ALIGNMENT_OUTPUT_BUDGET_BYTES = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -47,6 +51,7 @@ class AlignmentRunSummary:
     mixed_reconciled_spacer_loci: int
     stripped_output_loci: int
     output_spacer_length: int
+    performance: dict = field(default_factory=dict, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -100,6 +105,7 @@ class _AlignmentPlanItem:
     requires_mafft: bool
     consensus: str
     uses_output_spacer: bool
+    joined_only: bool
 
 
 @dataclass(frozen=True)
@@ -118,9 +124,6 @@ class _PlannedAlignment:
     plans: tuple[_AlignmentPlanItem, ...]
     single_sequence_loci: int
     identical_sequence_loci: int
-    joined_spacer_loci: int
-    mixed_reconciled_spacer_loci: int
-    stripped_output_loci: int
 
 
 LegacyRecord = Sequence[tuple[str, str]]
@@ -146,7 +149,8 @@ def choose_longest_sequence(record: LegacyRecord) -> str:
     return best_seq
 
 
-def consensus_from_aligned(aligned: LegacyRecord, min_prop: float = 0.5) -> str:
+@timed_phase('consensus_seconds_sum')
+def consensus_from_aligned(aligned: LegacyRecord) -> str:
     """Build a gap-aware majority-base consensus from an alignment."""
     if not aligned:
         return ""
@@ -186,6 +190,7 @@ def _normalize_mafft_header_name(name: str) -> str:
     return name
 
 
+@measured_mafft
 def mafft_align_one(
     record: LegacyRecord,
     mafft_binary: str,
@@ -215,17 +220,24 @@ def mafft_align_one(
         "-",
     ]
     input_text = fasta_text(surrogate_record)
+    runtime_started = time.perf_counter()
+    execution_seconds = 0.0
     try:
         with mafft_process_context(mafft_binary, input_text) as (binary, env, cwd):
             argv[0] = binary
-            rc, out, err = run_pipeline(
-                [argv],
-                outfile=None,
-                stdin_text=input_text,
-                timeout_s=timeout_s,
-                env=env,
-                cwd=cwd,
-            )
+            native_started = time.perf_counter()
+            try:
+                rc, out, err = run_pipeline(
+                    [argv],
+                    outfile=None,
+                    stdin_text=input_text,
+                    timeout_s=timeout_s,
+                    env=env,
+                    cwd=cwd,
+                )
+            finally:
+                execution_seconds = time.perf_counter() - native_started
+                add_seconds('mafft_execute_seconds_sum', execution_seconds)
             if rc != 0 or not out:
                 raise RuntimeError(
                     f"mafft failed rc={rc} stderr={err.decode('utf-8', 'replace')}"
@@ -237,6 +249,15 @@ def mafft_align_one(
             f"mafft timed out for {locus_label} after {timeout_s:.0f}s "
             f"(nseq={nseq}, min_len={min_len}, max_len={max_len})"
         ) from exc
+    finally:
+        add_seconds('mafft_setup_cleanup_seconds_sum',
+                    time.perf_counter() - runtime_started - execution_seconds)
+    return _parse_mafft_output(out, surrogate_to_name, locus_id)
+
+
+@timed_phase('mafft_parse_seconds_sum')
+def _parse_mafft_output(out, surrogate_to_name, locus_id):
+    """Validate native output and restore original names without changing order."""
     aligned: list[tuple[str, str]] = []
     returned_surrogates: list[str] = []
     name, buf = None, []
@@ -318,7 +339,6 @@ def _collapse_sequence_record(
     *,
     locus_id: int,
     mafft_binary: str,
-    min_prop: float,
     threads: int,
     alignment_mode: str,
     timeout_s: float,
@@ -337,7 +357,7 @@ def _collapse_sequence_record(
         locus_id=locus_id,
         timeout_s=timeout_s,
     )
-    return consensus_from_aligned(aligned, min_prop=min_prop)
+    return consensus_from_aligned(aligned)
 
 
 def _load_summary_records(summary_tsv: Path) -> dict[str, SummaryRecord]:
@@ -394,6 +414,15 @@ def _iter_locus_members(
             locus_id = int(row["locus"])
             core = str(row["core"])
             record = summary_records[core]
+            if row.get('orientation', '+') == '-':
+                # Reversal swaps joined arms; reversing each arm in place is wrong.
+                sequence = reverse_complement(record.cluster_sequence)
+                if record.record_type == 'joined' and record.right_arm:
+                    left = reverse_complement(record.right_arm)
+                    right = reverse_complement(record.left_arm)
+                else:
+                    left, right = sequence, ''
+                record = SummaryRecord(record.seed, record.sample, record.record_type, sequence, left, right)
             locus_name = str(row.get("locus_name") or f"locus_{locus_id}")
             contract_group = str(row.get("contract_group") or core)
             if current_locus is None:
@@ -459,6 +488,10 @@ def _locus_output_form(members: Sequence[LocusMember]) -> str:
         )
     if len(forms) != 1:
         raise RuntimeError("locus rows disagree on output_form")
+    # Accept historical SE mappings tagged "spaced" by reconciliation, but use
+    # the ordinary group-aware SE consensus path. A mode tag cannot add mates.
+    if all(member.record_type == "single" for member in members):
+        return "stripped"
     return next(iter(forms))
 
 
@@ -513,7 +546,6 @@ def _collapse_member_group(
     *,
     locus_id: int,
     mafft_binary: str,
-    min_prop: float,
     threads: int,
     alignment_mode: str,
     timeout_s: float,
@@ -527,7 +559,6 @@ def _collapse_member_group(
             [(m.core, m.left_arm) for m in group],
             locus_id=locus_id,
             mafft_binary=mafft_binary,
-            min_prop=min_prop,
             threads=threads,
             alignment_mode=alignment_mode,
             timeout_s=timeout_s,
@@ -536,7 +567,6 @@ def _collapse_member_group(
             [(m.core, m.right_arm) for m in group],
             locus_id=locus_id,
             mafft_binary=mafft_binary,
-            min_prop=min_prop,
             threads=threads,
             alignment_mode=alignment_mode,
             timeout_s=timeout_s,
@@ -553,7 +583,6 @@ def _collapse_member_group(
         [(m.core, m.cluster_sequence) for m in group],
         locus_id=locus_id,
         mafft_binary=mafft_binary,
-        min_prop=min_prop,
         threads=threads,
         alignment_mode=alignment_mode,
         timeout_s=timeout_s,
@@ -566,11 +595,6 @@ def _collapse_member_group(
         left_arm=stripped,
         right_arm="",
     )
-
-
-def _locus_uses_output_spacer(members: Sequence[LocusMember]) -> bool:
-    """Return True when the final locus should be written with the output spacer."""
-    return _locus_output_form(members) == "spaced"
 
 
 def _aligned_breakpoint_column(aligned_seq: str, left_len: int) -> int:
@@ -612,7 +636,6 @@ def _collapse_optional_sequence_record(
     *,
     locus_id: int,
     mafft_binary: str,
-    min_prop: float,
     threads: int,
     alignment_mode: str,
     timeout_s: float,
@@ -625,7 +648,6 @@ def _collapse_optional_sequence_record(
         nonempty,
         locus_id=locus_id,
         mafft_binary=mafft_binary,
-        min_prop=min_prop,
         threads=threads,
         alignment_mode=alignment_mode,
         timeout_s=timeout_s,
@@ -637,7 +659,6 @@ def _consensus_for_mixed_spaced_locus(
     *,
     locus_id: int,
     mafft_binary: str,
-    min_prop: float,
     threads: int,
     alignment_mode: str,
     timeout_s: float,
@@ -654,7 +675,6 @@ def _consensus_for_mixed_spaced_locus(
             [(member.sample, member.cluster_sequence) for member in members],
             locus_id=locus_id,
             mafft_binary=mafft_binary,
-            min_prop=min_prop,
             threads=threads,
             alignment_mode=alignment_mode,
             timeout_s=timeout_s,
@@ -685,7 +705,6 @@ def _consensus_for_mixed_spaced_locus(
             [(member.sample, member.cluster_sequence) for member in members],
             locus_id=locus_id,
             mafft_binary=mafft_binary,
-            min_prop=min_prop,
             threads=threads,
             alignment_mode=alignment_mode,
             timeout_s=timeout_s,
@@ -709,7 +728,6 @@ def _consensus_for_mixed_spaced_locus(
             left_record,
             locus_id=locus_id,
             mafft_binary=mafft_binary,
-            min_prop=min_prop,
             threads=threads,
             alignment_mode=alignment_mode,
             timeout_s=timeout_s,
@@ -718,7 +736,6 @@ def _consensus_for_mixed_spaced_locus(
             right_record,
             locus_id=locus_id,
             mafft_binary=mafft_binary,
-            min_prop=min_prop,
             threads=threads,
             alignment_mode=alignment_mode,
             timeout_s=timeout_s,
@@ -738,7 +755,6 @@ def _consensus_for_mixed_spaced_locus(
         [(group.sample, group.left_arm) for group in groups],
         locus_id=locus_id,
         mafft_binary=mafft_binary,
-        min_prop=min_prop,
         threads=threads,
         alignment_mode=alignment_mode,
         timeout_s=timeout_s,
@@ -747,7 +763,6 @@ def _consensus_for_mixed_spaced_locus(
         [(group.sample, group.right_arm) for group in groups],
         locus_id=locus_id,
         mafft_binary=mafft_binary,
-        min_prop=min_prop,
         threads=threads,
         alignment_mode=alignment_mode,
         timeout_s=timeout_s,
@@ -800,7 +815,6 @@ def _consensus_for_locus_members(
     *,
     locus_id: int,
     mafft_binary: str,
-    min_prop: float,
     threads: int,
     alignment_mode: str,
     timeout_s: float,
@@ -812,7 +826,6 @@ def _consensus_for_locus_members(
             members,
             locus_id=locus_id,
             mafft_binary=mafft_binary,
-            min_prop=min_prop,
             threads=threads,
             alignment_mode=alignment_mode,
             timeout_s=timeout_s,
@@ -823,7 +836,6 @@ def _consensus_for_locus_members(
             group,
             locus_id=locus_id,
             mafft_binary=mafft_binary,
-            min_prop=min_prop,
             threads=threads,
             alignment_mode=alignment_mode,
             timeout_s=timeout_s,
@@ -836,7 +848,6 @@ def _consensus_for_locus_members(
             [(group.sample, group.left_arm) for group in groups],
             locus_id=locus_id,
             mafft_binary=mafft_binary,
-            min_prop=min_prop,
             threads=threads,
             alignment_mode=alignment_mode,
             timeout_s=timeout_s,
@@ -845,7 +856,6 @@ def _consensus_for_locus_members(
             [(group.sample, group.right_arm) for group in groups],
             locus_id=locus_id,
             mafft_binary=mafft_binary,
-            min_prop=min_prop,
             threads=threads,
             alignment_mode=alignment_mode,
             timeout_s=timeout_s,
@@ -855,7 +865,6 @@ def _consensus_for_locus_members(
         [(group.sample, group.stripped) for group in groups],
         locus_id=locus_id,
         mafft_binary=mafft_binary,
-        min_prop=min_prop,
         threads=threads,
         alignment_mode=alignment_mode,
         timeout_s=timeout_s,
@@ -868,7 +877,6 @@ def _consensus_for_legacy_record(
     *,
     locus_id: int,
     mafft_binary: str,
-    min_prop: float,
     threads: int,
     alignment_mode: str,
     timeout_s: float,
@@ -879,7 +887,6 @@ def _consensus_for_legacy_record(
             record,
             locus_id=locus_id,
             mafft_binary=mafft_binary,
-            min_prop=min_prop,
             threads=threads,
             alignment_mode=alignment_mode,
             timeout_s=timeout_s,
@@ -892,7 +899,7 @@ def worker_build_consensus(
     locus_id: int,
     record: ConsensusRecord,
     mafft_binary: str,
-    min_prop: float = 0.5,
+    *,
     threads: int = 1,
     alignment_mode: str = "mafft",
     timeout_s: float = DEFAULT_MAFFT_TIMEOUT_SECONDS,
@@ -905,7 +912,6 @@ def worker_build_consensus(
             record,
             locus_id=locus_id,
             mafft_binary=mafft_binary,
-            min_prop=min_prop,
             threads=threads,
             alignment_mode=alignment_mode,
             timeout_s=timeout_s,
@@ -916,7 +922,6 @@ def worker_build_consensus(
             record,
             locus_id=locus_id,
             mafft_binary=mafft_binary,
-            min_prop=min_prop,
             threads=threads,
             alignment_mode=alignment_mode,
             timeout_s=timeout_s,
@@ -935,28 +940,17 @@ def _plan_alignment(
     plans: list[_AlignmentPlanItem] = []
     single_sequence_loci = 0
     identical_sequence_loci = 0
-    mixed_reconciled_spacer_loci = 0
-    joined_spacer_loci = 0
-    stripped_output_loci = 0
 
     for submit_idx, (locus_id, locus_name, members) in enumerate(
         _iter_locus_members(mapping_tsv, summary_records)
     ):
-        uses_output_spacer = _locus_uses_output_spacer(members)
-        if uses_output_spacer:
-            if _locus_is_mixed_spaced(members):
-                mixed_reconciled_spacer_loci += 1
-            else:
-                joined_spacer_loci += 1
-        else:
-            stripped_output_loci += 1
+        joined_only = _group_is_joined_only(members)
 
         if alignment_mode == "none":
             consensus, _uses_output_spacer = _consensus_for_locus_members(
                 members,
                 locus_id=locus_id,
                 mafft_binary="",
-                min_prop=0.5,
                 threads=1,
                 alignment_mode="none",
                 timeout_s=DEFAULT_MAFFT_TIMEOUT_SECONDS,
@@ -970,6 +964,7 @@ def _plan_alignment(
                     requires_mafft=False,
                     consensus=consensus,
                     uses_output_spacer=_uses_output_spacer,
+                    joined_only=joined_only,
                 )
             )
             continue
@@ -985,7 +980,9 @@ def _plan_alignment(
                     locus_name=locus_name,
                     requires_mafft=True,
                     consensus="",
-                    uses_output_spacer=uses_output_spacer,
+                    # Deferred until the worker constructs the sequence.
+                    uses_output_spacer=False,
+                    joined_only=joined_only,
                 )
             )
             continue
@@ -1003,15 +1000,13 @@ def _plan_alignment(
                 requires_mafft=False,
                 consensus=consensus,
                 uses_output_spacer=planned_output_spacer,
+                joined_only=joined_only,
             )
         )
     return _PlannedAlignment(
         plans=tuple(plans),
         single_sequence_loci=single_sequence_loci,
         identical_sequence_loci=identical_sequence_loci,
-        joined_spacer_loci=joined_spacer_loci,
-        mixed_reconciled_spacer_loci=mixed_reconciled_spacer_loci,
-        stripped_output_loci=stripped_output_loci,
     )
 
 
@@ -1021,7 +1016,6 @@ def _iter_alignment_jobs_from_plan(
     plans: Sequence[_AlignmentPlanItem],
     *,
     mafft_binary: str,
-    min_prop: float,
     threads: int,
     alignment_mode: str,
     mafft_timeout_s: float,
@@ -1049,7 +1043,6 @@ def _iter_alignment_jobs_from_plan(
                 locus_name=locus_name,
                 record=members,
                 mafft_binary=mafft_binary,
-                min_prop=min_prop,
                 threads=threads,
                 alignment_mode=alignment_mode,
                 timeout_s=mafft_timeout_s,
@@ -1062,7 +1055,7 @@ def iter_alignment_jobs(
     mapping_tsv: Path,
     summary_tsv: Path,
     mafft_binary: str,
-    min_prop: float = 0.5,
+    *,
     threads: int = 1,
     alignment_mode: str = "mafft",
     mafft_timeout_s: float = DEFAULT_MAFFT_TIMEOUT_SECONDS,
@@ -1081,7 +1074,6 @@ def iter_alignment_jobs(
         summary_records,
         planned.plans,
         mafft_binary=mafft_binary,
-        min_prop=min_prop,
         threads=threads,
         alignment_mode=alignment_mode,
         mafft_timeout_s=mafft_timeout_s,
@@ -1094,38 +1086,103 @@ def _iter_threaded_alignment_results(
     *,
     max_workers: int,
     heartbeat_s: float,
+    metrics: AlignmentMetrics | None = None,
+    max_outstanding: int | None = None,
+    output_budget_bytes: int = ALIGNMENT_OUTPUT_BUDGET_BYTES,
 ) -> Iterator[tuple[int, ThreadedConsensusResult]]:
-    """Yield completed threaded locus results."""
+    """Yield in submission order with bounded running and buffered output.
+
+    Reserve the sum of input sequence bytes plus the final spacer/name before
+    dispatch. Alignment/consensus cannot introduce additional non-gap bases.
+    A job larger than the budget is admitted intact, only with an empty window.
+    This bounds result payload, not total RSS or native alignment workspace.
+    """
+    max_outstanding = 2 * max_workers if max_outstanding is None else max_outstanding
+    if max_workers < 1 or max_outstanding < 1 or output_budget_bytes < 1:
+        raise ValueError('Alignment workers, outstanding limit and byte budget must be positive')
+    metrics = AlignmentMetrics() if metrics is None else metrics
+    data = metrics.details
+    data.update(outstanding_locus_limit=max_outstanding,
+                output_payload_budget_bytes=output_budget_bytes)
     inflight: dict[Future[ThreadedConsensusResult], _ThreadJobInfo] = {}
     job_it = iter(jobs_iter)
+    order = deque()
+    reservations = {}
+    ready = {}
+    reserved_bytes = buffered_bytes = 0
+    pending = None
+    exhausted = False
     executor = ThreadPoolExecutor(
         max_workers=max_workers, thread_name_prefix="denovo-align"
     )
-    close_wait = True
 
-    def _submit_next() -> bool:
-        try:
-            submit_idx, kwargs = next(job_it)
-        except StopIteration:
-            return False
-        future = executor.submit(worker_build_consensus, **kwargs)
-        inflight[future] = _ThreadJobInfo(
-            submit_idx=submit_idx,
-            locus_id=int(kwargs["locus_id"]),
-            started_at=time.monotonic(),
-        )
-        return True
+    def worker(kwargs):
+        with metrics.worker():
+            return worker_build_consensus(**kwargs)
 
-    while len(inflight) < max_workers and _submit_next():
-        pass
+    def fill():
+        nonlocal pending, exhausted, reserved_bytes
+        blocked = False
+        while len(inflight) < max_workers and not exhausted:
+            if len(order) >= max_outstanding:
+                blocked = True
+                break
+            if pending is None:
+                started = time.perf_counter()
+                try:
+                    idx, kwargs = next(job_it)
+                    record = kwargs['record']
+                    sequences = (m.cluster_sequence for m in record) if record and isinstance(record[0], LocusMember) else (seq for _, seq in record)
+                    name = kwargs.get('locus_name') or f"locus_{kwargs['locus_id']}"
+                    bound = (sum(len(seq.encode('utf-8')) for seq in sequences)
+                             + int(kwargs.get('output_spacer_len', OUTPUT_JOINED_SPACER_LEN))
+                             + len(name.encode('utf-8')))
+                    pending = idx, kwargs, bound
+                except StopIteration:
+                    exhausted = True
+                    break
+                finally:
+                    data['job_build_seconds'] += time.perf_counter() - started
+            idx, kwargs, bound = pending
+            if order and reserved_bytes + bound > output_budget_bytes:
+                blocked = True
+                break
+            future = executor.submit(worker, kwargs)
+            inflight[future] = _ThreadJobInfo(idx, int(kwargs['locus_id']), time.monotonic())
+            order.append(idx)
+            reservations[idx] = bound
+            reserved_bytes += bound
+            data['loci_submitted'] += 1
+            data['oversized_loci'] += int(bound > output_budget_bytes)
+            data['peak_outstanding_loci'] = max(data['peak_outstanding_loci'], len(order))
+            data['peak_reserved_payload_bytes'] = max(data['peak_reserved_payload_bytes'], reserved_bytes)
+            pending = None
+        if blocked:
+            data['backpressure_events'] += 1
+        return blocked
 
     next_heartbeat = time.monotonic() + heartbeat_s
     try:
-        while inflight:
+        while True:
+            while order and order[0] in ready:
+                idx = order.popleft()
+                result, payload_bytes = ready.pop(idx)
+                reserved_bytes -= reservations.pop(idx)
+                buffered_bytes -= payload_bytes
+                yield idx, result
+                del result
+            blocked = fill()
+            if not inflight:
+                if not order and exhausted:
+                    break
+                raise RuntimeError('Alignment scheduler made no progress')
             timeout = max(0.0, next_heartbeat - time.monotonic())
+            wait_started = time.perf_counter()
             done, _pending = wait(
                 tuple(inflight), timeout=timeout, return_when=FIRST_COMPLETED
             )
+            if blocked:
+                data['backpressure_wait_seconds'] += time.perf_counter() - wait_started
             if not done:
                 oldest = min(inflight.values(), key=lambda info: info.started_at)
                 logger.debug(
@@ -1137,25 +1194,26 @@ def _iter_threaded_alignment_results(
 
             for future in done:
                 info = inflight.pop(future)
-                try:
-                    result = future.result()
-                except BaseException:
-                    pipeline_module._kill_all_children()
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    close_wait = False
-                    raise
-                yield info.submit_idx, result
-                while len(inflight) < max_workers and _submit_next():
-                    pass
+                result = future.result()
+                payload_bytes = len(result[1].encode('utf-8')) + len(result[2].encode('utf-8'))
+                if payload_bytes > reservations[info.submit_idx]:
+                    raise RuntimeError(f'Alignment output exceeded its sequence bound for locus_{info.locus_id}')
+                ready[info.submit_idx] = result, payload_bytes
+                buffered_bytes += payload_bytes
+                data['peak_buffered_results'] = max(data['peak_buffered_results'], len(ready))
+                data['peak_buffered_payload_bytes'] = max(data['peak_buffered_payload_bytes'], buffered_bytes)
+            # Futures retain their results; release the completed wait set before
+            # admitting another window, including the loop's last references.
+            done.clear()
+            del future, result
             next_heartbeat = time.monotonic() + heartbeat_s
-    except KeyboardInterrupt:
+    except BaseException:
+        # Includes input-iterator failures, interrupts and early generator close.
         pipeline_module._kill_all_children()
         executor.shutdown(wait=False, cancel_futures=True)
-        close_wait = False
         raise
-    finally:
-        if close_wait:
-            executor.shutdown(wait=True, cancel_futures=False)
+    else:
+        executor.shutdown(wait=True, cancel_futures=False)
 
 
 def _choose_mafft_runtime(
@@ -1179,6 +1237,8 @@ def _build_alignment_run_summary(
     mafft_threads: int,
     mafft_timeout_s: float,
     output_spacer_len: int,
+    output_counts: Counter[str],
+    performance: dict | None = None,
 ) -> AlignmentRunSummary:
     """Return the final alignment scheduling summary."""
     return AlignmentRunSummary(
@@ -1190,14 +1250,15 @@ def _build_alignment_run_summary(
         mafft_worker_processes=mafft_workers,
         alignment_mode=alignment_mode,
         mafft_timeout_seconds=int(mafft_timeout_s) if mafft_required_loci else 0,
-        joined_spacer_loci=planned.joined_spacer_loci,
-        mixed_reconciled_spacer_loci=planned.mixed_reconciled_spacer_loci,
-        stripped_output_loci=planned.stripped_output_loci,
+        joined_spacer_loci=output_counts["joined"],
+        mixed_reconciled_spacer_loci=output_counts["mixed"],
+        stripped_output_loci=output_counts["stripped"],
         output_spacer_length=(
             output_spacer_len
-            if (planned.joined_spacer_loci or planned.mixed_reconciled_spacer_loci)
+            if (output_counts["joined"] or output_counts["mixed"])
             else 0
         ),
+        performance={} if performance is None else performance,
     )
 
 
@@ -1240,67 +1301,92 @@ def write_ordered_consensus_stream_to_file(
     out_fa: Path,
     mafft_binary: str,
     cores: int = 1,
-    min_prop: float = 0.5,
+    *,
     alignment_mode: str = "mafft",
     mafft_timeout_s: float = DEFAULT_MAFFT_TIMEOUT_SECONDS,
     output_spacer_len: int = OUTPUT_JOINED_SPACER_LEN,
+    performance: dict | None = None,
 ) -> AlignmentRunSummary:
     """Write the denovo reference FASTA in mapping order and return runtime summary."""
     alignment_mode = _validate_alignment_mode(alignment_mode)
     if cores < 1:
         raise ValueError("cores must be >= 1")
+    metrics = AlignmentMetrics(performance)
+    details = metrics.details
     out_fa.parent.mkdir(parents=True, exist_ok=True)
+    started = time.perf_counter()
     summary_records = _load_summary_records(summary_tsv)
+    details['read_summary_seconds'] = time.perf_counter() - started
+    started = time.perf_counter()
     planned = _plan_alignment(
         mapping_tsv,
         summary_records,
         alignment_mode=alignment_mode,
         output_spacer_len=output_spacer_len,
     )
+    details['planning_seconds'] = time.perf_counter() - started
     mafft_required_loci = sum(1 for plan in planned.plans if plan.requires_mafft)
     mafft_workers, mafft_threads = _choose_mafft_runtime(cores, mafft_required_loci)
-    summary = _build_alignment_run_summary(
-        planned,
-        alignment_mode=alignment_mode,
-        mafft_required_loci=mafft_required_loci,
-        mafft_workers=mafft_workers,
-        mafft_threads=mafft_threads,
-        mafft_timeout_s=mafft_timeout_s,
-        output_spacer_len=output_spacer_len,
-    )
-    _log_alignment_summary(summary)
+    output_counts: Counter[str] = Counter()
 
-    if summary.total_loci == 0:
+    def finish_summary():
+        if sum(output_counts.values()) != len(planned.plans):
+            raise RuntimeError("Output spacer counts do not cover every written locus")
+        summary = _build_alignment_run_summary(
+            planned,
+            alignment_mode=alignment_mode,
+            mafft_required_loci=mafft_required_loci,
+            mafft_workers=mafft_workers,
+            mafft_threads=mafft_threads,
+            mafft_timeout_s=mafft_timeout_s,
+            output_spacer_len=output_spacer_len,
+            output_counts=output_counts,
+            performance=details,
+        )
+        _log_alignment_summary(summary)
+        return summary
+
+    if not planned.plans:
         out_fa.write_text("", encoding="utf-8")
         logger.info("wrote denovo reference")
         logger.debug("wrote denovo reference to {}", out_fa)
-        return summary
+        return finish_summary()
 
     with open(out_fa, "wt", encoding="utf-8") as fh:
+        def write_locus(plan, locus_name, consensus, uses_output_spacer):
+            started = time.perf_counter()
+            try:
+                _write_planned_locus(fh, locus_name=locus_name, consensus=consensus)
+                # Count successful output, including worker fallbacks. Never
+                # infer an inserted spacer by scanning natural ambiguity Ns.
+                kind = "stripped"
+                if uses_output_spacer and output_spacer_len > 0:
+                    kind = "joined" if plan.joined_only else "mixed"
+                output_counts[kind] += 1
+            finally:
+                details['fasta_write_seconds'] += time.perf_counter() - started
+
         prog = ProgressBar(
-            summary.total_loci,
+            len(planned.plans),
             None,
-            _progress_message(summary.total_loci, alignment_mode),
+            _progress_message(len(planned.plans), alignment_mode),
         )
         prog.update()
         try:
             if alignment_mode == "none" or mafft_required_loci == 0:
                 for plan in planned.plans:
-                    _write_planned_locus(
-                        fh, locus_name=plan.locus_name, consensus=plan.consensus
-                    )
+                    write_locus(plan, plan.locus_name, plan.consensus, plan.uses_output_spacer)
                     prog.finished += 1
                     prog.update()
                 logger.info("wrote denovo reference")
                 logger.debug("wrote denovo reference to {}", out_fa)
-                return summary
+                return finish_summary()
 
             jobs_it = _iter_alignment_jobs_from_plan(
                 mapping_tsv=mapping_tsv,
                 summary_records=summary_records,
                 plans=planned.plans,
                 mafft_binary=mafft_binary,
-                min_prop=min_prop,
                 threads=mafft_threads,
                 alignment_mode=alignment_mode,
                 mafft_timeout_s=mafft_timeout_s,
@@ -1316,31 +1402,40 @@ def write_ordered_consensus_stream_to_file(
                 while next_idx < len(planned.plans):
                     plan = planned.plans[next_idx]
                     if not plan.requires_mafft:
-                        _write_planned_locus(
-                            fh, locus_name=plan.locus_name, consensus=plan.consensus
-                        )
+                        write_locus(plan, plan.locus_name, plan.consensus, plan.uses_output_spacer)
                         next_idx += 1
                         prog.finished += 1
                         prog.update()
                         continue
                     if next_idx not in result_buffer:
                         break
-                    _locus_id, locus_name, consensus, _uses_output_spacer = (
+                    _locus_id, locus_name, consensus, uses_output_spacer = (
                         result_buffer.pop(next_idx)
                     )
-                    _write_planned_locus(fh, locus_name=locus_name, consensus=consensus)
+                    write_locus(plan, locus_name, consensus, uses_output_spacer)
                     next_idx += 1
                     prog.finished += 1
                     prog.update()
 
             _flush_ready()
-            for submit_idx, result in _iter_threaded_alignment_results(
+            results = _iter_threaded_alignment_results(
                 jobs_it,
                 max_workers=mafft_workers,
                 heartbeat_s=STALL_HEARTBEAT_SECONDS,
-            ):
-                result_buffer[submit_idx] = result
-                _flush_ready()
+                metrics=metrics,
+            )
+            started = time.perf_counter()
+            try:
+                for submit_idx, result in results:
+                    result_buffer[submit_idx] = result
+                    _flush_ready()
+                    del result
+            finally:
+                # Close the generator on a writer failure as well as an interrupt.
+                results.close()
+                details['dispatch_collect_seconds'] = time.perf_counter() - started
+            if next_idx != len(planned.plans):
+                raise RuntimeError('Missing alignment results at end of ordered FASTA writing')
         except KeyboardInterrupt:
             logger.warning("interrupted by user. Cleaning up.")
             raise SystemExit(130)
@@ -1349,4 +1444,4 @@ def write_ordered_consensus_stream_to_file(
 
     logger.info("wrote denovo reference")
     logger.debug("wrote denovo reference to {}", out_fa)
-    return summary
+    return finish_summary()

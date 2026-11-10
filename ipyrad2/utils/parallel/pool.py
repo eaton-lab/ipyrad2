@@ -362,9 +362,14 @@ class _ManagedProcessPool:
         self,
         jobs_iter: Iterable[Tuple[Any, Tuple[Callable[..., Any], Dict[str, Any]]]],
         max_inflight: int,
+        *,
+        ordered: bool = False,
     ) -> Iterator[Tuple[Any, Any]]:
-        """Yield `(key, result)` pairs as jobs finish, aborting on first error."""
+        """Yield results in completion or input order, aborting on first error."""
         _validate_positive_int("max_inflight", max_inflight)
+        if ordered:
+            yield from self._iter_ordered_results(jobs_iter, max_inflight)
+            return
 
         inflight: dict[Future[Any], _FutureInfo] = {}
         job_it = iter(jobs_iter)
@@ -416,6 +421,68 @@ class _ManagedProcessPool:
                 while len(inflight) < max_inflight and _submit_next():
                     pass
 
+    def _iter_ordered_results(self, jobs_iter, max_outstanding):
+        """Bound running and completed results together, yielding input order.
+
+        Input ordinal, rather than job key, defines order. Every completed
+        future is checked for failure before yielding a ready result, including
+        failures behind a slow earlier job. No slot is refilled until its result
+        has been consumed by the caller.
+        """
+        inflight = {}
+        ready = {}
+        job_it = iter(jobs_iter)
+        submitted = next_result = 0
+        exhausted = False
+
+        def fill():
+            nonlocal submitted, exhausted
+            while not exhausted and submitted - next_result < max_outstanding:
+                try:
+                    key, (func, kwargs) = next(job_it)
+                except StopIteration:
+                    exhausted = True
+                    break
+                info = _FutureInfo(key, func, kwargs)
+                try:
+                    future = self.submit(func, kwargs)
+                except BaseException as exc:
+                    raise ParallelJobError(key, _func_name(func), kwargs, exc) from exc
+                inflight[future] = (submitted, info)
+                submitted += 1
+
+        try:
+            fill()
+            while inflight or ready:
+                self.collect()
+                if inflight:
+                    done, _ = wait(tuple(inflight),
+                        timeout=0 if next_result in ready else POOL_WAIT_POLL_SECONDS,
+                        return_when=FIRST_COMPLETED)
+                    for future in done:
+                        ordinal, info = inflight.pop(future)
+                        try:
+                            result = future.result()
+                        except BaseException as exc:
+                            raise ParallelJobError(info.key, _func_name(info.func), info.kwargs, exc) from exc
+                        ready[ordinal] = (info.key, result)
+                        del future, info, result
+                    done.clear()
+                if next_result in ready:
+                    key, result = ready.pop(next_result)
+                    yield key, result
+                    del key, result
+                    next_result += 1
+                    fill()
+        except BaseException:
+            # Also handles iterator failures and explicit generator close.
+            self.abort(inflight, fast=True)
+            raise
+        finally:
+            close = getattr(job_it, 'close', None)
+            if close is not None:
+                close()
+
 
 def _default_max_workers() -> int:
     """Return the default process count used for inflight heuristics."""
@@ -433,8 +500,15 @@ def _prime_jobs_iter(
         return None
 
     def _yield_first() -> Iterator[Tuple[Any, Tuple[Callable[..., Any], Dict[str, Any]]]]:
-        yield first
-        yield from job_it
+        nonlocal first
+        try:
+            yield first
+            first = None
+            yield from job_it
+        finally:
+            close = getattr(job_it, "close", None)
+            if close is not None:
+                close()
 
     return _yield_first()
 
@@ -491,9 +565,17 @@ def run_with_pool_iter(
     msg: str | None = None,
     njobs: int | None = None,
     progress_increment: Callable[[Any, Any], int] | None = None,
+    *,
+    ordered: bool = False,
 ) -> Iterator[Tuple[Any, Any]]:
-    """Yield `(key, result)` as jobs complete; fail fast on first error."""
+    """Yield results as jobs complete, or in bounded input order if requested.
+
+    In ordered mode, max_inflight includes completed-but-unconsumed results.
+    Default completion-order behavior is unchanged.
+    """
     _validate_positive_int("max_workers", max_workers)
+    if not isinstance(ordered, bool):
+        raise ValueError("ordered must be a boolean")
     if (msg is None) != (njobs is None):
         raise ValueError("msg and njobs must be provided together for progress reporting")
     if njobs is not None:
@@ -517,8 +599,9 @@ def run_with_pool_iter(
 
     pool = _ManagedProcessPool(log_level=log_level, max_workers=max_workers)
     close_wait = True
+    results_iter = pool.iter_results(primed_iter, max_inflight=max_inflight, ordered=ordered)
     try:
-        for key, result in pool.iter_results(primed_iter, max_inflight=max_inflight):
+        for key, result in results_iter:
             if prog is not None:
                 increment = progress_increment(key, result)
                 if isinstance(increment, bool) or not isinstance(increment, int) or increment < 0:
@@ -526,6 +609,8 @@ def run_with_pool_iter(
                 prog.finished = min(njobs, prog.finished + increment)
                 prog.update()
             yield key, result
+            if ordered:
+                del key, result
     except ParallelJobError as exc:
         if prog is not None:
             prog.close()
@@ -538,7 +623,15 @@ def run_with_pool_iter(
         pool.abort(fast=True)
         close_wait = False
         raise SystemExit(130)
+    except BaseException:
+        if ordered:
+            pool.abort(fast=True)
+            close_wait = False
+        raise
     finally:
         if prog is not None:
             prog.close()
-        pool.close(wait=close_wait)
+        try:
+            results_iter.close()
+        finally:
+            pool.close(wait=close_wait)

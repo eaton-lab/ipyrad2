@@ -128,7 +128,7 @@ def _write_audit_summary(audit_dir: Path, rows: list[dict[str, object]]) -> None
 def _report_has_value_line(text: str, key: str, value: str) -> bool:
     """Return True when one aligned report line matches `key  value`."""
     return (
-        re.search(rf"^{re.escape(key)}\s+{re.escape(value)}$", text, re.MULTILINE)
+        re.search(rf"^\s*{re.escape(key)}\s+{re.escape(value)}$", text, re.MULTILINE)
         is not None
     )
 
@@ -359,7 +359,7 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
         return pd.DataFrame()
 
     def fake_vsearch_cluster_across(
-        outdir, summary_tsv, across_similarity, query_cov, threads
+        outdir, summary_tsv, across_similarity, query_cov, threads, allow_reverse_complement=False
     ):
         calls["across"] = {
             "outdir": outdir,
@@ -374,6 +374,7 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
         cores,
         log_level,
         within_similarity,
+        allow_reverse_complement=False,
     ):
         mapping = pd.DataFrame(
             [
@@ -495,38 +496,38 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
 
     stats_text = (outdir / "denovo.stats.txt").read_text(encoding="utf-8")
     stats_json = json.loads((outdir / "denovo.stats.json").read_text(encoding="utf-8"))
-    assert "# Inputs" in stats_text
-    assert "# Clustering Parameters" in stats_text
-    assert "# Denovo Summary" in stats_text
-    assert "# Locus QC" in stats_text
-    assert "# Component QC" in stats_text
-    assert "# Component Node Summary" in stats_text
-    assert "# Selected Sample Summary" in stats_text
-    assert "# Locus Occupancy" in stats_text
-    assert "# Runtime" in stats_text
+    assert "# Inputs and Builder Samples" in stats_text
+    assert "# Settings" in stats_text
+    assert "# Reference Library" in stats_text
+    assert "# Builder Representation" in stats_text
+    assert "# Detailed Group Audit" in stats_text
+    assert "# Detailed Group Audit" in stats_text
+    assert "# Inputs and Builder Samples" in stats_text
+    assert "# Builder Representation" in stats_text
+    assert "# Settings" in stats_text
     assert "# Outputs" in stats_text
-    assert _report_has_value_line(stats_text, "Selected samples", "1")
+    assert _report_has_value_line(stats_text, "Builder samples selected", "1")
     assert _report_has_value_line(stats_text, "Sample selection mode", "all")
     assert _report_has_value_line(
         stats_text,
-        "Minimum VSEARCH query coverage",
-        "0.750000",
+        "Minimum query coverage",
+        "75.00%",
     )
-    assert _report_has_value_line(stats_text, "Keep intermediates", "False")
+    assert _report_has_value_line(stats_text, "Keep intermediate files", "no")
     assert _report_has_value_line(stats_text, "Alignment mode", "mafft")
-    assert _report_has_value_line(stats_text, "VSEARCH threads per job", "3")
-    assert _report_has_value_line(stats_text, "MAFFT threads per job", "0")
+    assert _report_has_value_line(stats_text, "VSEARCH jobs / threads per job", "2 / 3")
+    assert _report_has_value_line(stats_text, "MAFFT jobs / threads per job", "0 / 0")
     assert _report_has_value_line(stats_text, "Single-sequence loci", "1")
-    assert _report_has_value_line(stats_text, "Loci requiring MAFFT", "0")
-    assert _report_has_value_line(stats_text, "Spacer-stripped output loci", "1")
+    assert _report_has_value_line(stats_text, "Loci requiring alignment in this mode", "0")
+    assert _report_has_value_line(stats_text, "Loci without an inserted spacer", "1")
     assert stats_json["inputs"]["selected_sample_count"] == "1"
     assert stats_json["clustering_parameters"]["query_cov"] == "0.750000"
     assert stats_json["runtime"]["alignment_mode"] == "mafft"
     assert "command" not in stats_json
     assert _report_has_value_line(
         stats_text,
-        "Sample graph summary",
-        str(outdir / "denovo.sample_graph_summary.tsv"),
+        "Per-builder graph statistics",
+        "denovo.sample_graph_summary.tsv",
     )
     assert "vsearch_binary" not in stats_text
     assert "mafft_binary" not in stats_text
@@ -535,9 +536,9 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
     assert "duplicated_component_reconciliation" not in stats_text
     assert "sample_names:" not in stats_text
     assert "occupancy_distribution:" not in stats_text
-    assert _report_has_value_line(stats_text, "Selected samples", "1")
+    assert _report_has_value_line(stats_text, "Builder samples selected", "1")
     assert re.search(r"^sample_a\s+1\s+5\s+0\s+0\s+1\s*$", stats_text, re.MULTILINE)
-    assert re.search(r"^1\s+1\s+1\.000000\s*$", stats_text, re.MULTILINE)
+    assert re.search(r"^1\s+1\s+100\.00%\s*$", stats_text, re.MULTILINE)
     assert any("loading FASTQ inputs" in message for message in messages)
     assert any("selecting denovo samples" in message for message in messages)
     assert any("combining per-sample summaries" in message for message in messages)
@@ -553,12 +554,15 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
         "max_workers": 2,
         "msg": "Clustering within samples",
     }
-    assert calls["consensus"]["mapping_tsv"] == outdir / "denovo.loci.mapping.tsv"
+    assert calls["consensus"]["mapping_tsv"].name == "denovo.loci.mapping.tsv"
+    assert calls["consensus"]["mapping_tsv"].parent.parent == outdir
+    assert calls["consensus"]["mapping_tsv"].parent.name.startswith(".denovo-attempt-")
+    attempt = calls["consensus"]["mapping_tsv"].parent
     assert (
         calls["consensus"]["summary_tsv"]
-        == outdir / denovo_module.WORKDIR_NAME / "concat.summary.tsv"
+        == attempt / denovo_module.WORKDIR_NAME / "concat.summary.tsv"
     )
-    assert calls["consensus"]["out_fa"] == outdir / "denovo_reference.fa"
+    assert calls["consensus"]["out_fa"] == attempt / "denovo_reference.fa"
     assert calls["consensus"]["mafft_binary"] == str(mafft_binary)
     assert calls["consensus"]["cores"] == 6
     assert calls["consensus"]["alignment_mode"] == "mafft"
@@ -566,7 +570,7 @@ def test_run_denovo_writes_curated_outputs_and_cleans_workdir(
     assert calls["graph_log_level"] == "INFO"
     assert (
         calls["across"]["summary_tsv"]
-        == outdir / denovo_module.WORKDIR_NAME / "concat.summary.tsv"
+        == attempt / denovo_module.WORKDIR_NAME / "concat.summary.tsv"
     )
     assert calls["across"]["across_similarity"] == 0.85
     assert calls["across"]["query_cov"] == 0.75
@@ -622,7 +626,7 @@ def test_run_denovo_keep_intermediates_preserves_workdir(
     monkeypatch.setattr(
         denovo_module,
         "make_global_tables",
-        lambda outdir, cores, log_level, within_similarity: (
+        lambda outdir, cores, log_level, within_similarity, allow_reverse_complement=False: (
             pd.DataFrame(
                 [
                     {
@@ -1468,6 +1472,7 @@ def test_write_ordered_consensus_stream_to_file_flushes_in_mapping_order(
         jobs_iter,
         max_workers,
         heartbeat_s,
+        metrics,
     ):
         jobs = list(jobs_iter)
         assert [key for key, _job in jobs] == [0, 1]
@@ -1683,7 +1688,6 @@ def test_worker_build_consensus_returns_single_record_without_alignment() -> Non
             locus_id=4,
             record=[("seed", "ACGTNN")],
             mafft_binary="mafft",
-            min_prop=0.5,
             threads=1,
         )
     )
@@ -1694,10 +1698,9 @@ def test_worker_build_consensus_returns_single_record_without_alignment() -> Non
     assert uses_output_spacer is False
 
 
-def test_consensus_from_aligned_uses_majority_base_even_below_min_prop() -> None:
+def test_consensus_from_aligned_uses_majority_base() -> None:
     consensus = align_module.consensus_from_aligned(
         [("a", "A"), ("b", "C"), ("c", "C")],
-        min_prop=0.9,
     )
 
     assert consensus == "C"
@@ -1706,7 +1709,6 @@ def test_consensus_from_aligned_uses_majority_base_even_below_min_prop() -> None
 def test_consensus_from_aligned_breaks_exact_ties_by_acgt_order() -> None:
     consensus = align_module.consensus_from_aligned(
         [("a", "T"), ("b", "G"), ("c", "C"), ("d", "A")],
-        min_prop=0.9,
     )
 
     assert consensus == "A"
@@ -1725,7 +1727,6 @@ def test_worker_build_consensus_identical_sequences_skip_mafft(
             locus_id=7,
             record=[("a", "ACGT"), ("b", "ACGT"), ("c", "ACGT")],
             mafft_binary="mafft",
-            min_prop=0.5,
             threads=1,
         )
     )
@@ -1752,7 +1753,6 @@ def test_worker_build_consensus_same_length_nonidentical_still_calls_mafft(
             locus_id=8,
             record=[("a", "ACGT"), ("b", "ACGA")],
             mafft_binary="mafft",
-            min_prop=0.5,
             threads=1,
         )
     )
@@ -1873,7 +1873,6 @@ def test_worker_build_consensus_mixed_spaced_locus_handles_adjustdirection_heade
                 ),
             ],
             mafft_binary="mafft",
-            min_prop=0.5,
             threads=1,
             alignment_mode="mafft",
         )
@@ -2113,7 +2112,6 @@ def test_iter_alignment_jobs_yields_only_mafft_required_loci(tmp_path: Path) -> 
             mapping_tsv=mapping_tsv,
             summary_tsv=summary_tsv,
             mafft_binary="mafft",
-            min_prop=0.5,
             threads=1,
             alignment_mode="mafft",
         )
@@ -2178,6 +2176,7 @@ def test_run_denovo_no_alignment_passes_alignment_mode_none(
         cores,
         log_level,
         within_similarity,
+        allow_reverse_complement=False,
     ):
         mapping = pd.DataFrame(
             [
@@ -2252,9 +2251,9 @@ def test_run_denovo_no_alignment_passes_alignment_mode_none(
     stats_text = (outdir / "denovo.stats.txt").read_text(encoding="utf-8")
     assert _report_has_value_line(stats_text, "Alignment mode", "none")
     assert _report_has_value_line(
-        stats_text, "Minimum VSEARCH query coverage", "0.750000"
+        stats_text, "Minimum query coverage", "75.00%"
     )
-    assert _report_has_value_line(stats_text, "MAFFT worker processes", "0")
+    assert _report_has_value_line(stats_text, "MAFFT jobs / threads per job", "0 / 0")
     assert (outdir / "denovo.sample_graph_summary.tsv").exists()
 
 
@@ -2381,37 +2380,36 @@ def test_write_denovo_stats_formats_assemble_style_sections(
     text = outpath.read_text(encoding="utf-8")
     stats_json = json.loads(outpath.with_suffix(".json").read_text(encoding="utf-8"))
 
-    assert text.startswith(
-        "CMD: ipyrad2 denovo -d sample_a.fastq.gz sample_b.fastq.gz -o OUT\n\n"
-    )
-    assert "# Selected Sample Summary" in text
-    assert "# Locus Occupancy" in text
-    assert "# Component Node Summary" in text
+    assert "Command: ipyrad2 denovo" in text
+    assert "Status" in text and "REPORT_ONLY" in text
+    assert "# Inputs and Builder Samples" in text
+    assert "# Builder Representation" in text
+    assert "# Detailed Group Audit" in text
     assert re.search(
-        r"^Sample\s+Consensus records\s+Read count\s+Joined records\s+Merged records\s+Single records$",
+        r"^Sample\s+Input sequences\s+Fragment support\s+Joined PE\s+Merged PE\s+SE$",
         text,
         re.MULTILINE,
     )
     assert re.search(r"^sample_b\s+12\s+1,200\s+4\s+2\s+0\s*$", text, re.MULTILINE)
     assert re.search(r"^sample_a\s+3\s+45\s+0\s+1\s+2\s*$", text, re.MULTILINE)
     assert re.search(
-        r"^Quantile\s+Input nodes\s+Contracted nodes$",
+        r"^Audited-group size\s+Input sequences\s+After simplification$",
         text,
         re.MULTILINE,
     )
-    assert re.search(r"^p90\s+7\.500\s+4\.500\s*$", text, re.MULTILINE)
+    assert re.search(r"^90th percentile\s+7\.500\s+4\.500\s*$", text, re.MULTILINE)
     assert re.search(
-        r"^Samples with data\s+Loci\s+Fraction of final loci$",
+        r"^Builders per locus\s+Loci\s+% of reference loci$",
         text,
         re.MULTILINE,
     )
-    assert re.search(r"^0\s+0\s+0\.000000\s*$", text, re.MULTILINE)
-    assert re.search(r"^1\s+2\s+0\.666667\s*$", text, re.MULTILINE)
-    assert re.search(r"^2\s+1\s+0\.333333\s*$", text, re.MULTILINE)
-    assert _report_has_value_line(text, "Selected samples", "2")
-    assert _report_has_value_line(text, "Minimum VSEARCH query coverage", "0.750000")
+    assert re.search(r"^0\s+0\s+0\.00%\s*$", text, re.MULTILINE)
+    assert re.search(r"^1\s+2\s+66\.67%\s*$", text, re.MULTILINE)
+    assert re.search(r"^2\s+1\s+33\.33%\s*$", text, re.MULTILINE)
+    assert _report_has_value_line(text, "Builder samples selected", "2")
+    assert _report_has_value_line(text, "Minimum query coverage", "75.00%")
     assert _report_has_value_line(
-        text, "Sample graph summary", str(outdir / "denovo.sample_graph_summary.tsv")
+        text, "Per-builder graph statistics", "denovo.sample_graph_summary.tsv"
     )
     assert _report_has_value_line(text, "Intermediate files", "cleaned on success")
     assert "vsearch_binary" not in text
@@ -3041,7 +3039,10 @@ def test_make_global_tables_parallelizes_multiple_components(
         msg=None,
         njobs=None,
         progress_increment=None,
+        *,
+        ordered=False,
     ):
+        assert ordered is True and max_inflight == 2 * max_workers
         jobs = list(jobs_iter)
         calls["count"] = len(jobs)
         calls["log_level"] = log_level
@@ -3155,7 +3156,7 @@ def test_make_global_tables_parallel_path_matches_serial(
     assert serial_summary == parallel_summary
 
 
-def test_make_global_tables_writes_audits_in_completion_order_but_keeps_final_outputs_ordered(
+def test_make_global_tables_handles_injected_out_of_order_results(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3240,10 +3241,14 @@ def test_make_global_tables_writes_audits_in_completion_order_but_keeps_final_ou
         msg=None,
         njobs=None,
         progress_increment=None,
+        *,
+        ordered=False,
     ):
+        assert ordered is True and max_inflight == 2 * max_workers
         del log_level, max_workers, max_inflight, msg, njobs, progress_increment
         jobs = list(jobs_iter)
         results = [(key, func(**kwargs)) for key, (func, kwargs) in jobs]
+        # Deliberately violate ordered delivery to test defensive output handling.
         yield results[1]
         yield results[0]
 
@@ -3264,7 +3269,7 @@ def test_make_global_tables_writes_audits_in_completion_order_but_keeps_final_ou
     assert stats_df["component_id"].tolist() == [1, 2]
 
 
-def test_make_global_tables_logs_when_flush_is_blocked_by_earlier_component(
+def test_make_global_tables_logs_for_injected_out_of_order_results(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3313,10 +3318,14 @@ def test_make_global_tables_logs_when_flush_is_blocked_by_earlier_component(
         msg=None,
         njobs=None,
         progress_increment=None,
+        *,
+        ordered=False,
     ):
+        assert ordered is True and max_inflight == 2 * max_workers
         del log_level, max_workers, max_inflight, msg, njobs, progress_increment
         jobs = list(jobs_iter)
         results = [(key, func(**kwargs)) for key, (func, kwargs) in jobs]
+        # Deliberately violate ordered delivery to test defensive output handling.
         yield results[1]
         yield results[2]
         yield results[0]
