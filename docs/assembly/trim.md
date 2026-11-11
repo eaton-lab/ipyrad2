@@ -115,20 +115,67 @@ Sample names are parsed from filenames. In many datasets the default parsing is 
 
 For each sample, `trim` writes:
 
-- `SAMPLE.R1.trimmed.fastq.gz`
-- `SAMPLE.R2.trimmed.fastq.gz` for paired-end data
-- `SAMPLE.stats.json`
-- `SAMPLE.stats.html`
+- `SAMPLE.trimmed.fastq.gz` for single-end data
+- `SAMPLE.R1.trimmed.fastq.gz` and `SAMPLE.R2.trimmed.fastq.gz` for paired-end data
+- `SAMPLE.stats.json`: the complete, unmodified native fastp report
+
+Temporary fastp HTML reports are removed after processing.
 
 For the run as a whole, it also writes:
 
-- `ipyrad_trim_stats_N.txt`
+- `ipyrad_trim_stats_N.txt`: a readable report with separate Before and After columns
+- `ipyrad_trim_stats_N.json`: structured statistics and full run provenance (stats schema `2.0`)
 
-The summary text file is numbered so repeated trim runs in the same output directory do not overwrite older summaries. It includes per-sample before-and-after read totals, mean read lengths, Q20/Q30 rates, reads filtered for low quality, too many `N` bases, low complexity, reads filtered for being too short, and adapter-trimming counts where available.
+Both files use the same next available number, preserving earlier run summaries.
+The text report contains run status and timing, versions, input and skipped-sample
+counts, effective trimming settings, manual or inferred restriction junctions,
+overall and per-sample retention and quality, mean read lengths, filtering counts,
+and trimming/correction counts. Missing or inapplicable values display as `N/A`;
+JSON uses `null`. Single-end samples keep their R2 fields null without hiding
+paired-end measurements elsewhere in a mixed batch.
 
+The text command occupies one physical line of at most 120 characters. Long input
+lists become a labelled summary such as `<750 FASTQs>`. The JSON retains every
+expanded CLI argument, the shell-quoted full command, working directory, resolved
+parameters, sample-to-input mapping, and each actual fastp command. Python API
+calls are identified as such; supplied command text is labelled separately and
+is not reconstructed into a CLI invocation.
 
+Read counts refer to **individual FASTQ records**: a pair contributes two reads.
+Before counts cover reads actually processed by fastp; `--max-reads` makes these
+subset counts, not counts of all records in the input files. Retention divides
+retained counts by processed counts. Overall Q20/Q30 rates divide summed quality
+base counts by summed total bases at each stage, so samples are weighted by bases.
+Filtering categories are native fastp decisions, with pairwise rejection for PE
+reads. Adapter trimming and overlap correction may overlap filtering and one
+another and must not be added to rejection counts. Missing category counts are
+not assumed to be zero. Zero denominators yield `N/A`/`null`.
 
+The JSON provides the exact counts, denominators, cutsite inference metadata,
+per-sample optional metrics, and paths and SHA256 hashes of native reports.
+Native quality curves and other detailed fastp diagnostics stay in those reports
+rather than being duplicated in the run summary. Completion is published only
+after workers return successfully and native summaries pass validation. Failures
+after output preparation produce a `FAILED` report, with unknown sample outcomes
+explicitly unconfirmed and no aggregate success statistics. Early input errors
+and overwrite refusals leave existing reports untouched. Abrupt termination
+(e.g. SIGKILL or machine failure) cannot guarantee a failure report.
 
+```text
+Overall retention and quality
+Metric              Before        After  Retained
+Reads            2,000,000    1,840,000    92.00%
+Bases          300,000,000  248,400,000    82.80%
+Q20 bases (%)       95.20%       98.40%       N/A
+Q30 bases (%)       88.50%       94.10%       N/A
+
+Mean read length (bp)
+Sample  R1 before  R1 after  R2 before  R2 after
+oak_A       150.0     135.0      150.0     135.0
+oak_B       150.0     132.0        N/A       N/A
+```
+
+These illustrative numbers show the layout, not a measured dataset.
 
 ## Why This Is Not Just a Plain `fastp` Run
 
@@ -139,7 +186,7 @@ ipyrad2 uses `fastp` underneath, but `trim` is not a bare pass-through.
 - It can infer restriction-junction motifs from a kmer sample of the reads, then trim those motifs from the 5' end.
 - It lets you override inference with explicit `--cutsite-1` and `--cutsite-2` motifs.
 - It supports `--umi-tag-in-i5` for workflows where the UMI is stored in index2/i5.
-- It writes per-sample HTML and JSON reports plus a run-level `ipyrad_trim_stats_N.txt` summary.
+- It preserves native per-sample JSON reports and writes readable text and structured JSON run summaries.
 
 That extra layer is the main reason ipyrad2 recommends its own trimming step instead of treating preprocessing as a generic external task.
 

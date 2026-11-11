@@ -22,7 +22,7 @@ import json
 import gzip
 from pathlib import Path
 from loguru import logger
-import pandas as pd
+from . import reporting
 from ..utils.names import get_name_to_fastq_dict
 from ..utils.kmers import InferredJunctionSet, get_overhangs_from_kmers, validate_named_motif_list
 from ..utils.exceptions import IPyradError
@@ -486,100 +486,17 @@ def trim_sample_with_fastp(
 
 
 def _next_trim_stats_paths(outdir: Path) -> tuple[Path, Path]:
-    """Return the next free trim run-summary text/JSON paths."""
-    idx = 0
-    while True:
-        txt_path = outdir / f"ipyrad_trim_stats_{idx}.txt"
-        json_path = outdir / f"ipyrad_trim_stats_{idx}.json"
-        if not txt_path.exists() and not json_path.exists():
-            return txt_path, json_path
-        idx += 1
+    """Return the next free trim report pair."""
+    return reporting.next_paths(outdir)
 
 
-def write_stats_summary(
-    snames: List[str],
-    outdir: Path,
-    logged_command: str | None = None,
-):
-    """Collect fastp stats from all samples in outdir and write summary.
-
-    If user runs multiple ipyrad trim multiple times with the same
-    out directory this will append an int to stats name each time to
-    write a new stats file.
-    """
-    # get a new stats outfile path in outdir
-    outfile, json_outfile = _next_trim_stats_paths(outdir)
-
-    # load all stats dicts from jsons
-    jdata = {}
-    snames = sorted(snames)
-    for sname in snames:
-        stats_file = outdir / f"{sname}.stats.json"
-        jdata[sname] = _load_stats_json(stats_file)
-
-    # init the dataframe
-    df = pd.DataFrame(index=snames, columns=[
-        "total_reads_before", "total_bases_before", "q20_rate_before", "q30_rate_before",
-        "read1_mean_length_before", "read2_mean_length_before",
-        "total_reads_after", "total_bases_after", "q20_rate_after", "q30_rate_after",
-        "read1_mean_length_after", "read2_mean_length_after",
-        "reads_filtered_by_low_quality",
-        "reads_filtered_by_too_many_N",
-        "reads_filtered_by_low_complexity",
-        "reads_filtered_by_too_short",
-        "adapter_trimmed_reads",
-        "adapter_trimmed_bases",
-    ])
-
-    # fill the dataframe
-    for sname in snames:
-        j = jdata[sname]
-        df.loc[sname, "total_reads_before"] = j["summary"]["before_filtering"]["total_reads"]
-        df.loc[sname, "total_bases_before"] = j["summary"]["before_filtering"]["total_bases"]
-        df.loc[sname, "q20_rate_before"] = j["summary"]["before_filtering"]["q20_rate"]
-        df.loc[sname, "q30_rate_before"] = j["summary"]["before_filtering"]["q30_rate"]
-        df.loc[sname, "read1_mean_length_before"] = j["summary"]["before_filtering"]["read1_mean_length"]
-        df.loc[sname, "total_reads_after"] = j["summary"]["after_filtering"]["total_reads"]
-        df.loc[sname, "total_bases_after"] = j["summary"]["after_filtering"]["total_bases"]
-        df.loc[sname, "q20_rate_after"] = j["summary"]["after_filtering"]["q20_rate"]
-        df.loc[sname, "q30_rate_after"] = j["summary"]["after_filtering"]["q30_rate"]
-        df.loc[sname, "read1_mean_length_after"] = j["summary"]["after_filtering"]["read1_mean_length"]
-        df.loc[sname, "reads_filtered_by_low_quality"] = j["filtering_result"]["low_quality_reads"]
-        df.loc[sname, "reads_filtered_by_too_many_N"] = j["filtering_result"]["too_many_N_reads"]
-        df.loc[sname, "reads_filtered_by_low_complexity"] = j["filtering_result"]["low_complexity_reads"]
-        df.loc[sname, "reads_filtered_by_too_short"] = j["filtering_result"]["too_short_reads"]
-        try:
-            df.loc[sname, "adapter_trimmed_reads"] = j["adapter_cutting"]["adapter_trimmed_reads"]
-            df.loc[sname, "adapter_trimmed_bases"] = j["adapter_cutting"]["adapter_trimmed_bases"]
-        except KeyError:
-            # SE data, no adapter trimming info
-            pass
-        try:
-            df.loc[sname, "read2_mean_length_before"] = j["summary"]["before_filtering"]["read2_mean_length"]
-            df.loc[sname, "read2_mean_length_after"] = j["summary"]["after_filtering"]["read2_mean_length"]
-        except KeyError:
-            # If SE, no read2 filtering
-            pass
-
-    # Drop na columns for SE data
-    df = df.dropna(axis=1)
-
-    # write human readable whitespace delimited.
-    report_text = df.to_string(float_format=lambda x: f"{x:.6f}") + "\n"
-    if logged_command:
-        report_text = f"CMD: {logged_command}\n\n{report_text}"
-    outfile.write_text(report_text, encoding="utf-8")
-    stats_json: dict[str, object] = {
-        "sample_summary": json.loads(
-            df.rename_axis("sample").reset_index().to_json(orient="records")
-        )
-    }
-    if logged_command:
-        stats_json["command"] = logged_command
-    json_outfile.write_text(json.dumps(stats_json, indent=2) + "\n", encoding="utf-8")
-    logger.info("trimming stats written to {} and {}", outfile, json_outfile)
+def write_stats_summary(snames: List[str], outdir: Path, logged_command: str | None = None):
+    """Summarize only this run's native reports; preserve every native report."""
+    rows = reporting.summarize_native(snames, outdir, _load_stats_json)
+    reporting.publish_summary(rows, outdir, logged_command)
 
 
+@reporting.record_trim_run
 def run_trimmer(
     fastqs: List[Path],
     outdir: Path,
@@ -605,6 +522,7 @@ def run_trimmer(
     force: bool,
     log_level: str,
     logged_command: str | None = None,
+    invocation: dict | None = None,
 ):
     cutsite_motifs = tuple(cutsite_motifs) if cutsite_motifs else None
     cutsite_motifs = _validate_user_cutsite_motifs(
@@ -628,6 +546,7 @@ def run_trimmer(
     # parse dict of {name: (r1, r2)}
     # fastq_dict = get_fastq_tuples_dict_from_paths_list(fastqs)
     fastq_dict = get_name_to_fastq_dict(fastqs, delim_str, delim_idx, suffix)
+    all_fastqs = dict(fastq_dict)
     fastq_dict, skipped_samples = _partition_usable_samples(fastq_dict)
     logger.info(
         "trim input preflight found {} usable samples and {} skipped empty samples",
@@ -647,6 +566,7 @@ def run_trimmer(
             f"Trim output artifact exists in outdir: {existing_artifact}. Use --force to overwrite."
         )
     outdir.mkdir(parents=True, exist_ok=True)
+    reporting.activate(all_fastqs, skipped_samples, outdir)
 
     # run at most this many concurrent jobs
     workers = max(1, cores // threads)
@@ -661,6 +581,8 @@ def run_trimmer(
         cores=cores,
         log_level=log_level,
     )
+    reporting.record_junctions((re1, re2), cutsite_motifs, disable_infer_cutsite_motifs,
+                               any(reporting.paired(paths) for paths in fastq_dict.values()))
     logger.info(
         "cutsite motifs set to R1={} R2={}",
         _format_motif_set(re1),
@@ -692,8 +614,9 @@ def run_trimmer(
             umi_tag_in_i5=umi_tag_in_i5,
             threads=threads,  # recommended >=3 since 2 are used for i/o
         )
+        cmd = _build_fastp_command(**kwargs)
+        reporting.record_command(sname, cmd)
         if not logged_fastp_command:
-            cmd = _build_fastp_command(**kwargs)
             logger.debug("CMD: {}", _format_fastp_command_template(cmd, sname))
             logged_fastp_command = True
         jobs[sname] = (trim_sample_with_fastp, kwargs)

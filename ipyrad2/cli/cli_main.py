@@ -345,6 +345,8 @@ def run_subcommand(args, _exit=True):
             force=args.force,
             log_level=args.log_level,
             logged_command=logged_command,
+            invocation={"kind": "cli", "argv": list(sys.argv),
+                        "display_argv": ["ipyrad2", *sys.argv[1:]]},
         )
         if _exit: sys.exit(0)  # noqa: E701
 
