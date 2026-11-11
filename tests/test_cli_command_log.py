@@ -115,3 +115,17 @@ def test_run_subcommand_passes_logged_command_to_core_runner(
     cli_main.run_subcommand(args, _exit=False)
 
     assert seen["logged_command"] == format_logged_command(argv)
+
+
+def test_assemble_invocation_keeps_every_expanded_bam_path(monkeypatch):
+    argv = ["assemble", "-d", *[f"RAD path/{i}.bam" for i in range(240)],
+            "-w", *[f"WGS/{i}.bam" for i in range(135)], "-r", "ref.fa", "-o", "OUT"]
+    args = cli_main.setup_parsers().parse_args(argv)
+    seen = {}
+    monkeypatch.setattr(cli_main.importlib, "import_module",
+                        lambda name, package=None: SimpleNamespace(run_assembler=lambda **kw: seen.update(kw)))
+    monkeypatch.setattr(cli_main.sys, "argv", ["/some/env/bin/ipyrad2", *argv])
+    cli_main.run_subcommand(args, _exit=False)
+    assert "truncated" in seen["logged_command"]
+    assert seen["invocation"]["argv"] == ["/some/env/bin/ipyrad2", *argv]
+    assert seen["invocation"]["display_argv"] == ["ipyrad2", *argv]
