@@ -16,6 +16,8 @@ $ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -b loci.bed -o OUT --max-tlen 200
 $ ipyrad2 assemble -d BAMS/RAD/*.bam -w BAMS/WGS/*.bam -r REF.fa --subsample keep.tsv -o OUT
 $ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -p pops.tsv -o OUT
 $ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa --rename rename.tsv -o OUT
+$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -o OUT --evidence snps
+$ ipyrad2 assemble -d BAMS/RAD/*.bam -w BAMS/WGS/*.bam -r REF.fa -o OUT --evidence loci
 """
 
 
@@ -181,8 +183,8 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
         help="File mapping BAM basenames to group names for population-level variant calls",
     )
     naming.add_argument(
-        "--export-genotype-evidence", action="store_true",
-        help="Also write an indexed .evidence.bcf with read depths and genotype likelihoods for retained SNPs",
+        "--evidence", choices=("none", "snps", "loci"), default="none",
+        help="Store no evidence, SNP evidence, or SNP plus all final-locus evidence. [default=%(default)s]",
     )
     naming.add_argument(
         "--rename", metavar="Path", type=Path,

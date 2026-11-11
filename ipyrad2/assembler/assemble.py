@@ -9,6 +9,8 @@ import shutil
 from pathlib import Path
 from loguru import logger
 import pandas as pd
+from .reporting import record_assembly_run, activate_run_reporting, record_inputs
+import time
 from .beds import (
     get_name_from_bam,
     get_names_from_bams,
@@ -72,7 +74,8 @@ from .variants import (
     load_variant_resolution_stats,
     write_vcf,
 )
-from .genotype_evidence import write_genotype_evidence
+from .evidence_hdf5 import write_snp_evidence_hdf5
+from .rad_evidence_hdf5 import write_rad_evidence_hdf5
 from .write_snps import write_snps_hdf5
 from ..utils.parallel import run_pipeline, run_with_pool, run_with_pool_iter
 from ..utils.exceptions import IPyradError
@@ -1374,6 +1377,7 @@ def _run_variant_stage(
     threads: int,
     log_level: str,
     wgs_samples: list[str] | None = None,
+    all_site_evidence: bool = False,
 ) -> Path:
     """Call, filter, and resolve joint variants inside the canonical loci BED."""
     vcf_dir = tmpdir / "vcfs"
@@ -1402,8 +1406,14 @@ def _run_variant_stage(
         tmpdir, chunk_count, source_bed=callable_loci_bed
     )
 
+    # Submit larger existing chunks first to reduce the final worker tail.
+    # Keep chunk boundaries/names and the coordinate-ordered concatenation fixed.
+    def target_bases(path):
+        return sum(int(row[2]) - int(row[1]) for line in path.read_text().splitlines()
+                   if (row := line.split()))
+
     jobs = {}
-    for chunk in chunk_beds:
+    for chunk in sorted(chunk_beds, key=target_bases, reverse=True):
         jobs[str(chunk)] = (
             get_group_called_variants_in_vcf_chunks,
             dict(
@@ -1415,6 +1425,7 @@ def _run_variant_stage(
                 min_map_q=min_map_q,
                 locus_chunk=chunk,
                 threads=chunk_threads,
+                **({"all_site_evidence": True} if all_site_evidence else {}),
             ),
         )
     run_with_pool(jobs, log_level, variant_workers, msg="Calling variants")
@@ -1547,7 +1558,7 @@ def _write_consensus_and_outputs(
     sample_layout_labels: dict[str, str] | None = None,
     sample_filter_stats: dict[str, dict[str, int]] | None = None,
     min_sample_observed_fraction: float = 0.10,
-    export_genotype_evidence: bool = False,
+    evidence: str = "none",
 ) -> None:
     """Write consensus sequences, final locus outputs, and the SNP database."""
     output_artifacts = _build_consensus_output_artifacts(name, tmpdir)
@@ -1761,6 +1772,61 @@ def _write_consensus_and_outputs(
     )
     logger.info("final sample depth summary ready for {} samples", len(sample_depth_stats))
 
+    evidence_started = time.monotonic()
+    with profile_stage("SNP evidence HDF5 writing"):
+        snp_summary = write_snp_evidence_hdf5(
+            database=outdir / f"{name}.hdf5",
+            raw_vcf=(tmpdir / "vcfs" / "loci.raw.vcf.gz") if evidence != "none" else None,
+            final_vcf=final_vcf,
+            provenance={"command": logged_command},
+            hard_masks=(
+                {sample: getattr(artifacts, attribute) for sample, artifacts in sample_artifacts.items()}
+                for attribute in ("paralog_mask_bed", "indel_overlap_mask_bed", "consensus_sample_mask_bed")
+            ),
+            shared_mask=output_artifacts.restriction_mask_bed,
+        )
+
+
+    snp_write_seconds = time.monotonic() - evidence_started
+    locus_summary = None
+    locus_write_seconds = None
+    pileup_bytes = None
+
+    if evidence == "loci":
+        native_regions = sorted((tmpdir / "beds").glob("chunk-*.bed"),
+                                key=lambda p: int(p.stem.split('-')[1]))
+        native_files = [tmpdir / "vcfs" / (p.stem + ".pileup.bcf") for p in native_regions]
+        pileup_bytes = sum(p.stat().st_size for p in native_files)
+        evidence_started = time.monotonic()
+        with profile_stage("All-RAD evidence HDF5 writing"):
+            locus_summary = write_rad_evidence_hdf5(
+                database=outdir / f"{name}.hdf5", bed=final_loci_bed,
+                reference=reference, native_files=native_files, native_regions=native_regions,
+                hard_masks=(
+                    {sample: getattr(artifacts, attribute) for sample, artifacts in sample_artifacts.items()}
+                    for attribute in ("paralog_mask_bed", "indel_overlap_mask_bed", "consensus_sample_mask_bed")
+                ), shared_mask=output_artifacts.restriction_mask_bed,
+                workers=max(1, min(2, (cores or workers) - 2)), log_level=log_level,
+                provenance={"command": logged_command, "scope": "all bases in final exported RAD BED",
+                            "capture": "native mpileup before call and variant-only filtering"})
+
+        locus_write_seconds = time.monotonic() - evidence_started
+
+    for summary in (snp_summary, locus_summary):
+        if summary is None:
+            continue
+        by_type = {}
+        for row in summary['per_sample']:
+            kind = (sample_type_labels or {}).get(row['sample'], 'unknown')
+            values = by_type.setdefault(kind, dict(cells=0, usable_pl_cells=0))
+            values['cells'] += row['cells']
+            values['usable_pl_cells'] += row['usable_pl_cells']
+        summary['by_sample_type'] = by_type
+    evidence_summary = dict(mode=evidence, status='not_requested' if evidence == 'none' else 'complete',
+                            snps=snp_summary, loci=locus_summary, temporary_pileup_bytes=pileup_bytes,
+                            timing_seconds=dict(snp_metadata_and_evidence_writing=snp_write_seconds,
+                                                all_locus_evidence_writing=locus_write_seconds))
+
     # Write the final human-readable assemble report after all final outputs
     # exist, so its counts reflect the exact BED, VCF, and HDF5 products.
     write_assemble_stats_report(
@@ -1781,20 +1847,11 @@ def _write_consensus_and_outputs(
         nsnps_written=nsnps_written,
         overlap_stats=load_variant_resolution_stats(tmpdir),
         mixed_run_summary=mixed_run_summary,
+        evidence_summary=evidence_summary,
     )
-    if export_genotype_evidence:
-        write_genotype_evidence(
-            raw_vcf=tmpdir / "vcfs" / "loci.raw.vcf.gz",
-            final_vcf=final_vcf,
-            out_bcf=outdir / f"{name}.evidence.bcf",
-            hard_masks=(
-                {sample: getattr(artifacts, attribute) for sample, artifacts in sample_artifacts.items()}
-                for attribute in ("paralog_mask_bed", "indel_overlap_mask_bed", "consensus_sample_mask_bed")
-            ),
-            shared_mask=output_artifacts.restriction_mask_bed,
-        )
 
 
+@record_assembly_run
 def run_assembler(
     rad_bams: List[Path],
     wgs_bams: List[Path] | None,
@@ -1837,8 +1894,11 @@ def run_assembler(
     logged_command: str | None = None,
     keep_tmpdir: bool = False,
     min_sample_observed_fraction: float = 0.10,
-    export_genotype_evidence: bool = False,
+    evidence: str = "none",
+    invocation: dict | None = None,
 ):
+    if evidence not in ("none", "snps", "loci"):
+        raise IPyradError("evidence must be one of: none, snps, loci.")
     # Normalize the top-level input/output paths first so later stages can
     # treat everything as concrete local files.
     loci_bed = loci_bed.expanduser().absolute() if loci_bed else None
@@ -1877,6 +1937,7 @@ def run_assembler(
     bed_dir.mkdir(exist_ok=True)
     phase_dir = tmpdir / "phase"
     phase_dir.mkdir(exist_ok=True)
+    activate_run_reporting()
 
     expanded_rad_bams = (
         [bam_file.expanduser().absolute() for bam_file in rad_bams] if rad_bams else []
@@ -2003,6 +2064,8 @@ def run_assembler(
                 "ignoring per-population minmap thresholds in --populations; assemble currently uses this file for grouped calling only"
             )
         logger.debug("normalized grouped-calling samples file: {}", group_samples_file)
+
+    record_inputs(bam_dict, wgs_dict, group_samples_file)
 
     bam_metadata = _collect_bam_metadata(all_dict, log_level, startup_workers)
     sample_layouts = {
@@ -2195,6 +2258,7 @@ def run_assembler(
             threads=threads,
             log_level=log_level,
             wgs_samples=sorted(wgs_dict) if (bam_dict and wgs_dict) else None,
+            **({"all_site_evidence": True} if evidence == "loci" else {}),
         )
 
     # [4] Sample masks:
@@ -2254,7 +2318,7 @@ def run_assembler(
             sname: ("PE" if sample_layouts[sname] else "SE")
             for sname in snames
         },
-        export_genotype_evidence=export_genotype_evidence,
+        evidence=evidence,
         sample_filter_stats={
             sname: {
                 "read_filter_diagnostics": filtered_analysis_results[sname].filter_diagnostics,

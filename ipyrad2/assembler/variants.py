@@ -976,6 +976,7 @@ def get_group_called_variants_in_vcf_chunks(
     min_base_q: int,
     threads: int,
     group_samples_file: Path | None = None,
+    all_site_evidence: bool = False,
 ):
     """Joint-call one loci BED chunk across all filtered analysis BAMs."""
     _require_existing_file(reference, "Reference FASTA")
@@ -994,7 +995,31 @@ def get_group_called_variants_in_vcf_chunks(
 
     # Compute genotype likelihoods only inside this chunk BED, then call and
     # keep just SNP and indel records in one per-chunk compressed VCF.
-    cmd1 = [
+    cmd1 = get_native_pileup_command(reference, bam_files, locus_chunk,
+                                     min_map_q, min_base_q, threads_mpileup)
+
+    cmd2 = [
+        BIN_BCF, "call", "-m", "-a", "GQ", "-G",
+        str(group_samples_file) if group_samples_file is not None else "-",
+        "--ploidy", "2", "-Ou", "--threads", "1",
+    ]
+    cmd3 = [BIN_BCF, "view", "-v", "snps,indels", "--threads", "1",
+            "-Oz", "-o", str(out_vcf_gz)]
+    if all_site_evidence:
+        # Calling can discard invariant PL. Capture the exact input first;
+        # calling then consumes these same bytes without a second pileup.
+        native = tmpdir / "vcfs" / (locus_chunk.stem + ".pileup.bcf")
+        capture_native_pileup(cmd1, native)
+        run_pipeline([cmd2 + [str(native)], cmd3])
+    else:
+        run_pipeline([cmd1, cmd2, cmd3])
+    return out_vcf_gz
+
+
+def get_native_pileup_command(reference, bam_files, locus_chunk,
+                              min_map_q, min_base_q, threads=1):
+    """Shared native evidence command; identical filters for capture and calls."""
+    return [
         BIN_BCF,
         "mpileup",
         # Assemble already enforces mate, mapping and alignment filters. Do not
@@ -1014,37 +1039,21 @@ def get_group_called_variants_in_vcf_chunks(
         "-R",
         str(locus_chunk),
         "--threads",
-        str(threads_mpileup),
+        str(max(1, threads)),
         "-Ou",
     ] + [str(i) for i in bam_files]
 
-    cmd2 = [
-        BIN_BCF,
-        "call",
-        "-m",
-        "-a",
-        "GQ",
-        "-G",
-        str(group_samples_file) if group_samples_file is not None else "-",
-        "--ploidy",
-        "2",
-        "-Ou",
-        "--threads",
-        "1",
-    ]
-    cmd3 = [
-        BIN_BCF,
-        "view",
-        "-v",
-        "snps,indels",
-        "--threads",
-        "1",
-        "-Oz",
-        "-o",
-        str(out_vcf_gz),
-    ]
-    run_pipeline([cmd1, cmd2, cmd3])
-    return out_vcf_gz
+def capture_native_pileup(command, output):
+    """Publish compressed temporary evidence only after native success."""
+    output = Path(output)
+    temporary = output.with_suffix(output.suffix + '.tmp')
+    if output.exists() or temporary.exists():
+        raise IPyradError(f'Native RAD evidence already exists: {output}')
+    cmd = list(command)
+    cmd[cmd.index('-Ou')] = '-Ob'
+    run_pipeline([cmd + ['-o', str(temporary)]])
+    temporary.replace(output)
+    return output
 
 
 def get_concat_chunk_vcfs(tmpdir: Path, threads: int):

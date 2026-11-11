@@ -14,6 +14,7 @@ from pathlib import Path
 from collections import Counter
 import numpy as np
 from loguru import logger
+from .reporting import publish_assembly_report
 from .sort_utils import assemble_sort_with_args
 from ..utils.seqs import comp
 from ..utils.jit_funcs import snp_count_numba, max_heteros_count_numba
@@ -855,6 +856,7 @@ def write_assemble_stats_report(
     nsnps_written: int,
     overlap_stats: dict[str, int],
     mixed_run_summary: dict[str, int] | None = None,
+    evidence_summary: dict | None = None,
 ) -> Path:
     """Write the final human-readable assemble summary plus JSON sidecar."""
     outpath = outdir / f"{name}.stats.txt"
@@ -894,6 +896,8 @@ def write_assemble_stats_report(
         "phylogenetically_informative_sites": int(
             site_totals["variant_phylo_informative_sites"]
         ),
+        "alignment_nonmissing_sample_bases": alignment_nonmissing_sample_bases,
+        "alignment_total_sample_bases": assembled_sites * len(snames),
         "alignment_matrix_occupancy_fraction": _safe_fraction(
             alignment_nonmissing_sample_bases,
             assembled_sites * len(snames),
@@ -962,23 +966,8 @@ def write_assemble_stats_report(
         ),
     }
 
-    sample_headers = [
-        "sample",
-        "sample_type",
-        "read_layout",
-        "reads_before_filtering",
-        "reads_after_filtering",
-        "loci_in_alignment",
-        "loci_in_alignment_fraction",
-        "shared_loci_with_nonzero_depth",
-        "shared_loci_with_nonzero_depth_fraction",
-        "mean_depth_shared_loci",
-        "median_depth_shared_loci",
-        "mean_depth_nonzero_shared_loci",
-        "median_depth_nonzero_shared_loci",
-        "masked_by_min_observed_fraction",
-        "masked_by_max_hetero_frequency",
-    ]
+    sample_headers = ["sample", "sample_type", "read_layout", "loci_in_alignment",
+                      "loci_in_alignment_fraction", "mean_depth_shared_loci", "median_depth_shared_loci"]
     sample_summary_data: list[dict[str, object]] = []
     sample_rows: list[list[str]] = []
     for sname in sorted(snames):
@@ -1024,21 +1013,11 @@ def write_assemble_stats_report(
         }
         sample_summary_data.append(sample_record)
         sample_rows.append([
-            sample_record["sample"],
-            sample_record["sample_type"],
-            sample_record["read_layout"],
-            _format_count(sample_record["reads_before_filtering"]),
-            _format_count(sample_record["reads_after_filtering"]),
-            _format_count(sample_record["loci_in_alignment"]),
-            _format_fraction(sample_record["loci_in_alignment_fraction"]),
-            _format_count(sample_record["shared_loci_with_nonzero_depth"]),
-            _format_fraction(sample_record["shared_loci_with_nonzero_depth_fraction"]),
-            _format_float(sample_record["mean_depth_shared_loci"]),
-            _format_float(sample_record["median_depth_shared_loci"]),
-            _format_float(sample_record["mean_depth_nonzero_shared_loci"]),
-            _format_float(sample_record["median_depth_nonzero_shared_loci"]),
-            _format_count(sample_record["masked_by_min_observed_fraction"]),
-            _format_count(sample_record["masked_by_max_hetero_frequency"]),
+            sname, sample_record['sample_type'], sample_record['read_layout'],
+            f"{loci_in_alignment:,} / {final_loci_written:,}",
+            _format_fraction(sample_record['loci_in_alignment_fraction']),
+            _format_float(sample_record['mean_depth_shared_loci']),
+            _format_float(sample_record['median_depth_shared_loci']),
         ])
 
     occupancy_headers = [
@@ -1125,26 +1104,36 @@ def write_assemble_stats_report(
         },
         "locus_occupancy": locus_occupancy_data,
     }
+    stats_json['definitions'] = {
+        'assembled_sites': 'Bases in final retained locus intervals; not genome size.',
+        'final_snp_sites_written': 'Retained SNP catalogue rows, not all native variant records.',
+        'alignment_matrix_occupancy_fraction': {'unit': 'sample_base_cell',
+            'numerator': alignment_nonmissing_sample_bases, 'denominator': assembled_sites * len(snames)},
+        'loci_in_alignment_fraction': {'unit': 'sample_locus', 'denominator': final_loci_written},
+        'read_filter_diagnostics': 'Alignment-record failures before paralog/locus filtering; independent failures overlap, first failures are exclusive.',
+        'mean_depth_shared_loci': 'Mean of per-locus mean depth across final shared loci, including uncovered bases as zero within each locus; loci weighted equally.',
+        'median_depth_shared_loci': 'Median of per-locus mean depths, not median per-base depth.',
+        'evidence_cells': 'SNP summaries use samples x retained SNP rows; all-locus summaries use samples x native records. A base can have multiple records.',
+        'complete_field_cells': 'Complete meaningful entries (excluding SNP padding) in the stored field, regardless of status; all-locus masked raw values remain stored.',
+        'usable_pl_cells': 'Positive DP, complete PL and permitted status: PASS or SNP NoHardCall. This is not a posterior or downstream eligibility decision.',
+        'storage': 'Physical dataset allocation excludes group metadata and some variable-length payload overhead; whole-file bytes include all content.',
+        'timing_seconds': 'Observed operation durations, not added runtime relative to a separate lean run.',
+    }
     if logged_command:
         stats_json["command"] = logged_command
     if mixed_data is not None:
         stats_json["mixed_rad_wgs_diagnostics"] = mixed_data
 
     lines: list[str] = []
-    if stats_json["read_filter_diagnostics"]:
-        lines.extend(["# Read Filter Diagnostics",
-                      "# Counts are alignment records, before paralog/locus filtering.",
-                      "# Independent failures overlap; first failures are exclusive in declared order.",
-                      "Sample\tFilter\tIndependent failures\tFirst failures"])
-        for sname, diag in stats_json["read_filter_diagnostics"].items():
-            for key in diag["filter_order"]:
-                lines.append(f"{sname}\t{key}\t{diag['independent_failures'][key]}\t{diag['first_failure'][key]}")
-        lines.append("")
     _append_key_value_section(
         lines,
         "Assemble Summary",
         [
-            (_human_stats_label("samples"), _format_count(summary_data["samples"])),
+            (_human_stats_label("samples"),
+             f"{len(snames):,} ({sum(sample_types.get(n) == 'RAD' for n in snames):,} RAD; "
+             f"{sum(sample_types.get(n) == 'WGS' for n in snames):,} WGS)"),
+            ("Nonmissing alignment cells",
+             f"{alignment_nonmissing_sample_bases:,} / {assembled_sites * len(snames):,}"),
             (
                 _human_stats_label("shared_loci_before_min_sample_coverage_filter"),
                 _format_optional_count(
@@ -1275,13 +1264,33 @@ def write_assemble_stats_report(
         [_human_stats_label(header) for header in occupancy_headers],
         occupancy_rows,
     )
+    lines += ['# Sample Depth Definitions',
+              'Mean/median depth summarize per-locus mean depths across final shared loci.',
+              'Within each locus, uncovered bases contribute zero; loci receive equal weight.',
+              'Additional nonzero-locus depth summaries are retained in stats.json.', '']
+    _append_table_section(lines, 'Sample Read Counts',
+        ['Sample', 'Reads before filtering', 'Reads after filtering'],
+        [[r['sample'], _format_count(r['reads_before_filtering']), _format_count(r['reads_after_filtering'])]
+         for r in sample_summary_data])
+    _append_table_section(lines, 'Sample Mask Counts',
+        ['Sample', 'Masked by minimum observed fraction threshold', 'Masked by sample heterozygosity threshold'],
+        [[r['sample'], _format_count(r['masked_by_min_observed_fraction']), _format_count(r['masked_by_max_hetero_frequency'])]
+         for r in sample_summary_data])
+    if stats_json["read_filter_diagnostics"]:
+        lines.extend(["# Read Filter Diagnostics",
+                      "# Counts are alignment records, before paralog/locus filtering.",
+                      "# Independent failures overlap; first failures are exclusive in declared order.",
+                      "Sample\tFilter\tIndependent failures\tFirst failures"])
+        for sname, diag in stats_json["read_filter_diagnostics"].items():
+            for key in diag["filter_order"]:
+                lines.append(f"{sname}\t{key}\t{diag['independent_failures'][key]}\t{diag['first_failure'][key]}")
+        lines.append("")
     report_text = "\n".join(lines).rstrip() + "\n"
-    if logged_command:
-        report_text = f"CMD: {logged_command}\n\n{report_text}"
-    outpath.write_text(report_text, encoding="utf-8")
-    json_path.write_text(json.dumps(stats_json, indent=2) + "\n", encoding="utf-8")
-    logger.info("wrote assemble summary report")
-    logger.debug("assemble stats written to {} and {}", outpath, json_path)
+    if evidence_summary is not None:
+        stats_json['evidence'] = evidence_summary
+    publish_assembly_report(outdir, name, stats_json, report_text)
+    logger.info("assemble summary statistics ready")
+    logger.debug("assemble stats destinations: {} and {}", outpath, json_path)
     return outpath
 
 

@@ -75,6 +75,7 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
         "--max-sample-hetero-frequency",
         "--subsample",
         "--populations",
+        "--evidence",
         "--rename",
         "--masks",
         "-c, --cores",
@@ -106,6 +107,10 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
     assert "BED of loci to assemble instead of delimiting shared loci from RAD samples." in help_text
     assert "File whose first column selects BAM filenames or sample names; extra columns ignored" in help_text
     assert "File mapping BAM basenames to group names for population-level variant calls" in help_text
+    assert "--evidence {none,snps,loci}" in help_text
+    assert "Store no evidence, SNP evidence, or SNP plus all final-locus evidence. [default=none]" in help_text
+    assert "--all-site-evidence" not in help_text
+    assert "--no-genotype-evidence" not in help_text
     assert "File mapping BAM basenames to new names for outputs; overrides BAM headers" in help_text
     assert "Optional site patterns to mask in final assembled sequences. [default=None]" in help_text
     assert "Keep the assemble tmpdir after success; useful for testing." in help_text
@@ -193,6 +198,9 @@ def test_assemble_parser_defaults_match_current_cli() -> None:
     assert args.max_sample_hetero_frequency == 0.10
     assert args.subsample is None
     assert args.populations is None
+    assert args.evidence == "none"
+    assert not hasattr(args, "genotype_evidence")
+    assert not hasattr(args, "all_site_evidence")
     assert args.rename is None
     assert args.masks is None
     assert args.cores == 6
@@ -219,3 +227,53 @@ def test_assemble_parser_rejects_removed_rename_bams_flag() -> None:
         setup_parsers().parse_args(
             ["assemble", "-d", "rad.bam", "-r", "ref.fa", "--rename-bams", "rename.tsv"]
         )
+
+
+@pytest.mark.parametrize("scope", ["none", "snps", "loci"])
+def test_assemble_evidence_scopes(scope: str) -> None:
+    args = setup_parsers().parse_args(
+        ["assemble", "-d", "rad.bam", "-r", "ref.fa", "--evidence", scope]
+    )
+    assert args.evidence == scope
+
+
+@pytest.mark.parametrize("options", [
+    ["--evidence", "rad"], ["--evidence", "all"], ["--evidence"],
+    ["--all-site-evidence"], ["--no-genotype-evidence"],
+])
+def test_assemble_rejects_invalid_or_replaced_evidence_options(options) -> None:
+    with pytest.raises(SystemExit) as exc:
+        setup_parsers().parse_args(["assemble", "-d", "rad.bam", "-r", "ref.fa", *options])
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("scope", [None, "none", "snps", "loci"])
+def test_assemble_dispatches_evidence_scope(monkeypatch, scope) -> None:
+    from types import SimpleNamespace
+    import ipyrad2.cli.cli_main as cli_main
+
+    argv = ["assemble", "-d", "rad.bam", "-r", "ref.fa"]
+    if scope is not None:
+        argv += ["--evidence", scope]
+    args = setup_parsers().parse_args(argv)
+    observed = {}
+    monkeypatch.setattr(cli_main.importlib, "import_module",
+                        lambda *args, **kwargs: SimpleNamespace(run_assembler=lambda **kw: observed.update(kw)))
+    monkeypatch.setattr(cli_main.sys, "argv", ["ipyrad2", *argv])
+    cli_main.run_subcommand(args, _exit=False)
+    assert observed["evidence"] == (scope or "none")
+    assert "genotype_evidence" not in observed and "all_site_evidence" not in observed
+
+
+def test_assembler_api_defaults_to_lean_and_rejects_unknown_evidence_before_io(tmp_path) -> None:
+    import inspect
+    from ipyrad2.assembler.assemble import run_assembler
+    from ipyrad2.utils.exceptions import IPyradError
+
+    params = inspect.signature(run_assembler).parameters
+    assert params["evidence"].default == "none"
+    kwargs = {name: None for name, param in params.items() if param.default is inspect.Parameter.empty}
+    kwargs.update(outdir=tmp_path / "unused", evidence="rad")
+    with pytest.raises(IPyradError, match="evidence must be one of: none, snps, loci"):
+        run_assembler(**kwargs)
+    assert not (tmp_path / "unused").exists()

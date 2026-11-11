@@ -1200,6 +1200,8 @@ def test_write_consensus_and_outputs_logs_locus_database_and_snp_database_summar
             "overlapping_indel_bp_masked": 0,
         },
     )
+    # This orchestration test mocks the HDF5 writer; evidence I/O is tested separately.
+    monkeypatch.setattr("ipyrad2.assembler.assemble.write_snp_evidence_hdf5", lambda **kwargs: None)
     monkeypatch.setattr(
         "ipyrad2.assembler.assemble.write_snps_hdf5",
         lambda name, outdir, snames, reference, **kwargs: 3,
@@ -1284,7 +1286,7 @@ def test_run_variant_stage_caps_inflight_jobs_to_assemble_worker_budget(
         chunk0 = tmpdir / "beds" / "chunk-0.bed"
         chunk1 = tmpdir / "beds" / "chunk-1.bed"
         chunk0.write_text("chr1\t0\t10\n", encoding="utf-8")
-        chunk1.write_text("chr1\t10\t20\n", encoding="utf-8")
+        chunk1.write_text("chr1\t10\t30\n", encoding="utf-8")
         return [chunk0, chunk1]
 
     def _fake_run_with_pool(jobs, log_level, max_workers=None, msg="Processing"):
@@ -1321,6 +1323,9 @@ def test_run_variant_stage_caps_inflight_jobs_to_assemble_worker_budget(
     assert observed["source_bed"] == tmpdir / "beds" / "loci.callable.variant.bed"
     first_job = next(iter(observed["jobs"].values()))
     assert first_job[1]["threads"] == 2
+    assert first_job[1]["locus_chunk"] == tmpdir / "beds" / "chunk-1.bed"
+    assert (tmpdir / "beds" / "chunk-0.bed").read_text() == "chr1\t0\t10\n"
+    assert (tmpdir / "beds" / "chunk-1.bed").read_text() == "chr1\t10\t30\n"
 
 
 @pytest.mark.parametrize("use_group_samples_file", [False, True])
@@ -2989,6 +2994,8 @@ def test_run_assembler_uses_cleaned_calling_bams_for_variants_and_analysis_bams_
             "indel_records_inspected": 0,
         },
     )
+    # This orchestration test mocks the HDF5 writer; evidence I/O is tested separately.
+    monkeypatch.setattr("ipyrad2.assembler.assemble.write_snp_evidence_hdf5", lambda **kwargs: None)
     monkeypatch.setattr(
         "ipyrad2.assembler.assemble.write_snps_hdf5",
         lambda name, outdir, snames, reference, **kwargs: (
@@ -5454,7 +5461,10 @@ def test_write_assemble_stats_report_writes_single_text_report(tmp_path: Path) -
     report_json = json.loads((tmp_path / "assembly.stats.json").read_text(encoding="utf-8"))
     assert outpath == tmp_path / "assembly.stats.txt"
     assert (tmp_path / "assembly.stats.json").exists()
-    assert report.startswith("CMD: ipyrad2 assemble -d a.bam -r ref.fa -o OUT\n\n")
+    assert report.startswith("# Run\n")
+    assert "Command: ipyrad2 assemble -d a.bam -r ref.fa -o OUT\n" in report
+    assert report.index("# Assemble Summary") < report.index("# Read Filter Diagnostics")
+    assert report_json["stats_schema_version"] == "2.0"
     assert "# Assemble Summary" in report
     assert "# Locus Filtering" in report
     assert "# Sample Masking" in report

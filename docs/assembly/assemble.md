@@ -163,6 +163,22 @@ Use these when you need grouped calling, stable sample names that differ from BA
 
 `assemble` uses both multithreaded tools and pooled job stages, so `cores` and `threads` together determine how much parallel work can happen at once.
 
+Joint calling submits the larger existing BED chunks first, with the same chunk
+boundaries and concurrency limit (`cores // threads`). Increasing capture
+concurrency can substantially increase memory use because each capture reads
+every sample's BAM.
+
+For `--evidence loci`, native records are parsed in ordered batches while a single
+process writes the HDF5 database. Large panels use up to
+`min(2, max(1, cores - 2))` parser workers, reserving capacity for the writer and
+native input stream. Panels smaller than 250,000 sample-by-base cells use the
+same parser serially to avoid process startup overhead. Pending and completed
+batches together are limited to twice the parser-worker count. Each batch targets
+at most 512 records and 8 MiB of raw/decoded payload; a larger individual record
+is kept intact. These are buffer limits, not a limit on total process memory.
+Compressed HDF5 dataset handles remain open so partial chunks can stay cached
+between writes. No worker writes concurrently to the HDF5 file.
+
 
 ## Outputs
 
@@ -171,44 +187,129 @@ The main final outputs are:
 - `NAME.loci`
 - `NAME.hdf5`
 - `NAME.vcf.gz`
-- `NAME.evidence.bcf` and its CSI index when `--export-genotype-evidence` is enabled
+- Optional native evidence inside `NAME.hdf5`; no separate BCF is required
 - `NAME.bed`
 - `NAME.stats.txt`
 
 The final HDF5 is the main downstream project database.
 See the [Writing Outputs](writing-outputs) and [Analysis][analysis] sections for example usage.
 
-Use `--export-genotype-evidence` to preserve the caller's read depth (`DP`),
-allele depths (`AD`), genotype quality (`GQ`), and phred-scaled genotype
-likelihoods (`PL`) alongside the final hard call (`GT`). The companion BCF
-covers retained SNP records whose position and ordered alleles match the
-original caller record. Assembly reports how many records it skips.
+The `--evidence` option controls which native evidence is retained:
 
-`FORMAT/FT` distinguishes a retained hard call (`PASS`), covered evidence
-without a hard call (`NoHardCall`), absent read support (`NoRead`), and an
-explicit exclusion (`HardMask`). Excluded cells have missing evidence.
-Likelihoods describe support for genotypes given the reads. To turn them into
-posterior probabilities, supply a genotype prior in the downstream analysis.
-Positions absent from this SNP-only file have no exported evidence. The
-standard VCF, HDF5, and locus files use the usual calling and filtering
-settings with or without the option.
+| Mode | Stored evidence | HDF5 format |
+|---|---|---|
+| `none` (default) | Lean database with standard calls, sequences and ordered SNP alleles; no evidence arrays | 3.0 |
+| `snps` | Native `DP`, `AD`, available `GQ`, and `PL` at retained SNPs | 3.0 |
+| `loci` | SNP evidence plus pre-call evidence at every base in final locus BEDs, including invariant and uncovered positions | 4.0 |
+
+Choose `snps` to preserve evidence for SNP-catalogue uncertainty analyses. Choose `loci` to retain the broader evidence needed for future analyses
+across all locus bases. The standard VCF, locus sequences, existing HDF5 call
+arrays and hard-call analyses use identical calling and masking rules in all
+three modes. No permanent companion BCF is needed. These values replace the
+former `--no-genotype-evidence` and `--all-site-evidence` flags.
+
+```bash
+# Default lean database; --evidence none is equivalent.
+ipyrad2 assemble -d BAMS/*.bam -r REF.fa -o OUT
+
+# Preserve SNP evidence for uncertainty analyses.
+ipyrad2 assemble -d BAMS/*.bam -r REF.fa -o OUT_SNPS --evidence snps
+```
+
+Evidence is joined to retained SNPs by exact position and ordered alleles.
+`NoMatch` marks ambiguous or unmatched native records; their likelihoods remain
+missing. `PASS`, `NoHardCall`, `NoRead`, `HardMask`, and `NoLikelihood` distinguish
+usable calls, covered evidence without a hard call, absent coverage, explicit
+exclusion, and covered cells without complete native PL. Hard-masked cells have
+no exported evidence. Missing likelihoods are never replaced with confident
+reference genotypes. PL describes read evidence, not posterior probability.
+Native GQ belongs to the original calling model and may reflect population
+priors; it is not recalculated when exporting a different hard-call mask.
+
+Standard snpex outputs and seqex alignment extraction continue to work with all
+three settings. See the [HDF5 v3 specification](../development/hdf5-v3.md).
+
+With `snps`, evidence is conditional on the retained SNP catalogue. Invariant-site
+likelihoods are outside that scope. `loci` preserves evidence across the final
+locus intervals, but does not remove locus-selection ascertainment or itself
+implement an uncertainty-aware per-base diversity estimator.
 
 ## Stats
 
-`NAME.stats.txt` is the human-readable final summary. It includes counts such as:
+`NAME.stats.txt` and `NAME.stats.json` describe the same completed run. The text
+report starts with run information and the assembly summary, followed by evidence
+storage, locus filtering, compact sample tables, occupancy, and detailed read
+filter diagnostics. Statistics use schema version **2.0**, independent of the
+HDF5 format version.
 
-- number of samples
-- loci after delimiting
-- loci after paralog filtering
-- final loci written
-- final loci retained as a fraction of delimited loci
-- assembled sites
-- final SNP sites written
-- variable and phylogenetically informative sites
-- alignment occupancy fraction
-- overlapping-indel masking totals
+The command is one physical line, capped at 120 characters. A short command is
+shell-quoted. Longer commands replace BAM lists with counts and, if necessary,
+truncate at argument boundaries:
 
-`assemble` also keeps a named working directory:
+```text
+Command (summary): ipyrad2 assemble -d <240 BAMs> -w <135 BAMs> --evidence loci ...
+```
+
+This summary is for display, not execution. `stats.json` preserves the full
+`run.invocation.argv` array, a shell-quoted reconstruction in
+`run.invocation.command`, the working directory, and all resolved assembly
+parameters, including defaults and full input paths. The argument array records
+what Python received after shell expansion; it cannot recover the original glob
+or shell syntax. Python API runs record their resolved parameters and leave CLI
+arguments null. Selected sample-to-BAM paths, normalized population assignments,
+and SHA256 fingerprints of supplied population/rename/subsample/BED configuration
+files are also recorded.
+
+### Evidence summaries
+
+Every report identifies the requested `--evidence none|snps|loci` mode. With
+`none`, evidence is `not_requested`; unavailable counts are JSON `null` and text
+`N/A`, not zeros. With `snps` or `loci`, the report includes:
+
+- retained SNP positions and exact native-record matches, including unmatched
+  positions that remain in the catalogue with missing evidence;
+- mutually exclusive sample-cell statuses (`PASS`, `NoHardCall`, `NoRead`,
+  `HardMask`, `NoMatch`, `NoLikelihood`, as applicable);
+- usable PL counts, including covered SNP cells without a hard call, plus separate
+  complete AD/DP/GQ/PL availability counts;
+- per-sample evidence counts in JSON and compact RAD/WGS summaries in text;
+- physical evidence dataset allocation, whole HDF5 file size, evidence-writing
+  durations, and temporary native pileup BCF size/disposition when applicable.
+
+For `loci`, base counts (with records, without records, non-ACGT reference) are
+separate from native record counts: a base can have multiple records. Literal
+symbolic alleles are counted, and raw values behind hard masks remain available
+for audit but are not usable evidence. Complete field availability can therefore
+exceed usable evidence. GQ is reported only where the native caller supplied it;
+missing GQ is never manufactured. No posterior probabilities are stored, and
+uncovered cells are not called homozygous reference. These summaries do not
+change the standard genotypes or filters.
+
+All cell fractions carry explicit denominators. SNP counts use samples × retained
+SNP positions; locus evidence counts use samples × native records. Base counts
+use the final retained locus BED, not the whole reference genome. Mean sample
+depth is the mean of per-locus mean depths, with uncovered bases contributing zero
+within each locus and loci weighted equally. It is not a length-weighted genome
+mean. Native field availability is not an accuracy or calibration measure.
+
+Dataset storage excludes group metadata and some variable-length payload
+allocation; whole-file size includes it. Timings measure the selected operations,
+not additional runtime compared with a separate lean assembly. The SNP-writing
+timer includes ordered-allele metadata and is measured even in lean mode. Total
+assembly time includes temporary-file cleanup and ends before report publication.
+No counterfactual lean size/runtime is estimated from a single run.
+
+Reports are published after evidence storage and temporary-file cleanup succeed.
+Caught failures after preparing the output directory instead write an explicit
+`FAILED` run report, without a completed biological summary. Early validation or
+overwrite refusals leave previous reports untouched. Each report file is replaced
+atomically; forced termination or a filesystem failure can still prevent reporting.
+The HDF5 stores compact run/evidence metadata in `assembly_report/summary_json`,
+so provenance travels with the database. This does not alter the biological arrays
+or HDF5 format version. Embedded metadata omits filesystem byte counts to avoid
+self-referential sizes. See the [stats schema](../development/assembly-stats.md).
+
+`assemble` uses a named working directory (retained with `--keep-tmpdir`):
 
 - `OUT/NAME_tmpdir/`
 
@@ -394,3 +495,24 @@ clipping does not. Single-end data ignore the paired geometry/template-length
 criteria. Diagnostics use one bounded-memory SAM scan in place of the previous
 input-count scan; filtering still uses the same samtools command and defaults.
 SAM parsing adds CPU/pipe traffic compared with count-only inspection.
+
+
+### Optional evidence at every locus base
+
+Use `--evidence loci` to retain native pre-call evidence for every position
+in the final exported RAD BED, including invariant and uncovered bases. This
+writes HDF5 format 4.0, with the existing SNP evidence plus a separate all-site
+group. Canonical genotype calls, alignments and filtering are unchanged.
+
+```bash
+ipyrad2 assemble -d RAD/*.bam -w WGS/*.bam -r reference.fa \
+  -o assembly -n mixed --evidence loci
+```
+
+The option adds temporary pileup files and database storage. Temporary files
+are removed normally; `--keep-tmpdir` retains them. This includes the SNP evidence
+table; the default `none` mode remains lean HDF5 v3.
+Uncovered and masked positions do not become confident reference calls.
+Symbolic native alleles retain their meaning. Storing all-site evidence does not
+itself provide an all-base diversity estimator. See the
+[format specification](../development/rad-site-evidence.md).
