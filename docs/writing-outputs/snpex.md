@@ -170,3 +170,28 @@ ipyrad2 snpex \
 - [Writing Outputs](./index.md)
 - [seqex](./seqex.md)
 - [Analysis Guide](../analyses/index.md)
+
+## Native-evidence BCF export
+
+`-O bcf` writes `NAME.bcf` and `NAME.bcf.csi` from an assembly made with
+`--evidence snps` (HDF5 v3) or `--evidence loci` (HDF5 v4).
+The BCF contains the same selected samples
+and filtered/subsampled SNPs as the core matrices, with original coordinates,
+ordered alleles, and `GT:DP:AD:GQ:PL:FT`. Native evidence is not recalculated.
+`PL` contains genotype likelihoods, not posterior probabilities. This export
+does not write a `GP` field or apply a population prior; posterior summaries
+are available separately through `popgen --genotype-mode likelihoods`.
+`FT=ExportMask` identifies hard calls additionally masked by snpex while their
+read evidence remains available. Assembly hard masks continue to suppress
+evidence. BCF export cannot be combined with imputation or a synthetic
+`assembly_reference_sequence` row. `--force` applies to both BCF and index.
+
+```bash
+ipyrad2 snpex -d OUT/assembly.hdf5 -o SNP_EXPORT -O bcf --no-subsample
+```
+
+Without `--no-subsample`, the usual one-SNP-per-locus selection applies. Other
+output formats work unchanged on lean databases assembled with the default
+`--evidence none`; BCF export reports an error explaining that `snps` or `loci`
+evidence is required. Even with `loci` evidence, this exporter selects SNPs;
+it does not export invariant-site records.

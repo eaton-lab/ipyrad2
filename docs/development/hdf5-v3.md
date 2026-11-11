@@ -58,3 +58,9 @@ reads, allele counts, final GT and a `usable_PL` mask. Consumers must retain
 the mask and distinguish likelihoods from posteriors. Absent records/invariant likelihoods cannot be reconstructed from the SNP
 group. The opt-in [HDF5 v4 RAD-site group](rad-site-evidence.md) captures native
 evidence upstream; its symbolic alleles need an appropriate separate consumer.
+
+`snpex -O bcf` writes filtered calls plus native evidence. It does not infer a
+new genotype, recompute GQ, infer phase, or reorder the native allele catalogue.
+Additional snpex call masking is labeled ExportMask. The usual biallelic SNP
+filter still applies to snpex; the HDF5 reader itself supports multiallelic SNPs.
+Imputation and synthetic reference samples are rejected for evidence export.

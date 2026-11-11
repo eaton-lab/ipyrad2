@@ -1206,6 +1206,7 @@ def run_snps_extracter(
     write_fasta: bool = False,
     write_treemix: bool = False,
     write_eems: bool = False,
+    write_bcf: bool = False,
     impute_method: str | None = None,
 ) -> None:
     from ..methods.common import (
@@ -1246,6 +1247,14 @@ def run_snps_extracter(
         paths["eems"] = outdir / f"{name}.eems"
 
     normalized_impute = normalize_impute_method(impute_method)
+    if write_bcf:
+        from ..evidence import GenotypeEvidenceReader, export_evidence_bcf
+        if normalized_impute is not None:
+            raise IPyradError("BCF evidence export does not support imputation; export imputed matrices separately.")
+        with GenotypeEvidenceReader(data):
+            pass
+        paths["bcf"] = outdir / f"{name}.bcf"
+        paths["bcf_index"] = outdir / f"{name}.bcf.csi"
 
     existing = next((path for path in paths.values() if path.exists()), None)
     if existing is not None and not force:
@@ -1267,6 +1276,10 @@ def run_snps_extracter(
         include_reference=include_reference,
         cores=cores,
     )
+    if write_bcf:
+        with GenotypeEvidenceReader(data) as reader:
+            if any(s not in reader.names for s in tool.snames):
+                raise IPyradError("BCF evidence export cannot include a synthetic reference sample.")
     tool.run(log_level=log_level)
     view = tool.get_view(
         subsample=subsample,
@@ -1298,6 +1311,12 @@ def run_snps_extracter(
     write_sample_data_summary(paths["sample_data_summary"], prepared.sample_data_summary)
 
     written_formats = ["genos", "snps", "snpsmap", "samples", "sample_data_summary"]
+
+    if write_bcf:
+        export_evidence_bcf(database=data, output=paths["bcf"], samples=tool.snames,
+                            snpsmap=prepared.view.snpsmap, genotypes=prepared.genos, force=force)
+        written_formats.append("bcf")
+        logger.info("wrote indexed native-evidence BCF to {}", paths["bcf"])
 
     if write_plink:
         plink_paths = tool.write_plink(

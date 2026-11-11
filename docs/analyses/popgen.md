@@ -357,3 +357,69 @@ Missing data matters a great deal for the SFS, especially in the rare-allele bin
 - [assemble](../assembly/assemble.md)
 - [Writing Outputs](../writing-outputs/index.md)
 - [Files and Data Types](../getting-started/files-and-data-types.md)
+
+## Native genotype-likelihood mode (HDF5 v3/v4)
+
+Use `--genotype-mode likelihoods` to summarize native SNP likelihoods from an
+assembly made with `--evidence snps` or `--evidence loci`. The default lean
+assembly (`--evidence none`) has no likelihood arrays; likelihood mode reports
+an error with the required assembly options. Standard `popgen` behavior remains
+`calls` and works with all three evidence settings.
+
+```bash
+ipyrad2 popgen -d assembly.hdf5 -o POPGEN_EVIDENCE \
+  --genotype-mode likelihoods --stats heterozygosity \
+  --evidence-prior population --imap populations.tsv
+```
+
+The first evidence-aware release supports biallelic SNP-catalogue heterozygosity
+and gene diversity. `--stats all` selects this supported subset in likelihood
+mode. It does not estimate per-base nucleotide diversity, FST, SFS, or inbreeding,
+and does not support windows or MAF filtering in this mode. These summaries are
+conditional on the retained SNP catalogue, not all bases within RAD loci.
+The `loci` storage option also retains invariant-site evidence, but this popgen
+mode still reads the SNP table and has the same catalogue scope.
+
+Two priors are available:
+
+- `uniform` (default): equal prior probability for the three genotypes of each
+  individual, independently. No population information changes the posterior.
+- `population`: Hardy–Weinberg genotype probabilities conditional on an unknown
+  allele frequency, integrated under a Beta(1,1) prior using all usable individual
+  likelihoods in the specified group. This requires an explicit `--imap`.
+  Group membership is a biological assumption; species labels alone do not
+  establish an appropriate randomly mating population. No dropout correction is
+  applied.
+
+Each row must represent a distinct individual. Supply `--individual-map` with
+`sample<TAB>individual` entries to check known duplicates. Replicate assays of
+one individual must be combined before analysis; this mode rejects duplicate
+individuals instead of counting them twice. Without this file, sample rows are
+assumed to represent distinct individuals.
+
+Zero-read, hard-masked, unmatched, and incomplete-likelihood cells remain
+missing. Valid likelihoods can contribute even when a discrete genotype is
+missing. Coverage, depth, population minimum coverage, and sample missingness
+filters use usable likelihoods, rather than hard calls. `--subsample-unlinked`
+selects one retained SNP per locus. The synthetic reference cannot participate.
+No database, genotype, or alignment is modified.
+Posterior probabilities are calculated internally for these summaries; this
+mode does not export a per-sample, per-site `GP` matrix or posterior genotype
+calls. Use `snpex -O bcf` to export the underlying native `PL` likelihoods.
+
+The sample table reports summed posterior heterozygote probabilities, their
+mean over usable SNP cells, mean expected alternative-allele dosage, and the
+numbers of canonical calls and heterozygotes on those same cells. The population
+table reports per-site mean heterozygosity, mean alternative-allele frequency,
+its model-based variance, and sampled-chromosome SNP gene diversity:
+
+`E[2 K (M-K) / (M (M-1)) | reads]`, where `M = 2 × usable individuals`.
+
+This integrates the joint allele-count moments, including the dependence induced
+by a shared population frequency. It is not calculated by treating expected
+dosages as observed allele counts. The reported frequency variance is model
+uncertainty at a site, not a confidence interval across loci. The manifest
+records priors, filters, missingness rules and the SNP-catalogue scope. A higher
+posterior heterozygosity estimate does not by itself demonstrate improved
+accuracy; comparisons require known truth or clearly identified observational
+comparators and matched retention.

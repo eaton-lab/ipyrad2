@@ -202,7 +202,8 @@ The `--evidence` option controls which native evidence is retained:
 | `snps` | Native `DP`, `AD`, available `GQ`, and `PL` at retained SNPs | 3.0 |
 | `loci` | SNP evidence plus pre-call evidence at every base in final locus BEDs, including invariant and uncovered positions | 4.0 |
 
-Choose `snps` to preserve evidence for SNP-catalogue uncertainty analyses. Choose `loci` to retain the broader evidence needed for future analyses
+Choose `snps` for SNP-catalogue uncertainty analyses and evidence-rich BCF
+exports. Choose `loci` to retain the broader evidence needed for future analyses
 across all locus bases. The standard VCF, locus sequences, existing HDF5 call
 arrays and hard-call analyses use identical calling and masking rules in all
 three modes. No permanent companion BCF is needed. These values replace the
@@ -212,7 +213,7 @@ former `--no-genotype-evidence` and `--all-site-evidence` flags.
 # Default lean database; --evidence none is equivalent.
 ipyrad2 assemble -d BAMS/*.bam -r REF.fa -o OUT
 
-# Preserve SNP evidence for uncertainty analyses.
+# Preserve SNP evidence for likelihood analyses or BCF export.
 ipyrad2 assemble -d BAMS/*.bam -r REF.fa -o OUT_SNPS --evidence snps
 ```
 
@@ -226,8 +227,16 @@ reference genotypes. PL describes read evidence, not posterior probability.
 Native GQ belongs to the original calling model and may reflect population
 priors; it is not recalculated when exporting a different hard-call mask.
 
-Standard snpex outputs and seqex alignment extraction continue to work with all
-three settings. See the [HDF5 v3 specification](../development/hdf5-v3.md).
+To export an indexed BCF for other programs:
+
+```bash
+ipyrad2 snpex -d OUT/NAME.hdf5 -o SNP_EXPORT --no-subsample -O bcf
+```
+
+This uses snpex's usual sample/site filters; omit `--no-subsample` to retain
+one SNP per locus. BCF export requires evidence and disallows imputation and a
+synthetic reference sample. Other snpex outputs and seqex alignment extraction
+continue to work with all three settings. See the [HDF5 v3 specification](../development/hdf5-v3.md).
 
 With `snps`, evidence is conditional on the retained SNP catalogue. Invariant-site
 likelihoods are outside that scope. `loci` preserves evidence across the final
@@ -513,6 +522,7 @@ The option adds temporary pileup files and database storage. Temporary files
 are removed normally; `--keep-tmpdir` retains them. This includes the SNP evidence
 table; the default `none` mode remains lean HDF5 v3.
 Uncovered and masked positions do not become confident reference calls.
-Symbolic native alleles retain their meaning. Storing all-site evidence does not
-itself provide an all-base diversity estimator. See the
+Symbolic native alleles retain their meaning. Current likelihood `popgen`
+still summarizes the SNP catalogue; storing all-site evidence does not itself
+provide an all-base diversity estimator. See the
 [format specification](../development/rad-site-evidence.md).

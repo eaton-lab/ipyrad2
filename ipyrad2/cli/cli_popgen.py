@@ -51,6 +51,18 @@ def _setup_popgen_subparser(
         help="Directory to write popgen outputs and stats. [default=output-popgen]",
     )
     core.add_argument(
+        "--genotype-mode", choices=("calls", "likelihoods"), default="calls",
+        help="Use calls (default) or SNP likelihoods; assemble with --evidence snps or --evidence loci. Likelihood mode reports catalogue diversity, not per-base pi.",
+    )
+    core.add_argument(
+        "--evidence-prior", choices=("uniform", "population"), default="uniform",
+        help="Likelihood mode: uniform genotype prior or integrated Beta(1,1) population-frequency prior; population requires explicit --imap. [default=uniform]",
+    )
+    core.add_argument(
+        "--individual-map", metavar="Path", type=Path,
+        help="Likelihood mode: optional sample<TAB>individual mapping. Duplicate individuals are rejected; otherwise each sample is assumed distinct.",
+    )
+    core.add_argument(
         "--stats", metavar="str", type=str, default="all",
         help=(
             "Comma-separated statistics to compute. Supported names are "
@@ -134,7 +146,7 @@ def _setup_popgen_subparser(
     performance = tool.add_argument_group("Performance and overwrite")
     performance.add_argument(
         "-c", "--cores", metavar="int", type=int, default=1,
-        help="Number of cores to use during chunked SNP filtering. [default=1]",
+        help="Number of cores for hard-call SNP filtering; likelihood summaries currently run serially. [default=1]",
     )
     performance.add_argument(
         "-f", "--force", action="store_true",

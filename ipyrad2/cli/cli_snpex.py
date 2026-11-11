@@ -19,7 +19,7 @@ $ ipyrad2 snpex -d assembly.hdf5 -o OUT/ -i POPs.txt -g MINs.txt
 """
 
 
-SNPEX_OUT_FORMATS = ("plink", "phylip", "nexus", "fasta", "treemix", "eems")
+SNPEX_OUT_FORMATS = ("plink", "phylip", "nexus", "fasta", "treemix", "eems", "bcf")
 
 
 def _setup_snpex_subparser(
@@ -106,7 +106,7 @@ def _setup_snpex_subparser(
         nargs="+", action="extend", choices=SNPEX_OUT_FORMATS,
         help=(
             "Additional output format(s): plink, phylip, nexus, fasta, "
-            "treemix, or eems. Core matrix and stats files are always written. "
+            "treemix, eems, or bcf (native evidence; no imputation). Core matrix and stats files are always written. "
             "[default=none]"
         ),
     )

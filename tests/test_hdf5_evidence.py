@@ -10,6 +10,7 @@ from ipyrad2.assembler.evidence_hdf5 import write_snp_evidence_hdf5
 from ipyrad2.assembler.genotype_evidence import BIN_BCF
 from ipyrad2.assembler.write_snps import _chunk_query_to_gt_arrays
 from ipyrad2.analysis.evidence import GenotypeEvidenceReader, export_evidence_bcf
+from ipyrad2.analysis.extracters.snps_extracter import run_snps_extracter
 from ipyrad2.utils.exceptions import IPyradError
 
 
@@ -120,6 +121,10 @@ def test_bcf_selection_masks_and_evidence_roundtrip(tmp_path):
     with pytest.raises(IPyradError,match='already exists'):
         export_evidence_bcf(database=db,output=bcf,samples=['WGS','RAD'],snpsmap=selected,
                             genotypes=np.array([[255,255],[1,1]],dtype='u1'))
+    kwargs=dict(data=db,name='snps',outdir=tmp_path/'snpex',min_sample_coverage=1,
+                max_sample_missing=1.,min_minor_allele_frequency=0.,imap=None,minmap=None)
+    with pytest.raises(IPyradError,match='does not support imputation'):
+        run_snps_extracter(**kwargs,write_bcf=True,impute_method='sample')
 
 
 def test_empty_database_has_valid_empty_evidence(tmp_path):
@@ -137,6 +142,49 @@ def test_empty_database_has_valid_empty_evidence(tmp_path):
     write_snp_evidence_hdf5(database=db,raw_vcf=raw,final_vcf=final)
     with GenotypeEvidenceReader(db) as reader:
         assert reader.read([])['PL'].shape==(2,0,10)
+
+
+@pytest.mark.parametrize('subsample', [False, True])
+def test_snpex_bcf_matches_selected_matrices_and_native_likelihoods(tmp_path, subsample):
+    db, raw, final = fixture(tmp_path)
+    write_snp_evidence_hdf5(database=db, raw_vcf=raw, final_vcf=final)
+    with h5py.File(db, 'a') as io:
+        # Put both biallelic sites in one linkage block to exercise subsampling.
+        io['snpsmap'][3, 0] = 0
+    args = dict(data=db, name='snps', min_sample_coverage=1,
+                max_sample_missing=1., min_minor_allele_frequency=0.,
+                imap={'pop': ['R*', 'W*']}, minmap=None,
+                subsample=subsample, random_seed=73, min_genotype_depth=2)
+    run_snps_extracter(**args, outdir=tmp_path/'plain')
+    run_snps_extracter(**args, outdir=tmp_path/'bcf', write_bcf=True)
+    for suffix in ('genos.npy', 'snps.npy', 'snpsmap.tsv', 'samples.txt',
+                   'sample_data_summary.tsv'):
+        assert (tmp_path/'plain'/f'snps.{suffix}').read_bytes() == (
+            tmp_path/'bcf'/f'snps.{suffix}').read_bytes()
+    prefix = tmp_path/'bcf/snps'
+    names = prefix.with_suffix('.samples.txt').read_text().splitlines()
+    coords = pd.read_csv(prefix.with_suffix('.snpsmap.tsv'), sep='\t')
+    genos = np.load(prefix.with_suffix('.genos.npy'))
+    bcf = prefix.with_suffix('.bcf')
+    assert Path(str(bcf)+'.csi').exists()
+    assert subprocess.check_output([BIN_BCF, 'query', '-l', str(bcf)], text=True).splitlines() == names
+    rows = subprocess.check_output(
+        [BIN_BCF, 'query', '-f', r'%POS[\t%GT:%PL:%FT]\n', str(bcf)], text=True).splitlines()
+    assert len(rows) == len(coords) == (1 if subsample else 2)
+    for j, row in enumerate(rows):
+        pos, *cells = row.split('\t')
+        assert int(pos) == coords.iloc[j]['pos'] + 1
+        for i, cell in enumerate(cells):
+            gt, pl, status = cell.split(':')
+            assert gt == {0: '0/0', 1: '0/1', 2: '1/1', 255: './.'}[genos[i, j]]
+            if names[i] == 'RAD':
+                assert pl == ('30000,0,30000' if pos == '10' else '30,0,30')
+            elif pos == '10':
+                assert pl == '0,3,30' and status == 'NoHardCall'
+            else:
+                assert pl == '.' and status == 'ExportMask'
+    with pytest.raises(IPyradError, match='already exists'):
+        run_snps_extracter(**args, outdir=tmp_path/'bcf', write_bcf=True)
 
 
 def test_four_alleles_and_duplicate_native_records(tmp_path):

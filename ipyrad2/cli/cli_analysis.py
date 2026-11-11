@@ -269,6 +269,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
             write_fasta="fasta" in out_formats,
             write_treemix="treemix" in out_formats,
             write_eems="eems" in out_formats,
+            write_bcf="bcf" in out_formats,
             impute_method=args.impute_method,
         )
         if _exit:
@@ -446,6 +447,9 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
         logger.info(f"CMD: {format_logged_command(sys.argv[1:])}")
         run_popgen_method(
             data=args.data,
+            genotype_mode=args.genotype_mode,
+            evidence_prior=args.evidence_prior,
+            individual_map=args.individual_map,
             name=args.name,
             outdir=args.out,
             stats=args.stats,
