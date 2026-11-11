@@ -52,7 +52,11 @@ def _setup_popgen_subparser(
     )
     core.add_argument(
         "--genotype-mode", choices=("calls", "likelihoods"), default="calls",
-        help="Use calls (default) or SNP likelihoods; assemble with --evidence snps or --evidence loci. Likelihood mode reports catalogue diversity, not per-base pi.",
+        help="Use calls (default) or native likelihoods. SNP scope reports catalogue diversity; loci scope reports per-callable-base diversity under a biallelic model.",
+    )
+    core.add_argument(
+        "--evidence-scope", choices=("snps", "loci"), default="snps",
+        help="Likelihood mode: SNP catalogue (default) or all retained locus bases. loci requires assemble --evidence loci and uses an explicit biallelic model, including native reference/unseen likelihoods.",
     )
     core.add_argument(
         "--evidence-prior", choices=("uniform", "population"), default="uniform",

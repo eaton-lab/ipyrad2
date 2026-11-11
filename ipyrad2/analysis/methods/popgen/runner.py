@@ -24,6 +24,7 @@ from .models import normalize_stats
 from .seq_backend import run_sequence_popgen
 from .snp_backend import run_snp_popgen
 from .evidence_backend import run_evidence_popgen
+from .locus_evidence_backend import run_locus_evidence_popgen
 
 
 POPGEN_FLOAT_FORMAT = "%.8f"
@@ -259,6 +260,7 @@ def run_popgen_method(
     min_site_qual: float = 0.0,
     genotype_mode: str = "calls",
     evidence_prior: str = "uniform",
+    evidence_scope: str = "snps",
     individual_map=None,
 ) -> None:
     """Run the genome-wide population-genetic analysis workflow."""
@@ -274,27 +276,30 @@ def run_popgen_method(
     )
     if genotype_mode not in ("calls", "likelihoods"):
         raise IPyradError("Genotype mode must be calls or likelihoods.")
-    if genotype_mode == "calls" and (evidence_prior != "uniform" or individual_map is not None):
-        raise IPyradError("Evidence prior and individual map require --genotype-mode likelihoods.")
+    if evidence_scope not in ("snps", "loci"):
+        raise IPyradError("Evidence scope must be snps or loci.")
+    if genotype_mode == "calls" and (evidence_prior != "uniform" or individual_map is not None or evidence_scope != "snps"):
+        raise IPyradError("Evidence scope, prior and individual map require --genotype-mode likelihoods.")
     if genotype_mode == "likelihoods":
         requested_stats = normalize_stats(stats)
         if requested_stats == ["all"]:
-            requested_stats = ["heterozygosity"]
+            requested_stats = ["pi", "heterozygosity"] if evidence_scope == "loci" else ["heterozygosity"]
         if windowing.mode is not None:
-            raise IPyradError("Likelihood popgen currently summarizes a SNP catalogue, not per-base windows.")
+            raise IPyradError("Likelihood popgen does not yet support windows.")
     else:
         requested_stats = _resolve_requested_stats(stats, has_sequence=has_sequence, has_snp=has_snp)
     if not requested_stats:
         raise IPyradError("No popgen statistics were requested.")
-    backend = "snp_likelihoods" if genotype_mode == "likelihoods" else _choose_backend(
+    backend = ("locus_likelihoods" if evidence_scope == "loci" else "snp_likelihoods") if genotype_mode == "likelihoods" else _choose_backend(
         requested_stats,
         has_sequence=has_sequence,
         has_snp=has_snp,
         window_mode=windowing.mode,
     )
 
-    if backend == "snp_likelihoods":
-        result = run_evidence_popgen(
+    if backend in ("snp_likelihoods", "locus_likelihoods"):
+        likelihood_backend = run_locus_evidence_popgen if backend == "locus_likelihoods" else run_evidence_popgen
+        result = likelihood_backend(
             data=data, requested_stats=requested_stats, min_sample_coverage=min_sample_coverage,
             max_sample_missing=max_sample_missing, min_minor_allele_frequency=min_minor_allele_frequency,
             min_genotype_depth=min_genotype_depth, min_site_qual=min_site_qual,

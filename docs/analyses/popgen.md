@@ -423,3 +423,68 @@ records priors, filters, missingness rules and the SNP-catalogue scope. A higher
 posterior heterozygosity estimate does not by itself demonstrate improved
 accuracy; comparisons require known truth or clearly identified observational
 comparators and matched retention.
+
+
+### Likelihood diversity per callable locus base
+
+Use all-locus evidence explicitly; the default likelihood scope remains the
+retained SNP catalogue:
+
+```bash
+ipyrad2 popgen -d assembly.hdf5 -n loci -o output-loci \
+  --genotype-mode likelihoods --evidence-scope loci \
+  --stats pi,heterozygosity --evidence-prior population -i populations.tsv \
+  --min-genotype-depth 1
+```
+
+This requires `assemble --evidence loci` (format 4.0). It reads `rad_evidence`,
+including invariant positions; it does not use SNP ascertainment or hard calls
+to choose bases. `posterior_pi` is the mean posterior probability of a nucleotide
+difference between two distinct sampled chromosomes, per callable retained
+locus base. At each base it integrates `2 K (M-K) / [M(M-1)]`, where `M=2n`
+chromosomes come from the usable individuals at that base. Population-prior
+covariance is included. With only one usable diploid, this equals that
+individual's posterior heterozygosity. This is a posterior mean under the model,
+not a claim of an unbiased population estimator or whole-genome diversity.
+
+The initial all-locus implementation uses a **biallelic model**. At native
+reference/`<*>` pileup records, the alternative is one latent unseen allele;
+its nucleotide identity is not fabricated. At records containing two observed
+ACGT nucleotides, the model conditions on that pair and uses its three native
+PL entries, excluding any third-allele symbolic states from the model. It does
+not recover a full four-nucleotide likelihood vector from a symbolic allele.
+Bases with more than two observed nucleotides, indels/unsupported tokens,
+multiple native records, non-ACGT reference, or no alternative likelihood are
+excluded and counted in the manifest. Native values remain unchanged.
+
+A callable sample-base cell requires positive native DP (and any requested
+minimum depth), complete native PL, PASS status and no original hard mask.
+No record, zero reads, missing likelihoods or masked cells never become certain
+homozygous reference calls. Excluded bases contribute neither a numerator nor a
+denominator. Global `-m` and any explicit `-g` population minima apply before
+aggregation; each population then requires at least one usable individual.
+The population TSV exposes `callable_bases`, `callable_sample_cells`, counts of
+reference/unseen and observed-pair bases, and the summed pairwise-difference
+numerator. Sample tables report posterior heterozygosity over each individual's
+usable bases. Different groups can have different callable domains; comparisons
+need matched domains or explicit acknowledgment of that difference.
+
+Both existing priors are available: independent uniform genotype probabilities,
+or HWE conditional on a shared frequency integrated against Beta(1,1) within
+explicit populations. These priors can produce substantially different results
+at low depth; all-sites storage does not itself calibrate a prior or correct RAD
+allele dropout. No posterior is imputed for a missing individual. Repeated
+assays of the same individual must not be treated as separate individuals.
+
+MAF filtering, variant QUAL filtering, one-SNP-per-locus subsampling and windows
+are unsupported for this mode. Sample missingness is measured against all
+retained ACGT bases before global/population coverage filtering. The final
+locus-selection and mapping/capture ascertainment remain; this is per callable
+base in the retained loci, not per base of the entire genome. `snpex -O bcf`
+continues to export SNP PL and does not export per-site GP.
+
+Native symbolic-allele semantics follow the [VCF specification](https://samtools.github.io/hts-specs/VCFv4.5.pdf).
+The bcftools pileup [native allele/PL construction](https://github.com/samtools/bcftools/blob/1.22/bam2bcf.c)
+selects an unseen nucleotide as its symbolic alternative; this motivates the
+explicit conditional biallelic interpretation rather than assigning the symbol
+a known nucleotide or assuming reference certainty.

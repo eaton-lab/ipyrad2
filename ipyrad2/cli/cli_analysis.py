@@ -449,6 +449,7 @@ def run_analysis_tool(args, _exit: bool = True) -> None:
             data=args.data,
             genotype_mode=args.genotype_mode,
             evidence_prior=args.evidence_prior,
+            evidence_scope=args.evidence_scope,
             individual_map=args.individual_map,
             name=args.name,
             outdir=args.out,

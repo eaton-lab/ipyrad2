@@ -6,6 +6,13 @@ from ..utils.exceptions import IPyradError
 from .evidence import _names
 
 
+def _selection(indices):
+    """Use one HDF5 slice for a sorted contiguous selection; preserve sparse reads."""
+    if len(indices) and int(indices[-1])-int(indices[0])+1 == len(indices):
+        return slice(int(indices[0]), int(indices[-1])+1)
+    return indices
+
+
 class RadSiteEvidenceReader:
     """Read bases and their zero, one or several native pileup records.
 
@@ -50,25 +57,25 @@ class RadSiteEvidenceReader:
             raise IPyradError('RAD evidence requires unique observed sample names.')
         ix=[self.names.index(s) for s in samples];g=self.group
         order=np.argsort(sites);inverse=np.argsort(order);sorted_sites=sites[order]
-        spans=g['record_span'][sorted_sites][inverse]
+        spans=g['record_span'][_selection(sorted_sites)][inverse]
         records=np.concatenate([np.arange(int(a),int(a+b),dtype=np.int64) for a,b in spans]) if len(spans) else np.array([],dtype=np.int64)
         ro=np.argsort(records);ri=np.argsort(ro);sr=records[ro]
-        d=dict(site_indices=sites,site_map=g['site_map'][sorted_sites][inverse],reference=g['reference'][sorted_sites][inverse],
-               site_status=g['site_status'][sorted_sites][inverse],hard_mask=g['hard_mask'][:,sorted_sites][ix][:,inverse],
-               record_indices=records,record_site=g['record_site'][sr][ri],QUAL=g['QUAL'][sr][ri])
-        for key in ['DP','GQ','status']:d[key]=g[key][:,sr][ix][:,ri]
+        d=dict(site_indices=sites,site_map=g['site_map'][_selection(sorted_sites)][inverse],reference=g['reference'][_selection(sorted_sites)][inverse],
+               site_status=g['site_status'][_selection(sorted_sites)][inverse],hard_mask=g['hard_mask'][:,_selection(sorted_sites)][ix][:,inverse],
+               record_indices=records,record_site=g['record_site'][_selection(sr)][ri],QUAL=g['QUAL'][_selection(sr)][ri])
+        for key in ['DP','GQ','status']:d[key]=g[key][:,_selection(sr)][ix][:,ri]
         offsets={}
         for key in ['allele_offsets','PL_offsets']:
-            select=np.unique(np.r_[sr,sr+1]);values=g[key][select];lookup=dict(zip(select,values))
+            select=np.unique(np.r_[sr,sr+1]);values=g[key][_selection(select)];lookup=dict(zip(select,values))
             offsets[key]=np.array([(lookup[r],lookup[r+1]) for r in records],dtype=np.int64).reshape(-1,2)
         d['allele_count']=np.diff(offsets['allele_offsets'],axis=1).ravel()
         d['PL_count']=np.diff(offsets['PL_offsets'],axis=1).ravel()
         d['alleles']=[]
         for key,okey in [('AD','allele_offsets'),('PL','PL_offsets')]:
             spans=offsets[okey];columns=np.unique(np.concatenate([np.arange(a,b) for a,b in spans])) if len(spans) else np.array([],dtype=np.int64)
-            values=g[key][:,columns][ix];lookup={int(c):j for j,c in enumerate(columns)}
+            values=g[key][:,_selection(columns)][ix];lookup={int(c):j for j,c in enumerate(columns)}
             counts=np.diff(spans,axis=1).ravel();d[key]=np.full((len(samples),len(records),int(counts.max(initial=0))),-1,dtype='i4')
-            ids=g['allele_ids'][columns] if key=='AD' else None
+            ids=g['allele_ids'][_selection(columns)] if key=='AD' else None
             for j,(a,b) in enumerate(spans):
                 cols=[lookup[c] for c in range(a,b)];d[key][:,j,:b-a]=values[:,cols]
                 if key=='AD':d['alleles'].append(tuple(self.tokens[int(k)] for k in ids[cols]))

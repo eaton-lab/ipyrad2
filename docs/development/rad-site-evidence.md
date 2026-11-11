@@ -67,9 +67,11 @@ returns selected base metadata and all native records at those positions,
 including literal allele tuples, meaningful vector lengths and usability.
 Selections are bounded; returned vectors are padded with -1 only for convenience.
 `GenotypeEvidenceReader` continues reading the unchanged SNP group in v3/v4.
-`seqex`, `snpex`, and current likelihood `popgen` retain their existing scope;
-`snpex -O bcf` still exports SNP evidence. This release does not add an all-site
-BCF exporter or a per-base likelihood-diversity estimator.
+`seqex` and `snpex` retain their existing scope; `snpex -O bcf` still exports
+SNP evidence. Likelihood `popgen` defaults to SNP scope, with explicit
+`--evidence-scope loci` for per-callable-base diversity under the documented
+biallelic model (see `docs/analyses/popgen.md`). No all-site BCF or GP exporter
+is added. The estimator does not invent four-nucleotide likelihoods from `<*>`.
 
 Storage should be reported as measured whole-database growth relative to SNP
 and lean databases, with component sizes and temporary pileup costs separately.
