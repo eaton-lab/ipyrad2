@@ -705,8 +705,10 @@ def _match_boundary_candidates(
     """Return deterministic barcode-boundary candidates supported by an immediate cutsite match."""
     max_slack = _validate_boundary_slack(max_slack)
     mismatch_by_barcode = mismatch_by_barcode or {}
+    read_length = len(read)
+    cut_prefixes = tuple(cutters)
     matches: Dict[Tuple[bytes, int, int], BarcodeBoundaryCandidate] = {}
-    for barcode_length in sorted(barcode_lengths):
+    for barcode_length in barcode_lengths:
         allowed_barcodes = None
         if barcode_candidates_by_length is not None:
             allowed_barcodes = barcode_candidates_by_length.get(barcode_length)
@@ -714,22 +716,21 @@ def _match_boundary_candidates(
                 continue
         for slack in range(max_slack + 1):
             cut_start = slack + barcode_length
-            if cut_start <= 0 or cut_start > len(read):
+            if cut_start <= 0 or cut_start > read_length:
                 continue
             barcode = read[slack:cut_start]
             if allowed_barcodes is not None and barcode not in allowed_barcodes:
                 continue
-            for cut in cutters:
-                cut_end = cut_start + len(cut)
-                if cut_end <= len(read) and read[cut_start:cut_end] == cut:
-                    key = (barcode, slack, cut_start)
-                    matches[key] = BarcodeBoundaryCandidate(
-                        barcode=barcode,
-                        slack=slack,
-                        trim_start=cut_start,
-                        mismatch_distance=mismatch_by_barcode.get(barcode, 0),
-                    )
-                    break
+            if read.startswith(cut_prefixes, cut_start):
+                key = (barcode, slack, cut_start)
+                matches[key] = BarcodeBoundaryCandidate(
+                    barcode=barcode,
+                    slack=slack,
+                    trim_start=cut_start,
+                    mismatch_distance=mismatch_by_barcode.get(barcode, 0),
+                )
+    if len(matches) < 2:
+        return list(matches.values())
     return sorted(
         matches.values(),
         key=lambda item: (item.mismatch_distance, item.slack, -len(item.barcode), item.barcode),

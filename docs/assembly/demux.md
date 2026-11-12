@@ -92,9 +92,13 @@ If you do not supply cutsite motifs, ipyrad2 tries to infer them from barcoded r
 
 ### Performance and testing
 
+Run `ipyrad2 schema demux` to get a JSON description of the CLI options, including
+their defaults, types, accepted values, and dependencies. The output includes a
+`schema_version` field for machine consumers.
+
 - `-c, --cores`: maximum parallel workers, default `4`
 - `-k, --chunksize`: maximum matched reads per batch, default `10000000`; batches also flush at 4 MiB
-- `-x, --max_reads`: stop after N reads per file for a test run
+- `-x, --max_reads`: process the first N pairs per paired-end input or N reads per single-end file
 - `--pigz`: compress temporary plain FASTQs with `pigz`
 - `--tmpdir`: existing scratch directory for `--pigz`; defaults to private output staging
 
@@ -113,10 +117,13 @@ multiple valid gzip members.
 
 `--pigz` adds an uncompressed write and read before compression. It may help when CPU
 compression is the bottleneck and local scratch is fast, but can be slower on shared
-storage. Compression uses at most two jobs with one thread each. For example:
+storage. After readers and writers finish, up to two concurrent compression jobs
+share the `--cores` budget. Each job reserves up to four cores' worth of headroom
+for I/O and process overhead, with a minimum of one compression thread. For example,
+`-c 40` gives each job 16 compression threads when two jobs are active.
 
 ```bash
-ipyrad2 demux -d RAW/*.fastq.gz -b BARCODES.tsv -o DEMUX --pigz --tmpdir /local/scratch
+ipyrad2 demux -d RAW/*.fastq.gz -b BARCODES.tsv -o DEMUX --pigz -c 40 --tmpdir /local/scratch
 ```
 
 The scratch root must already exist. Demux creates and removes only its own private

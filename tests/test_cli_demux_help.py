@@ -1,10 +1,11 @@
 import argparse
+import json
 from pathlib import Path
 
 import pytest
 
 from ipyrad2.cli.cli_demux import validate_demux_args
-from ipyrad2.cli.cli_main import setup_parsers
+from ipyrad2.cli.cli_main import command_line, setup_parsers
 
 
 def _get_demux_parser() -> argparse.ArgumentParser:
@@ -14,6 +15,56 @@ def _get_demux_parser() -> argparse.ArgumentParser:
         if isinstance(action, argparse._SubParsersAction)
     )
     return subparsers.choices["demux"]
+
+
+def test_demux_schema_matches_parser(capsys) -> None:
+    command_line(["schema", "demux"])
+    output = capsys.readouterr()
+    schema = json.loads(output.out)
+    assert not output.err
+    assert schema["schema_version"] == 1
+    assert schema["command"] == ["ipyrad2", "demux"]
+
+    parser = _get_demux_parser()
+    options = schema["options"]
+    assert set(options) == {action.dest for action in parser._actions}
+    for action in parser._actions:
+        option = options[action.dest]
+        assert option["flags"] == action.option_strings
+        assert option["default"] == action.default
+        assert option["required"] == action.required
+        if action.choices is not None:
+            assert option["choices"] == list(action.choices)
+
+    assert options["tmpdir"]["type"] == "path"
+    assert options["pigz"]["type"] == "boolean"
+    assert options["max_reads"]["type"] == "integer"
+    assert options["max_reads"]["minimum"] == 1
+    assert "first N input read pairs" in options["max_reads"]["description"]
+    assert options["max_mismatch"]["maximum"] == 2
+    assert options["delim_idx"]["excluded_values"] == [0]
+    assert any(
+        rule.get("requires") == "pigz" and rule["option"] == "tmpdir"
+        for rule in schema["dependencies"]
+    )
+    assert any(
+        rule.get("conflicts_with") == "i7"
+        and rule["option"] == "allow_leading_barcode_deletion"
+        for rule in schema["dependencies"]
+    )
+
+
+def test_schema_help_and_invalid_tool(capsys) -> None:
+    with pytest.raises(SystemExit) as exc:
+        command_line(["--help"])
+    assert exc.value.code == 0
+    help_text = capsys.readouterr().out
+    assert help_text.index("treeslider") < help_text.index("    schema ")
+
+    with pytest.raises(SystemExit) as exc:
+        command_line(["schema", "map"])
+    assert exc.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
 
 
 def test_demux_help_groups_and_examples_are_updated() -> None:

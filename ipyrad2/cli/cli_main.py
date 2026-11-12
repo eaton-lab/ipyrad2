@@ -50,6 +50,9 @@ analysis subcommands
     baba                                     Infer admixture metrics from ABBA/BABA and related SNP patterns
     treeslider                               Infer gene trees for each qualified locus or refmapped genomic window of loci
 
+utility subcommands
+    schema                                   Show machine-readable CLI options, e.g., ipyrad2 schema demux
+
 options:
   -v, --version                              show program's version number and exit
 
@@ -131,7 +134,7 @@ ANALYSIS_TOOL_NAMES = (
 RESERVED_TOOL_NAMES = (
     "treeslider",
 )
-ALL_TOP_LEVEL_COMMANDS = _CORE_TOOL_NAMES + ANALYSIS_TOOL_NAMES + RESERVED_TOOL_NAMES
+ALL_TOP_LEVEL_COMMANDS = _CORE_TOOL_NAMES + ANALYSIS_TOOL_NAMES + RESERVED_TOOL_NAMES + ("schema",)
 
 
 class TopLevelParser(argparse.ArgumentParser):
@@ -186,6 +189,9 @@ def _setup_parsers(
             HEADER,
             selected_tools=None if selected is None else selected,
         )
+    if selected is None or "schema" in selected:
+        schema_parser = subparser.add_parser("schema", help="Show machine-readable CLI options.")
+        schema_parser.add_argument("tool", choices=("demux",), help="Subcommand to describe.")
     return parser
 
 
@@ -255,8 +261,15 @@ def command_line(argv: Optional[Sequence[str]] = None):
         _print_top_level_help()
         sys.exit(0)
 
-    parser = _setup_parsers(selected_subcommands=_help_only_selected_subcommands(argv))
+    selected = ("schema",) if argv[0] == "schema" else _help_only_selected_subcommands(argv)
+    parser = _setup_parsers(selected_subcommands=selected)
     args = parser.parse_args(argv)
+    if args.subcommand == "schema":
+        from .cli_schema import print_demux_schema
+
+        tool_parser = _get_subparsers_action(_setup_parsers((args.tool,))).choices[args.tool]
+        print_demux_schema(tool_parser)
+        return
     _validate_subcommand_args(args, parser)
 
     # LOGGING: -----------------------------------------------------

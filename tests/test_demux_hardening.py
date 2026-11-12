@@ -350,8 +350,30 @@ def test_output_lock_rejects_concurrent_runs(tmp_path):
                 pass
 
 
+@pytest.mark.parametrize(
+    ("cores", "files", "workers", "threads"),
+    [(1, 3, 1, 1), (4, 3, 2, 1), (40, 3, 2, 16), (40, 1, 1, 36)],
+)
+def test_pigz_core_allocation(tmp_path, monkeypatch, cores, files, workers, threads):
+    paths = [write(tmp_path / f"{idx}.fastq", b"") for idx in range(files)]
+    commands = []
+
+    def capture_pool(jobs, *, max_workers, **kwargs):
+        assert max_workers == workers
+        for compress, arguments in jobs.values():
+            compress(**arguments)
+
+    def capture_command(command, *, outfile):
+        commands.append(command)
+
+    monkeypatch.setattr(pipeline, "run_with_pool", capture_pool)
+    monkeypatch.setattr(pipeline, "run_pipeline", capture_command)
+    pipeline._compress_demux_outputs_with_pigz(paths, cores, "INFO")
+    assert commands == [[["pigz", "-p", str(threads), "-c", str(path)]] for path in paths]
+
+
 @pytest.mark.skipif(shutil.which("pigz") is None, reason="pigz not installed")
-@pytest.mark.parametrize("cores", [1, 4])
+@pytest.mark.parametrize("cores", [1, 4, 12])
 def test_pigz_external_scratch_equivalence_and_cleanup(tmp_path, cores):
     scratch = tmp_path / "scratch"
     scratch.mkdir()

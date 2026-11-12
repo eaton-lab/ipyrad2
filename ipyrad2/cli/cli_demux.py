@@ -18,39 +18,40 @@ $ ipyrad2 demux -d RUN1/*.fastq.gz RUN2/*.fastq.gz -b BARCODES.tsv -M
 """
 
 
-def _parser_error_if(parser: ArgumentParser, condition: bool, message: str) -> None:
-    """Raise an argparse error when a demux CLI constraint is violated."""
-    if condition:
-        parser.error(message)
+# The validator and schema use the same constraints beyond argparse choices.
+DEMUX_DEPENDENCIES = (
+    ("tmpdir", "requires", "pigz", "--tmpdir requires --pigz"),
+    (
+        "allow_leading_barcode_deletion", "conflicts_with", "i7",
+        "--allow-leading-barcode-deletion applies only to inline barcode demux",
+    ),
+)
+DEMUX_VALUE_CONSTRAINTS = {
+    "cores": ({"minimum": 1}, "--cores must be >= 1"),
+    "chunksize": ({"minimum": 1}, "--chunksize must be >= 1"),
+    "max_reads": ({"minimum": 1}, "--max-reads must be >= 1 when set"),
+    "max_reads_kmer": ({"minimum": 1}, "--max-reads-kmer must be >= 1"),
+    "max_mismatch": ({"minimum": 0, "maximum": 2}, "--max-mismatch must be between 0 and 2"),
+    "delim_idx": ({"excluded_values": [0]}, "--delim-idx cannot be 0"),
+}
 
 
 def validate_demux_args(args: Namespace, parser: ArgumentParser) -> None:
     """Validate demux CLI arguments after parsing."""
-    _parser_error_if(parser, args.tmpdir is not None and not args.pigz, "--tmpdir requires --pigz")
-    _parser_error_if(parser, args.cores < 1, "--cores must be >= 1")
-    _parser_error_if(parser, args.chunksize < 1, "--chunksize must be >= 1")
-    _parser_error_if(
-        parser,
-        args.max_reads is not None and args.max_reads < 1,
-        "--max-reads must be >= 1 when set",
-    )
-    _parser_error_if(parser, args.max_reads_kmer < 1, "--max-reads-kmer must be >= 1")
-    _parser_error_if(
-        parser,
-        not 0 <= args.max_mismatch <= 2,
-        "--max-mismatch must be between 0 and 2",
-    )
-    _parser_error_if(
-        parser,
-        args.barcode_boundary_slack not in (0, 1),
-        "--barcode-boundary-slack must be 0 or 1",
-    )
-    _parser_error_if(
-        parser,
-        args.i7 and args.allow_leading_barcode_deletion,
-        "--allow-leading-barcode-deletion applies only to inline barcode demux",
-    )
-    _parser_error_if(parser, args.delim_idx == 0, "--delim-idx cannot be 0")
+    for name, relation, other, message in DEMUX_DEPENDENCIES:
+        if getattr(args, name) and bool(getattr(args, other)) != (relation == "requires"):
+            parser.error(message)
+
+    for name, (limits, message) in DEMUX_VALUE_CONSTRAINTS.items():
+        value = getattr(args, name)
+        if value is None:
+            continue
+        if (
+            value < limits.get("minimum", value)
+            or value > limits.get("maximum", value)
+            or value in limits.get("excluded_values", ())
+        ):
+            parser.error(message)
 
 
 def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str = None) -> None:
@@ -107,7 +108,7 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
         "--allow-leading-barcode-deletion", action="store_true",
         help=(
             "Recover inline barcode observations missing the first expected barcode base. "
-            "Disabled by default."
+            "Incompatible with --i7. Disabled by default."
         ),
     )
 
@@ -135,7 +136,10 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
 
     performance.add_argument(
         "-c", "--cores", metavar="int", type=int, default=4,
-        help="Maximum parallel workers. [default=%(default)s]",
+        help=(
+            "Core budget for demultiplexing and, with --pigz, for compression "
+            "thread allocation. [default=%(default)s]"
+        ),
     )
     performance.add_argument(
         "-k", "--chunksize", metavar="int", type=intlike, default=int(1e7),
@@ -143,7 +147,11 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
     )
     performance.add_argument(
         "-x", "--max_reads", metavar="int", type=intlike,
-        help="Read up to N reads per file for testing.",
+        help=(
+            "Process the first N input read pairs per paired-end FASTQ pair, or the "
+            "first N reads per single-end FASTQ file. Counts input before barcode "
+            "matching. Defaults to no limit."
+        ),
     )
     performance.add_argument(
         "--max-reads-kmer", metavar="int", type=intlike, default=100_000,
@@ -151,12 +159,12 @@ def _setup_demux_subparser(subparsers: argparse._SubParsersAction, header: str =
     )
     performance.add_argument(
         "--pigz", action="store_true",
-        help="Compress temporary FASTQs with pigz; local scratch (--tmpdir) is recommended.",
+        help="Compress temporary FASTQs with pigz (required on PATH); local scratch (--tmpdir) is recommended.",
     )
 
     performance.add_argument(
         "--tmpdir", metavar="Path", type=Path,
-        help="Existing scratch directory for --pigz; defaults to private output staging.",
+        help="Existing writable scratch directory. Requires --pigz; defaults to private output staging.",
     )
 
     logging.add_argument(

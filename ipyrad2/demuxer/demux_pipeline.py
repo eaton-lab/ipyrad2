@@ -376,32 +376,36 @@ def _terminate_processes(procs):
             proc.join(timeout=0.2)
 
 
-def _compress_temp_fastq(path, outpath=None):
+def _compress_temp_fastq(path, threads, outpath=None):
     outpath = outpath or path.with_suffix(path.suffix + ".gz")
-    run_pipeline([["pigz", "-p", "1", "-c", str(path)]], outfile=outpath)
+    run_pipeline([["pigz", "-p", str(threads), "-c", str(path)]], outfile=outpath)
     path.unlink()
 
 
 def _compress_demux_outputs_with_pigz(temp_fastqs, cores, log_level, outdir=None):
     paths = sorted(path for path in temp_fastqs if path.exists())
+    if not paths:
+        return
+    workers = min(2, cores, len(paths))
+    # Readers and writers have exited. Leave room for pigz I/O and job overhead.
+    threads = max(1, cores // workers - 4)
     jobs = {
         path.name: (
             _compress_temp_fastq,
             {
                 "path": path,
+                "threads": threads,
                 "outpath": outdir / (path.name + ".gz") if outdir is not None else None,
             },
         )
         for path in paths
     }
-    if jobs:
-        logger.info("compressing {} demultiplexed FASTQ files with pigz", len(paths))
-        run_with_pool(
-            jobs,
-            log_level=log_level,
-            max_workers=min(2, cores, len(paths)),
-            msg="Pigz FASTQs",
-        )
+    logger.info(
+        "compressing {} demultiplexed FASTQ files with up to {} pigz jobs "
+        "and {} compression threads per job",
+        len(paths), workers, threads,
+    )
+    run_with_pool(jobs, log_level=log_level, max_workers=workers, msg="Pigz FASTQs")
 
 
 def run_demux_pipeline(filenames_to_fastqs, config: DemuxRunConfig, cores):
