@@ -18,6 +18,7 @@ from ..common import build_sample_data_summary
 from .evidence_backend import _check_individuals
 from .likelihoods import likelihoods_from_pl, posterior_moments
 from .models import PopgenResult
+from .sfs_fitting import CrossFittedSFS
 
 
 CHUNK_BASES = 2048
@@ -84,13 +85,14 @@ def run_locus_evidence_popgen(*, data, requested_stats, min_sample_coverage,
                              imap, minmap, exclude, include_reference,
                              subsample_unlinked, random_seed, cores, log_level,
                              min_genotype_depth=0, min_site_qual=0.,
-                             evidence_prior='uniform', individual_map=None):
+                             evidence_prior='uniform', individual_map=None,
+                             sfs_fit_loci=1024, sfs_folds=5, sfs_max_iter=10000):
     """Average posterior chromosome-pair differences over callable RAD bases."""
     if not set(requested_stats) <= {'pi', 'heterozygosity'}:
         raise IPyradError('Locus likelihoods currently support pi and heterozygosity only.')
-    if evidence_prior not in ('uniform', 'population'):
+    if evidence_prior not in ('uniform', 'population', 'sfs'):
         raise IPyradError('Unknown evidence prior.')
-    if evidence_prior == 'population' and not imap:
+    if evidence_prior in ('population', 'sfs') and not imap:
         raise IPyradError('Population evidence prior requires an explicit --imap.')
     if include_reference:
         raise IPyradError('Locus likelihoods cannot use the synthetic reference sample.')
@@ -127,6 +129,24 @@ def run_locus_evidence_popgen(*, data, requested_stats, min_sample_coverage,
         populations = {g: [s for s in members if s in samples] for g, members in selection.imap.items()}
         populations = {g: members for g, members in populations.items() if members}
         ix = {g: np.array([samples.index(s) for s in members]) for g,members in populations.items()}
+        sfs = None
+        if evidence_prior == 'sfs':
+            intervals = reader.group['intervals'][:]
+            offsets = np.r_[0, np.cumsum(intervals[:, 2]-intervals[:, 1])]
+            locus_ids = reader.group['site_map'][offsets[:-1], 2]
+            sfs = CrossFittedSFS(locus_ids, ix, fit_loci=sfs_fit_loci,
+                                folds=sfs_folds, max_iter=sfs_max_iter)
+            for pos in np.flatnonzero(np.isin(locus_ids, sfs.fit_loci)):
+                for start in range(int(offsets[pos]), int(offsets[pos+1]), CHUNK_BASES):
+                    sites = np.arange(start, min(start+CHUNK_BASES, offsets[pos+1]))
+                    pl, good, _, _ = biallelic_locus_chunk(reader, sites, samples, min_genotype_depth)
+                    keep = good.sum(axis=0) >= min_sample_coverage
+                    for group, indices in ix.items():
+                        keep &= good[indices].sum(axis=0) >= selection.minmap[group]
+                    if keep.any():
+                        likelihood, good = likelihoods_from_pl(pl[:, keep], good[:, keep])
+                        sfs.add(likelihood, good, np.full(keep.sum(), locus_ids[pos]))
+            sfs.fit(cores)
         counts = np.zeros(len(samples), dtype=np.int64)
         het = np.zeros(len(samples))
         agg = {g: dict(callable_bases=0, callable_sample_cells=0,
@@ -148,7 +168,9 @@ def run_locus_evidence_popgen(*, data, requested_stats, min_sample_coverage,
                 continue
             likelihood, good = likelihoods_from_pl(pl[:, keep], good[:, keep])
             for group, indices in ix.items():
-                moments = posterior_moments(likelihood[indices], good[indices], evidence_prior)
+                moments = (sfs.moments(group, likelihood[indices], good[indices],
+                           reader.group['site_map'][sites, 2][keep]) if sfs is not None
+                           else posterior_moments(likelihood[indices], good[indices], evidence_prior))
                 gp = moments['GP']
                 counts[indices] += good[indices].sum(axis=1)
                 het[indices] += np.nansum(gp[..., 1], axis=1)
@@ -194,7 +216,10 @@ def run_locus_evidence_popgen(*, data, requested_stats, min_sample_coverage,
         retained_locus_bases=total, acgt_locus_bases=acgt, eligible_model_bases=model_bases,
         globally_callable_bases=selected_bases, structural_exclusions=dict(exclusions),
         sample_missingness_denominator='all retained ACGT bases before global/population coverage filters')
+    if sfs is not None:
+        summary['prior_model'] = 'cross-fitted folded finite-sample SFS'
+        summary['sfs_prior'] = sfs.metadata()
     return PopgenResult(sample_data_summary=build_sample_data_summary(samples=samples,
         missing_fraction=pd.Series(rates,index=samples),post_imputation_missing_fraction=pd.Series(rates,index=samples),
         imputation_algorithm='not-imputed'),sample_stats=sample_stats,
-        population_stats=pd.DataFrame(rows),summary=summary)
+        population_stats=pd.DataFrame(rows),summary=summary, sfs=sfs.table() if sfs is not None else None)

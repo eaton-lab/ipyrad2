@@ -262,6 +262,9 @@ def run_popgen_method(
     evidence_prior: str = "uniform",
     evidence_scope: str = "snps",
     individual_map=None,
+    sfs_fit_loci: int = 1024,
+    sfs_folds: int = 5,
+    sfs_max_iter: int = 10000,
 ) -> None:
     """Run the genome-wide population-genetic analysis workflow."""
     data = Path(data).expanduser().absolute()
@@ -278,6 +281,8 @@ def run_popgen_method(
         raise IPyradError("Genotype mode must be calls or likelihoods.")
     if evidence_scope not in ("snps", "loci"):
         raise IPyradError("Evidence scope must be snps or loci.")
+    if evidence_prior != "sfs" and (sfs_fit_loci, sfs_folds, sfs_max_iter) != (1024, 5, 10000):
+        raise IPyradError("SFS fitting options require --evidence-prior sfs.")
     if genotype_mode == "calls" and (evidence_prior != "uniform" or individual_map is not None or evidence_scope != "snps"):
         raise IPyradError("Evidence scope, prior and individual map require --genotype-mode likelihoods.")
     if genotype_mode == "likelihoods":
@@ -305,7 +310,9 @@ def run_popgen_method(
             min_genotype_depth=min_genotype_depth, min_site_qual=min_site_qual,
             imap=imap, minmap=minmap, exclude=exclude, include_reference=include_reference,
             subsample_unlinked=subsample_unlinked, random_seed=random_seed, cores=cores,
-            log_level=log_level, evidence_prior=evidence_prior, individual_map=individual_map)
+            log_level=log_level, evidence_prior=evidence_prior, individual_map=individual_map,
+            **(dict(sfs_fit_loci=sfs_fit_loci, sfs_folds=sfs_folds, sfs_max_iter=sfs_max_iter)
+               if evidence_prior == "sfs" else {}))
     elif backend == "sequence":
         if subsample_unlinked:
             raise IPyradError("--subsample-unlinked is only supported on SNP-backed popgen runs.")
@@ -426,6 +433,8 @@ def run_popgen_method(
     requested_section = {
         "requested_stats": request.requested_stat_list,
         "sfs_mode": (
+            "cross-fitted folded finite-sample prior"
+            if backend_summary.get("evidence_prior") == "sfs" else
             "folded genome-wide only"
             if "sfs" in request.requested_stats
             else "not requested"

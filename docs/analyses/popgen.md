@@ -488,3 +488,65 @@ The bcftools pileup [native allele/PL construction](https://github.com/samtools/
 selects an unseen nucleotide as its symbolic alternative; this motivates the
 explicit conditional biallelic interpretation rather than assigning the symbol
 a known nucleotide or assuming reference certainty.
+
+### Opt-in fitted SFS prior
+
+`--evidence-prior sfs` estimates a folded finite-sample site-frequency spectrum
+from native genotype likelihoods within each explicit `--imap` group. It changes
+only downstream posterior summaries; assembly calls, native PL, and input HDF5
+files remain unchanged. No ancestral allele is required. This is an
+ANGSD-style sample allele-count likelihood model, not an ANGSD compatibility
+claim or a demographic inference tool.
+
+```bash
+ipyrad2 popgen -d oak.hdf5 -o output-sfs -n oak \
+  --genotype-mode likelihoods --evidence-scope loci \
+  --evidence-prior sfs --stats pi,heterozygosity -i populations.tsv \
+  --min-genotype-depth 1 --sfs-fit-loci 1024 --sfs-folds 5 -c 4
+```
+
+For SNP scope, request `--stats heterozygosity`. Its fitted spectrum is conditional
+on the retained SNP catalogue and must not be interpreted as an all-base SFS.
+Locus scope includes eligible invariant bases, subject to the same conditional
+biallelic model and missingness/mask rules described above. This does not remove
+ascertainment or allele-model limitations.
+
+For N diploid individuals the likelihood for count k is the coefficient of z^k
+in the product of `(L0 + 2 L1 z + L2 z²)`, divided by `choose(2N,k)`.
+The folded bins combine counts k and 2N−k with equal orientation weights;
+the middle bin is counted once. EM fits the N+1 folded weights with a symmetric
+Dirichlet prior of alpha=1.5 (0.5 pseudocount per bin). This weak regularization
+keeps unseen count categories from receiving exactly zero prior probability;
+it can matter in small or weakly informative panels.
+
+By default, up to 1,024 whole fitting loci are selected evenly within five
+folds. Folds are sorted retained-locus rank modulo five. Every evaluation locus
+uses a spectrum fitted outside its entire fold. This guards against fitting and
+evaluating the same locus; it is **not individual holdout**. Group members'
+likelihoods enter a site's joint posterior once. Linked sites still contribute
+composite likelihood terms; no independence-based confidence interval is implied.
+
+Missing individuals contribute a constant likelihood during fitting. During
+summarization, the count prior is projected hypergeometrically onto the usable
+individuals at that site. Missing cells receive no posterior and are never
+zero-filled. Joint chromosome-count variance is retained in diversity estimates.
+
+The additional `*.sfs.tsv` table records every group/fold/bin weight, fitting-site
+counts, convergence status and iterations. The manifest records fitting loci,
+fold rules and assumptions. Flat likelihood rows supply no SFS information and
+are omitted from fitting. An entirely uninformative training fold or failure to
+converge raises an error; there is no silent replacement with a generic prior.
+`--sfs-max-iter` controls the iteration ceiling (default 10,000); convergence
+requires maximum absolute weight change <=1e-7. The current implementation
+supports up to 128 distinct individuals per group and limits stored fitting
+kernels to 256 MiB; reduce `--sfs-fit-loci` if necessary. Up to four group/fold
+fits run concurrently, bounded by `-c`, with one BLAS thread each.
+
+Two or three diploid samples can provide useful information across many loci
+(three or four folded count bins, respectively). Their spectra have coarse
+resolution and can be weakly identified at very low depth. More loci cannot
+replace missing read information, and more samples do not fix inappropriate
+population grouping. Compare fold stability, fitting-panel sensitivity, generic
+priors, and held-out/downsampled high-depth controls before interpreting improved
+accuracy. Per-site posterior variance does not include uncertainty in the fitted
+spectrum. Taxon labels alone do not establish a panmictic population.

@@ -59,9 +59,15 @@ def _setup_popgen_subparser(
         help="Likelihood mode: SNP catalogue (default) or all retained locus bases. loci requires assemble --evidence loci and uses an explicit biallelic model, including native reference/unseen likelihoods.",
     )
     core.add_argument(
-        "--evidence-prior", choices=("uniform", "population"), default="uniform",
-        help="Likelihood mode: uniform genotype prior or integrated Beta(1,1) population-frequency prior; population requires explicit --imap. [default=uniform]",
+        "--evidence-prior", metavar="str", choices=("uniform", "population", "sfs"), default="uniform",
+        help="Likelihood mode: uniform genotype, integrated Beta(1,1) population prior, or cross-fitted folded SFS; population and sfs require explicit --imap. [default=uniform]",
     )
+    core.add_argument("--sfs-fit-loci", type=int, default=1024,
+        help="SFS mode: maximum evenly spaced whole fitting loci, including invariant bases in loci scope. [default=1024]")
+    core.add_argument("--sfs-folds", type=int, default=5,
+        help="SFS mode: whole-locus cross-fitting folds (>=2). [default=5]")
+    core.add_argument("--sfs-max-iter", type=int, default=10000,
+        help="SFS mode: maximum EM iterations; an unconverged fit fails explicitly. [default=10000]")
     core.add_argument(
         "--individual-map", metavar="Path", type=Path,
         help="Likelihood mode: optional sample<TAB>individual mapping. Duplicate individuals are rejected; otherwise each sample is assumed distinct.",

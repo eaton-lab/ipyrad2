@@ -11,6 +11,7 @@ from ...extracters.snps_extracter import SNPsExtracter
 from ..common import build_sample_data_summary
 from .likelihoods import likelihoods_from_pl, posterior_moments
 from .models import PopgenResult
+from .sfs_fitting import CrossFittedSFS
 
 
 def _check_individuals(samples, mapping):
@@ -39,12 +40,13 @@ def run_evidence_popgen(*, data, requested_stats, min_sample_coverage,
                        max_sample_missing, min_minor_allele_frequency, imap,
                        minmap, exclude, include_reference, subsample_unlinked,
                        random_seed, cores, log_level, min_genotype_depth=0,
-                       min_site_qual=0., evidence_prior='uniform', individual_map=None):
+                       min_site_qual=0., evidence_prior='uniform', individual_map=None,
+                       sfs_fit_loci=1024, sfs_folds=5, sfs_max_iter=10000):
     if set(requested_stats) != {'heterozygosity'}:
         raise IPyradError('Likelihood mode currently supports heterozygosity (including SNP-catalogue gene diversity), not pi/Fst/SFS or inbreeding statistics.')
-    if evidence_prior not in ('uniform', 'population'):
+    if evidence_prior not in ('uniform', 'population', 'sfs'):
         raise IPyradError('Unknown evidence prior.')
-    if evidence_prior == 'population' and not imap:
+    if evidence_prior in ('population', 'sfs') and not imap:
         raise IPyradError('Population evidence prior requires an explicit --imap; groups are biological assumptions.')
     if include_reference:
         raise IPyradError('Likelihood popgen cannot use a synthetic reference sample.')
@@ -105,6 +107,19 @@ def run_evidence_popgen(*, data, requested_stats, min_sample_coverage,
             shuffled = rng.permutation(len(selected))
             _, first = np.unique(loci[shuffled], return_index=True)
             selected = np.sort(selected[shuffled[first]])
+        sfs = None
+        if evidence_prior == 'sfs':
+            locus_ids = reader.snpsmap[selected, 0]
+            sfs = CrossFittedSFS(locus_ids, indices, fit_loci=sfs_fit_loci,
+                                folds=sfs_folds, max_iter=sfs_max_iter)
+            fitting = selected[np.isin(locus_ids, sfs.fit_loci)]
+            for start in range(0, len(fitting), 512):
+                sites = fitting[start:start+512]
+                d = reader.read(sites, samples)
+                good = d['usable_PL'] & (d['DP'] >= max(1, min_genotype_depth))
+                likelihood, good = likelihoods_from_pl(d['PL'][..., :3], good)
+                sfs.add(likelihood, good, reader.snpsmap[sites, 0])
+            sfs.fit(cores)
         ns = len(samples)
         count = np.zeros(ns, dtype=np.int64)
         het = np.zeros(ns)
@@ -122,7 +137,8 @@ def run_evidence_popgen(*, data, requested_stats, min_sample_coverage,
             hard_count += hard.sum(axis=1)
             hard_het += (hard & (gt[..., 0] != gt[..., 1])).sum(axis=1)
             for group, ix in indices.items():
-                result = posterior_moments(likelihood[ix], good[ix], evidence_prior)
+                result = (sfs.moments(group, likelihood[ix], good[ix], reader.snpsmap[sites, 0])
+                          if sfs is not None else posterior_moments(likelihood[ix], good[ix], evidence_prior))
                 gp = result['GP']
                 count[ix] += good[ix].sum(axis=1)
                 het[ix] += np.nansum(gp[..., 1], axis=1)
@@ -166,8 +182,11 @@ def run_evidence_popgen(*, data, requested_stats, min_sample_coverage,
         original_catalogue_sites=nv, biallelic_qual_candidates=len(candidates),
         linked_post_filter_snps=linked_count, exported_snps=len(selected),
         subsample_unlinked=subsample_unlinked, random_seed=random_seed)
+    if sfs is not None:
+        summary['model'] = 'cross-fitted folded finite-sample SFS'
+        summary['sfs_prior'] = sfs.metadata()
     logger.info('Computed evidence-aware SNP-catalogue summaries for {} populations', len(populations))
     return PopgenResult(sample_data_summary=build_sample_data_summary(samples=samples,
         missing_fraction=pd.Series(rates, index=samples), post_imputation_missing_fraction=pd.Series(rates, index=samples),
         imputation_algorithm='not-imputed'), sample_stats=sample_stats,
-        population_stats=pd.DataFrame(rows), summary=summary)
+        population_stats=pd.DataFrame(rows), summary=summary, sfs=sfs.table() if sfs is not None else None)
