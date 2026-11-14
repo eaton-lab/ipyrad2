@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import random
+import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -67,6 +68,28 @@ def test_run_pipeline_stdin_text_roundtrip() -> None:
     assert rc == 0
     assert out == payload.encode("utf-8")
     assert err == b""
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_large_stdin_and_stdout_do_not_deadlock(stream: bool) -> None:
+    # Bound the test externally because the old launcher blocks before its
+    # internal timeout starts.
+    driver = _py(
+        "import sys",
+        "from ipyrad2.utils.parallel import run_pipeline, stream_pipeline_lines",
+        "payload = 'a' * (1024 * 1024)",
+        "child = [sys.executable, '-c', "
+        "'import sys; print(\"b\" * (1024 * 1024), flush=True); "
+        "print(len(sys.stdin.read()))']",
+        (
+            "assert list(stream_pipeline_lines([child], stdin_text=payload)) "
+            "== ['b' * len(payload), str(len(payload))]"
+            if stream else
+            "assert run_pipeline([child], stdin_text=payload)[1].splitlines() "
+            "== [b'b' * len(payload), str(len(payload)).encode()]"
+        ),
+    )
+    subprocess.run(driver, check=True, timeout=15)
 
 
 def test_run_pipeline_outfile_success_returns_empty_stdout(tmp_path: Path) -> None:

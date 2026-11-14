@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import atexit
+from contextlib import ExitStack
 import multiprocessing as mp
 import os
 import select
@@ -177,49 +178,47 @@ def _launch_pipeline(
     stderr_tmpfiles: list[tempfile.NamedTemporaryFile] = []
     prev: sp.Popen | None = None
 
-    for idx, argv in enumerate(cmds):
-        is_first = idx == 0
-        is_last = idx == len(cmds) - 1
+    with ExitStack() as stack:
+        input_file = None
+        if stdin_text is not None:
+            # A file lets the child read input while the parent drains output.
+            input_file = stack.enter_context(tempfile.TemporaryFile())
+            input_file.write(stdin_text.encode(stdin_encoding, errors="strict"))
+            input_file.seek(0)
 
-        stdout_target = last_stdout_target if is_last else sp.PIPE
-        stdin_source = (
-            sp.PIPE
-            if is_first and stdin_text is not None
-            else None if prev is None else prev.stdout
-        )
+        for idx, argv in enumerate(cmds):
+            is_first = idx == 0
+            is_last = idx == len(cmds) - 1
 
-        if is_last and last_stderr_pipe:
-            stderr_target = sp.PIPE
-        else:
-            tmpf = tempfile.NamedTemporaryFile(prefix="pipe-stderr-", delete=False)
-            stderr_target = tmpf
-            stderr_tmpfiles.append(tmpf)
+            stdout_target = last_stdout_target if is_last else sp.PIPE
+            stdin_source = input_file if is_first else prev.stdout
 
-        child_context = {}
-        if env is not None:
-            child_context["env"] = env
-        if cwd is not None:
-            child_context["cwd"] = cwd
-        proc = safe_popen(
-            argv,
-            stdin=stdin_source,
-            stdout=stdout_target,
-            stderr=stderr_target,
-            text=False,
-            **child_context,
-        )
+            if is_last and last_stderr_pipe:
+                stderr_target = sp.PIPE
+            else:
+                tmpf = tempfile.NamedTemporaryFile(prefix="pipe-stderr-", delete=False)
+                stderr_target = tmpf
+                stderr_tmpfiles.append(tmpf)
 
-        if prev is not None and prev.stdout is not None:
-            prev.stdout.close()
+            child_context = {}
+            if env is not None:
+                child_context["env"] = env
+            if cwd is not None:
+                child_context["cwd"] = cwd
+            proc = safe_popen(
+                argv,
+                stdin=stdin_source,
+                stdout=stdout_target,
+                stderr=stderr_target,
+                text=False,
+                **child_context,
+            )
 
-        procs.append(proc)
-        prev = proc
+            if prev is not None and prev.stdout is not None:
+                prev.stdout.close()
 
-    if stdin_text is not None and procs and procs[0].stdin is not None:
-        data = stdin_text.encode(stdin_encoding, errors="strict")
-        procs[0].stdin.write(data)
-        procs[0].stdin.close()
-        procs[0].stdin = None
+            procs.append(proc)
+            prev = proc
 
     return _LaunchedPipeline(procs=procs, stderr_tmpfiles=stderr_tmpfiles)
 
