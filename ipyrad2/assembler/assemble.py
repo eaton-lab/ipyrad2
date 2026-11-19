@@ -9,7 +9,8 @@ import shutil
 from pathlib import Path
 from loguru import logger
 import pandas as pd
-from .reporting import record_assembly_run, activate_run_reporting, record_inputs
+from .reporting import record_assembly_run, activate_run_reporting, record_inputs, record_calling_settings
+from .calling_options import resolve_calling_options
 import time
 from .beds import (
     get_name_from_bam,
@@ -180,7 +181,8 @@ def existing_results_force_or_raise(outdir, tmpdir, name, force):
     """Apply assemble overwrite policy for the current output prefix."""
     evidence = outdir / f"{name}.evidence.bcf"
     evidence_index = evidence.with_suffix(".bcf.csi")
-    if any(path.exists() for path in (outdir / f"{name}.loci.gz", tmpdir, evidence, evidence_index)):
+    sfs_report = outdir / f"{name}.sfs.json"
+    if any(path.exists() for path in (outdir / f"{name}.loci.gz", tmpdir, evidence, evidence_index, sfs_report)):
         if not force:
             raise IPyradError(
                 f"outfiles with prefix {name} already exist in {outdir}. Use --force to overwrite."
@@ -204,6 +206,7 @@ def existing_results_force_or_raise(outdir, tmpdir, name, force):
                 outdir / f"{name}.stats_locus_coverage.txt",
                 evidence,
                 evidence_index,
+                sfs_report,
             ]
             for r in rfiles:
                 if r.exists():
@@ -1378,6 +1381,11 @@ def _run_variant_stage(
     log_level: str,
     wgs_samples: list[str] | None = None,
     all_site_evidence: bool = False,
+    genotype_model: str = "native",
+    sample_retained_beds: dict[str, Path] | None = None,
+    sfs_fit_loci: int = 1024,
+    sfs_folds: int = 5,
+    sfs_max_iter: int = 10000,
 ) -> Path:
     """Call, filter, and resolve joint variants inside the canonical loci BED."""
     vcf_dir = tmpdir / "vcfs"
@@ -1412,6 +1420,7 @@ def _run_variant_stage(
         return sum(int(row[2]) - int(row[1]) for line in path.read_text().splitlines()
                    if (row := line.split()))
 
+    capture_start = time.monotonic()
     jobs = {}
     for chunk in sorted(chunk_beds, key=target_bases, reverse=True):
         jobs[str(chunk)] = (
@@ -1425,7 +1434,7 @@ def _run_variant_stage(
                 min_map_q=min_map_q,
                 locus_chunk=chunk,
                 threads=chunk_threads,
-                **({"all_site_evidence": True} if all_site_evidence else {}),
+                **({"all_site_evidence": True} if all_site_evidence or genotype_model == "sfs" else {}),
             ),
         )
     run_with_pool(jobs, log_level, variant_workers, msg="Calling variants")
@@ -1434,7 +1443,8 @@ def _run_variant_stage(
     # genotype/site filters before resolving SNP/indel conflicts.
     get_concat_chunk_vcfs(tmpdir, threads)
     logger.info("filtering variant calls")
-    get_filtered_vcf(tmpdir, min_sample_depth, min_geno_q, min_site_q, threads)
+    get_filtered_vcf(tmpdir, max(5, min_sample_depth) if genotype_model == "sfs" else min_sample_depth,
+                     min_geno_q, min_site_q, threads)
     if wgs_samples:
         logger.info("masking WGS heterozygous genotypes by allele balance")
         ab_stats = apply_wgs_het_allele_balance_mask(
@@ -1449,6 +1459,17 @@ def _run_variant_stage(
             ab_stats["wgs_het_genotypes_masked_by_allele_balance"],
             ab_stats["wgs_het_genotypes_examined_for_allele_balance"],
         )
+    if genotype_model == "sfs":
+        from .sfs_calling import run_sfs_calling
+        capture_seconds = time.monotonic() - capture_start
+        result = run_sfs_calling(tmpdir=tmpdir, names=list(bam_dict), group_file=group_samples_file,
+            retained_beds=sample_retained_beds, min_depth=min_sample_depth,
+            geno_q=min_geno_q, site_q=min_site_q, fit_loci=sfs_fit_loci,
+            folds=sfs_folds, max_iter=sfs_max_iter, cores=cores, threads=threads,
+            wgs_samples=wgs_samples or ())
+        result['timing_seconds']['capture_and_native_calling'] = capture_seconds
+        (tmpdir / 'sfs.calling.json').write_text(json.dumps(result, indent=2)+'\n')
+        record_calling_settings(sfs=result)
     logger.info("resolving indels and SNPs")
     return get_vcf_with_indels_resolved(tmpdir, reference, threads)
 
@@ -1463,6 +1484,7 @@ def _build_sample_masks(
     min_sample_depth: int,
     workers: int,
     log_level: str,
+    genotype_model: str = "native",
 ) -> dict[str, Path]:
     """Build low-depth and sample-specific masks, then merge them per sample."""
     # Low-depth masks are derived from the pre-paralog per-sample depth
@@ -1481,7 +1503,13 @@ def _build_sample_masks(
                 min_sample_depth=min_sample_depth,
             ),
         )
-    run_with_pool(jobs, log_level, workers, msg="Building low-depth masks")
+    if genotype_model == "sfs":
+        # SFS acceptance already checks actual pileup DP and every reference
+        # base. Fragment-span coverage is not genotype evidence in mate gaps.
+        for sname, artifacts in sample_artifacts.items():
+            shutil.copyfile(loci_bed.parent / f'{sname}.sfs.mask.bed', artifacts.lowdepth_mask_bed)
+    else:
+        run_with_pool(jobs, log_level, workers, msg="Building low-depth masks")
 
     # Sample-specific paralog masks now apply to every sample that was scored in
     # the shared RAD-defined loci, including WGS samples.
@@ -1866,7 +1894,7 @@ def run_assembler(
     min_site_q: int,
     min_geno_q: int,
     min_base_q: int,
-    min_sample_depth: int,  # sample must have depth cov or site is masked.
+    min_sample_depth: int | None,  # None resolves to the model-specific default.
     min_locus_sample_coverage: int,  # locus must have data for N samples (used in locus delim)
     min_locus_trim_sample_coverage: int,  # trim r/l to region with at least N samples data (default 4)
     min_locus_length: int,
@@ -1896,9 +1924,18 @@ def run_assembler(
     min_sample_observed_fraction: float = 0.10,
     evidence: str = "none",
     invocation: dict | None = None,
+    genotype_model: str = "native",
+    min_locus_depth: int | None = None,
+    sfs_fit_loci: int = 1024,
+    sfs_folds: int = 5,
+    sfs_max_iter: int = 10000,
 ):
     if evidence not in ("none", "snps", "loci"):
         raise IPyradError("evidence must be one of: none, snps, loci.")
+    explicit_locus_depth = min_locus_depth is not None
+    min_sample_depth, min_locus_depth = resolve_calling_options(
+        genotype_model, min_sample_depth, min_locus_depth, min_geno_q, min_site_q,
+        sfs_fit_loci, sfs_folds, sfs_max_iter)
     # Normalize the top-level input/output paths first so later stages can
     # treat everything as concrete local files.
     loci_bed = loci_bed.expanduser().absolute() if loci_bed else None
@@ -1938,6 +1975,11 @@ def run_assembler(
     phase_dir = tmpdir / "phase"
     phase_dir.mkdir(exist_ok=True)
     activate_run_reporting()
+    record_calling_settings(genotype_model=genotype_model, min_sample_depth=min_sample_depth,
+                           min_locus_depth=min_locus_depth, min_geno_q=min_geno_q,
+                           min_site_q=min_site_q, locus_discovery_active=loci_bed is None)
+    logger.info('genotype model={}, genotype depth >= {}, RAD discovery depth >= {}, genotype Q >= {}',
+                genotype_model, min_sample_depth, min_locus_depth, min_geno_q)
 
     expanded_rad_bams = (
         [bam_file.expanduser().absolute() for bam_file in rad_bams] if rad_bams else []
@@ -2051,6 +2093,8 @@ def run_assembler(
             population_imap,
             parsed_minmap,
         ) = _normalize_populations_file(populations, tmpdir, snames)
+        if genotype_model == "sfs" and any(len(v) > 128 for v in population_imap.values()):
+            raise IPyradError('SFS currently supports at most 128 individuals per explicit group.')
         logger.info("grouped variant calling enabled from --populations")
         logger.info(
             "loaded {} population group(s): {}",
@@ -2154,6 +2198,11 @@ def run_assembler(
         min_merge_distance=min_locus_merge_distance,
         threads=threads,
     )
+    if genotype_model == "sfs" or explicit_locus_depth:
+        # Keep all positive coverage for downstream masks/statistics. Only
+        # merged RAD discovery intervals use the independent locus threshold.
+        kwargs['min_sample_depth'] = 1
+        kwargs['min_locus_depth'] = min_locus_depth
     jobs = {}
     for sname, bam_file in all_dict.items():
         ikwargs = kwargs | dict(
@@ -2259,6 +2308,9 @@ def run_assembler(
             log_level=log_level,
             wgs_samples=sorted(wgs_dict) if (bam_dict and wgs_dict) else None,
             **({"all_site_evidence": True} if evidence == "loci" else {}),
+            **(dict(genotype_model=genotype_model, sample_retained_beds=paralog_outputs.sample_retained_beds,
+                    sfs_fit_loci=sfs_fit_loci, sfs_folds=sfs_folds, sfs_max_iter=sfs_max_iter)
+               if genotype_model == "sfs" else {}),
         )
 
     # [4] Sample masks:
@@ -2275,6 +2327,7 @@ def run_assembler(
             min_sample_depth=min_sample_depth,
             workers=workers,
             log_level=log_level,
+            **({"genotype_model": "sfs"} if genotype_model == "sfs" else {}),
         )
 
     # [5] Final outputs:
@@ -2332,6 +2385,8 @@ def run_assembler(
             for sname in snames
         },
     )
+    if genotype_model == "sfs":
+        shutil.copyfile(tmpdir / 'sfs.calling.json', outdir / f'{name}.sfs.json')
     if keep_tmpdir:
         logger.info("keeping assemble tmpdir at {}", tmpdir)
     else:

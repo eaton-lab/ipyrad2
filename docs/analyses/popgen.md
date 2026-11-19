@@ -25,7 +25,11 @@ This command is most useful when you want:
 - A population map (IMAP) file if you want multi-population summaries
 - An understanding of how much missing data remains in your assembled dataset
 
-If you do not provide `--imap`, all retained samples are treated as one population named `all`.
+For hard-call summaries and the uniform likelihood prior, omitting `--imap`
+treats retained samples as one reporting population named `all`. Population and
+SFS likelihood priors require an explicit `--imap`. This differs from
+`assemble --genotype-model sfs`, where omitting `--populations` fits a separate
+singleton SFS for each sample.
 
 ## Inputs and Backends
 
@@ -372,15 +376,16 @@ ipyrad2 popgen -d assembly.hdf5 -o POPGEN_EVIDENCE \
   --evidence-prior population --imap populations.tsv
 ```
 
-The first evidence-aware release supports biallelic SNP-catalogue heterozygosity
-and gene diversity. `--stats all` selects this supported subset in likelihood
-mode. It does not estimate per-base nucleotide diversity, FST, SFS, or inbreeding,
-and does not support windows or MAF filtering in this mode. These summaries are
-conditional on the retained SNP catalogue, not all bases within RAD loci.
-The `loci` storage option also retains invariant-site evidence, but this popgen
-mode still reads the SNP table and has the same catalogue scope.
+The default likelihood scope, `--evidence-scope snps`, supports biallelic
+SNP-catalogue heterozygosity and gene diversity. `--stats all` selects that
+supported subset. SNP-scope summaries are conditional on the retained SNP
+catalogue. For per-callable-base heterozygosity and diversity, select
+`--evidence-scope loci --stats pi,heterozygosity` as described below. Neither
+likelihood scope currently supports FST, inbreeding statistics, windows, or MAF
+filtering. Fitted SFS weights are diagnostic outputs of the SFS prior, separate
+from the hard-call `--stats sfs` statistic.
 
-Two priors are available:
+Three priors are available:
 
 - `uniform` (default): equal prior probability for the three genotypes of each
   individual, independently. No population information changes the posterior.
@@ -390,6 +395,9 @@ Two priors are available:
   Group membership is a biological assumption; species labels alone do not
   establish an appropriate randomly mating population. No dropout correction is
   applied.
+- `sfs`: a folded finite-sample allele-count prior fitted across loci within each
+  explicit `--imap` group, using whole-locus cross-fitting. See the
+  [SFS fitting details](#opt-in-fitted-sfs-prior) below.
 
 Each row must represent a distinct individual. Supply `--individual-map` with
 `sample<TAB>individual` entries to check known duplicates. Replicate assays of
@@ -469,9 +477,9 @@ numerator. Sample tables report posterior heterozygosity over each individual's
 usable bases. Different groups can have different callable domains; comparisons
 need matched domains or explicit acknowledgment of that difference.
 
-Both existing priors are available: independent uniform genotype probabilities,
-or HWE conditional on a shared frequency integrated against Beta(1,1) within
-explicit populations. These priors can produce substantially different results
+All three priors are available: independent uniform genotype probabilities,
+HWE conditional on a shared frequency integrated against Beta(1,1), or the
+cross-fitted finite-sample SFS prior within explicit populations. These priors can produce substantially different results
 at low depth; all-sites storage does not itself calibrate a prior or correct RAD
 allele dropout. No posterior is imputed for a missing individual. Repeated
 assays of the same individual must not be treated as separate individuals.
@@ -490,6 +498,10 @@ explicit conditional biallelic interpretation rather than assigning the symbol
 a known nucleotide or assuming reference certainty.
 
 ### Opt-in fitted SFS prior
+
+> Documentation draft for review. See the [mixed-depth paper example](../recipes/mixed-depth-sfs.md)
+> for commands, validated genotype-recovery results, and the distinction between
+> the public SFS options and research observation calibration.
 
 `--evidence-prior sfs` estimates a folded finite-sample site-frequency spectrum
 from native genotype likelihoods within each explicit `--imap` group. It changes
@@ -519,8 +531,8 @@ Dirichlet prior of alpha=1.5 (0.5 pseudocount per bin). This weak regularization
 keeps unseen count categories from receiving exactly zero prior probability;
 it can matter in small or weakly informative panels.
 
-By default, up to 1,024 whole fitting loci are selected evenly within five
-folds. Folds are sorted retained-locus rank modulo five. Every evaluation locus
+By default, up to 1,024 whole fitting loci **in total** are selected evenly
+within five folds. Folds are sorted retained-locus rank modulo five. Every evaluation locus
 uses a spectrum fitted outside its entire fold. This guards against fitting and
 evaluating the same locus; it is **not individual holdout**. Group members'
 likelihoods enter a site's joint posterior once. Linked sites still contribute
@@ -550,3 +562,17 @@ population grouping. Compare fold stability, fitting-panel sensitivity, generic
 priors, and held-out/downsampled high-depth controls before interpreting improved
 accuracy. Per-site posterior variance does not include uncertainty in the fitted
 spectrum. Taxon labels alone do not establish a panmictic population.
+
+`popgen` fits its prior from the retained evidence and requested analysis filters;
+it does not reuse the weights in `NAME.sfs.json` from assembly. The assembly
+caller selects up to `--sfs-fit-loci` training loci separately for each group and
+held-out fold, while `popgen` uses the total fitting-locus budget described above.
+Matching the numerical option values therefore does not guarantee identical
+fitting panels or posterior weights between commands.
+
+For diversity estimation, thresholded SFS calls still discard uncertain cells.
+Use `--genotype-mode likelihoods --evidence-scope loci` to integrate posterior
+uncertainty across callable locus bases, and inspect each reported denominator.
+Compare hard calls, uniform likelihoods, and SFS on matched domains when making
+method comparisons; their default usable-cell sets can differ. Neither SFS
+option fits the paper's separate library-specific observation correction.

@@ -96,7 +96,7 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
     assert "ipyrad2 assemble: delimit loci, call variants, and write outputs" in help_text
     assert "$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -o OUT -m 4 -qm 20" in help_text
     assert "$ ipyrad2 assemble -d BAMS/RAD/*.bam -w BAMS/WGS/*.bam -r REF.fa --subsample keep.tsv -o OUT" in help_text
-    assert "$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -p pops.tsv -o OUT" in help_text
+    assert "$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa --populations pops.tsv -o OUT" in help_text
     assert "$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa --rename rename.tsv -o OUT" in help_text
     assert "RAD BAM inputs that delimit loci unless --loci-bed is provided" in help_text
     assert "Discard mapped reads with MAPQ below this threshold." in help_text
@@ -106,7 +106,7 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
     assert "Min third-allele fraction at a SNP site" in help_text
     assert "BED of loci to assemble instead of delimiting shared loci from RAD samples." in help_text
     assert "File whose first column selects BAM filenames or sample names; extra columns ignored" in help_text
-    assert "File mapping BAM basenames to group names for population-level variant calls" in help_text
+    assert "Sample-to-cohort mapping for calling" in help_text
     assert "--evidence {none,snps,loci}" in help_text
     assert "Store no evidence, SNP evidence, or SNP plus all final-locus evidence. [default=none]" in help_text
     assert "--all-site-evidence" not in help_text
@@ -182,7 +182,13 @@ def test_assemble_parser_defaults_match_current_cli() -> None:
     assert args.min_base_q == 13
     assert args.min_site_q == 13
     assert args.min_geno_q == 13
-    assert args.min_sample_depth == 5
+    # Unset depth is resolved by the selected caller before any native work.
+    assert args.min_sample_depth is None
+    assert args.genotype_model == 'native'
+    assert args.min_locus_depth is None
+    from ipyrad2.assembler.calling_options import resolve_calling_options
+    assert resolve_calling_options(args.genotype_model, args.min_sample_depth,
+                                   args.min_locus_depth, args.min_geno_q, args.min_site_q) == (5, 5)
     assert args.max_locus_hetero_frequency == 0.3
     assert args.max_locus_variant_frequency == 1.0
     assert args.min_locus_trim_sample_coverage == 4

@@ -14,10 +14,11 @@ $ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -o OUT -m 4 -qm 20
 $ ipyrad2 assemble -d BAMS/RAD/*.bam -w BAMS/WGS/*.bam -r REF.fa -o OUT -m 4 -qm 20
 $ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -b loci.bed -o OUT --max-tlen 2000
 $ ipyrad2 assemble -d BAMS/RAD/*.bam -w BAMS/WGS/*.bam -r REF.fa --subsample keep.tsv -o OUT
-$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -p pops.tsv -o OUT
+$ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa --populations pops.tsv -o OUT
 $ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa --rename rename.tsv -o OUT
 $ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -o OUT --evidence snps
 $ ipyrad2 assemble -d BAMS/RAD/*.bam -w BAMS/WGS/*.bam -r REF.fa -o OUT --evidence loci
+$ ipyrad2 assemble -d RAD/*.bam -w WGS/*.bam -r REF.fa -o OUT --genotype-model sfs --populations pops.tsv --evidence loci
 """
 
 
@@ -91,6 +92,10 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
     # )
 
     bed.add_argument(
+        "--min-locus-depth", metavar="int", type=int, default=None,
+        help="RAD depth for locus discovery; ignores genotype confidence. [default=native: -s; sfs: 5]",
+    )
+    bed.add_argument(
         "-m", "--min-locus-sample-coverage", metavar="int", type=int, default=4,
         help="Min RAD samples with data required to retain a locus. [default=%(default)s]",
     )
@@ -105,21 +110,31 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
 
 
     locus.add_argument(
+        "--genotype-model", choices=("native", "sfs"), default="native",
+        help="Native calling or cross-fitted SFS confidence calling. [default=%(default)s]",
+    )
+    locus.add_argument(
         "-qb", "--min-base-q", metavar="int", type=int, default=13,
         help="Min base quality used by mpileup and related downstream calling steps. [default=%(default)s]",
     )
     locus.add_argument(
         "-qs", "--min-site-q", metavar="int", type=int, default=13,
-        help="Min site QUAL required for variant sites retained after joint calling. [default=%(default)s]",
+        help="Min variant support: native QUAL or conservative SFS site confidence. [default=%(default)s]",
     )
     locus.add_argument(
         "-qg", "--min-geno-q", metavar="int", type=int, default=13,
-        help="Min per-sample genotype quality retained in the filtered VCF. [default=%(default)s]",
+        help="Min genotype quality: native GQ or SFS posterior Phred confidence. [default=%(default)s]",
     )
     locus.add_argument(
-        "-s", "--min-sample-depth", metavar="int", type=int, default=5,
-        help="Min within-sample read depth to keep a genotype call instead of masking it. [default=%(default)s]",
+        "-s", "--min-sample-depth", metavar="int", type=int, default=None,
+        help="Min depth to accept a genotype. [default=native: 5; sfs: 1]",
     )
+    locus.add_argument("--sfs-fit-loci", type=int, default=1024,
+        help="SFS: maximum training loci per group and held-out fold. [default=%(default)s]")
+    locus.add_argument("--sfs-folds", type=int, default=5,
+        help="SFS: whole-locus cross-fitting folds (>=2). [default=%(default)s]")
+    locus.add_argument("--sfs-max-iter", type=int, default=10000,
+        help="SFS: EM iteration limit; unconverged fits fail explicitly. [default=%(default)s]")
     locus.add_argument(
         "-u", "--max-locus-hetero-frequency", metavar="float", type=float, default=0.3,
         help="Max fraction of samples heterozygous at the same site before marking as a paralog [default=%(default)s]",
@@ -180,7 +195,7 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
     )
     naming.add_argument(
         "--populations", metavar="Path", type=Path,
-        help="File mapping BAM basenames to group names for population-level variant calls",
+        help="Sample-to-cohort mapping for calling; omitted: independent samples or singleton SFS.",
     )
     naming.add_argument(
         "--evidence", choices=("none", "snps", "loci"), default="none",

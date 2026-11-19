@@ -1,7 +1,7 @@
 # assemble
 
 `ipyrad2 assemble` takes mapped BAM files and a reference (or pseudoreference) genome fasta and generates
-a the main project outputs:
+the main project outputs:
 final assembled loci, a filtered VCF, a loci BED, a human-readable stats report, and
 an HDF5 database that can be used by downstream export and analysis commands.
 
@@ -107,26 +107,113 @@ These settings can strongly affect downstream locus retention. Overly strict val
 
 These settings matter only when loci are being delimited from RAD BAMs:
 
+- `--min-locus-depth`: minimum within-sample RAD coverage for locus discovery
 - `-m, --min-locus-sample-coverage`: minimum number of RAD samples required to retain a locus
 - `-z, --min-locus-length`: minimum locus length after delimiting
 - `-g, --min-locus-merge-distance`: merge nearby coverage intervals within this distance
 
 WGS samples do not help a locus pass `-m`. In mixed RAD/WGS runs, RAD BAMs define the loci first, and WGS samples are assembled only inside loci that already passed the RAD-based delimiting step.
 
-If `--loci-bed` is provided, `assemble` ignores these RAD-delimiting controls.
+If `--loci-bed` is provided, assembly starts from those intervals instead of
+RAD-based delimiting. Discovery depth and merge distance do not redefine those
+intervals. Minimum length and sample-coverage requirements still apply during
+final locus filtering.
+
+With native calling, discovery depth defaults to `-s` (5 unless specified),
+preserving the previous behavior. With SFS calling, discovery depth defaults to
+5 independently of the genotype acceptance depth. Set `--min-locus-depth`
+explicitly to separate these thresholds in either mode.
 
 ### Locus and Variant Filters
 
 - `-qb, --min-base-q`: minimum base quality used during mpileup and related calling steps
-- `-qs, --min-site-q`: minimum site QUAL for retained variant sites
-- `-qg, --min-geno-q`: minimum per-sample genotype quality
-- `-s, --min-sample-depth`: minimum within-sample depth to keep a genotype instead of masking it
+- `--genotype-model native|sfs`: native calling (default) or SFS confidence calling
+- `-qs, --min-site-q`: minimum variant support, in Phred units (default 13)
+- `-qg, --min-geno-q`: minimum genotype confidence, in Phred units (default 13)
+- `-s, --min-sample-depth`: minimum genotype depth (native default 5; SFS default 1)
 - `--min-sample-observed-fraction`: minimum fraction of non-`N`, non-gap bases required to keep one sample in one final locus
 - `-u, --max-locus-hetero-frequency`: maximum fraction of samples heterozygous at one site before the locus is considered paralog-like
 - `-y, --max-locus-variant-frequency`: maximum fraction of sites in a locus that can be variant before filtering
 - `-a, --min-locus-trim-sample-coverage`: minimum number of samples with non-`N` calls required to keep positions at locus edges
 
 These settings control what survives into the final `.loci`, `.vcf.gz`, and `.hdf5` outputs. In particular, `--min-sample-observed-fraction` removes sample rows that are mostly missing after trimming and depth/genotype masking, while `--max-sample-hetero-frequency` separately targets rows with too many heterozygous observed bases.
+
+### Opt-in SFS Confidence Calling
+
+> Documentation draft for review. The [mixed-depth paper example](../recipes/mixed-depth-sfs.md)
+> connects these options to genotype recovery and downstream diversity estimation.
+
+`--genotype-model sfs` fits a folded, finite-sample site-frequency spectrum
+from native pileup likelihoods and uses the resulting genotype posteriors to
+accept calls. It evaluates reference decisions as well as named biallelic SNPs
+throughout the retained locus domain. Current calling defaults remain native.
+
+```bash
+# RAD samples define loci; all samples contribute within their explicit cohorts.
+ipyrad2 assemble -d RAD/*.bam -w WGS/*.bam -r REF.fa -o OUT_SFS \
+    --genotype-model sfs --populations pops.tsv --evidence loci
+
+# Require 99% model-based genotype confidence and keep discovery at depth 5.
+ipyrad2 assemble -d RAD/*.bam -r REF.fa -o OUT_SFS_Q20 \
+    --genotype-model sfs --min-locus-depth 5 -s 1 -qg 20
+```
+
+`--populations` defines the individuals sharing each SFS; it must assign every
+input sample exactly once. Without it, each sample gets a singleton SFS fitted
+across that sample's loci. Samples are never pooled automatically, and RAD/WGS
+assay types do not define separate populations. Choose biologically appropriate
+cohorts and represent each individual once. Cohorts currently support at most
+128 individuals.
+
+Whole loci are assigned deterministically to five held-out folds. For each
+group and fold, up to 1,024 evenly spaced eligible training loci from the other
+folds are used for regularized EM fitting (Dirichlet pseudocount 0.5 per folded
+bin). No locus contributes to the prior used to call its own bases. Missing
+observations are integrated out, and uninformative likelihood rows do not count
+as invariant observations. The controls are `--sfs-fit-loci` (maximum training
+loci **per group and held-out fold**), `--sfs-folds`, and `--sfs-max-iter`.
+Insufficient training data and unconverged fits stop the run explicitly.
+This assembly fitting budget follows the validated calling workflow; the
+separate `popgen` SFS fitting option uses its own fitting-locus budget.
+
+In SFS mode, `-qg` thresholds `-10 log10(1 - max GP)`: 13 corresponds to about
+95% and 20 to 99% posterior confidence. These are model-based probabilities,
+not empirical accuracy guarantees. `-qs` thresholds a conservative lower bound
+on the probability that at least one sample is nonreference, calculated from
+the largest marginal nonreference probability. It does not assume independent
+sample posteriors. Native mode continues to use native GQ and QUAL.
+
+The explicit `-s` floor applies in addition to confidence. Increasing it rejects
+more calls but does not change the fitted SFS or avoid evaluating the underlying
+likelihoods. `--min-locus-depth`, locus occupancy, and `--loci-bed` control the
+domain to process; `--sfs-fit-loci` limits fitting work. Fitting buffers are capped
+at 256 MiB of SAF training arrays, with at most four concurrent fits, and
+posterior evaluation streams bounded blocks. These are component limits, not a
+total-memory guarantee. Capture, fitting, and posterior times are reported
+separately.
+
+A base with no usable reads remains missing. A REF/`<*>` record can support a
+confident reference call, but its unnamed alternative cannot become a fabricated
+nucleotide or heterozygote. Rejected reference decisions are explicitly masked
+in the consensus. Indels, multiallelic sites, and other unsupported records
+retain conservative native fallback calls, requiring depth at least `max(5, -s)`
+and the native GQ/QUAL thresholds. Existing WGS heterozygote allele-balance checks
+and indel-resolution rules still apply. VCF `INFO/IPYRAD_CALLER` distinguishes
+SFS and native fallback records; SFS GQ and QUAL are labeled in the header.
+
+SFS calling captures all-site likelihoods internally even when `--evidence none`
+is selected. `--evidence loci` retains them for subsequent likelihood-based
+`popgen` analyses. Call-confidence masks remain separate from evidence hard
+masks: rejecting a genotype alone does not erase its likelihoods. Original
+native PL values and their allele axes are preserved; posterior GQ in the
+assembled VCF is distinct from any native GQ retained in the evidence arrays.
+Final locus, paralog, and sample-domain exclusions still apply. This caller uses
+native likelihoods plus an SFS prior; it does not apply the separate research
+library-calibration model or change `popgen` defaults.
+
+`NAME.sfs.json` records the groups, selected training loci, fitted weights,
+convergence diagnostics, acceptance counts, resolved thresholds, and timings.
+The stats report also summarizes the calling model and thresholds.
 
 ### Paralog Filters
 
@@ -150,7 +237,7 @@ final shared BED is accepted.
 
 - `--subsample`: select a subset of BAMs by filename or sample name
 - `--rename`: rename final sample names from BAM basenames
-- `-p, --populations`: grouped-calling populations file
+- `--populations`: grouped-calling populations file
 - `-x, --masks`: site-pattern masks applied in the final assembled sequences
 
 Use these when you need grouped calling, stable sample names that differ from BAM headers, or post-consensus masking of known sequence patterns.
@@ -192,7 +279,8 @@ The main final outputs are:
 - `NAME.stats.txt`
 
 The final HDF5 is the main downstream project database.
-See the [Writing Outputs](writing-outputs) and [Analysis][analysis] sections for example usage.
+See the [Writing Outputs](../writing-outputs/index.md) and
+[Analysis](../analyses/index.md) sections for example usage.
 
 The `--evidence` option controls which native evidence is retained:
 
@@ -480,10 +568,12 @@ records cannot take precedence over an eligible mate in overlap masking.
 
 ### Genotype quality and read-filter diagnostics
 
-Final VCFs retain caller `FORMAT/GQ` alongside the existing genotype fields.
-The depth, genotype-quality and site-quality masking thresholds are unchanged.
-A masked genotype can retain its original GQ; that value does not override its
-missing GT or the site FILTER. Missing GQ stays missing.
+Final VCFs retain `FORMAT/GQ` alongside the genotype fields. Native mode preserves
+the existing GQ and masking thresholds; SFS mode reports posterior Phred
+confidence for modeled records and native GQ for fallback records. A masked
+genotype can retain a quality value; that value does not override its missing GT
+or the site FILTER. Missing native GQ stays missing. The native GQ stored in
+evidence arrays is distinct from SFS posterior GQ in the assembled VCF.
 
 `<name>.stats.json` includes `read_filter_diagnostics` keyed by library. Each
 library records the active settings, input/retained alignment counts, independent
@@ -522,7 +612,9 @@ The option adds temporary pileup files and database storage. Temporary files
 are removed normally; `--keep-tmpdir` retains them. This includes the SNP evidence
 table; the default `none` mode remains lean HDF5 v3.
 Uncovered and masked positions do not become confident reference calls.
-Symbolic native alleles retain their meaning. Current likelihood `popgen`
-still summarizes the SNP catalogue; storing all-site evidence does not itself
-provide an all-base diversity estimator. See the
-[format specification](../development/rad-site-evidence.md).
+Symbolic native alleles retain their meaning. Select
+`popgen --genotype-mode likelihoods --evidence-scope loci` to estimate
+heterozygosity and diversity across eligible locus bases; the default likelihood
+scope remains the SNP catalogue. See the
+[popgen guide](../analyses/popgen.md#likelihood-diversity-per-callable-locus-base)
+and [format specification](../development/rad-site-evidence.md).

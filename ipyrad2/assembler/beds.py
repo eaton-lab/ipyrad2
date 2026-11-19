@@ -487,6 +487,7 @@ def get_coverage_bed_graphs(
     min_sample_depth: int,
     min_merge_distance: int,
     threads: int,
+    min_locus_depth: int | None = None,
 ) -> Path:
     r"""Produce a fragments BED (full inserts) from a coordinate-sorted BAM.
 
@@ -576,6 +577,11 @@ def get_coverage_bed_graphs(
             [BIN_BED, "merge", "-d", str(min_merge_distance), "-i", "-"],
             [BIN_BED, "sort", "-i", "-", "-g", str(ref_info)],
         ]
+        if min_locus_depth is not None:
+            # Retain low coverage in the bedgraph for masking/statistics, but
+            # apply the independent discovery threshold before merging loci.
+            merge_cmds[0:1] = [["awk", "-v", f"MIN={min_locus_depth}",
+                               r'BEGIN{OFS="\t"} $4>=MIN {print $1,$2,$3}', str(out_bed_count)]]
         try:
             run_pipeline(
                 merge_cmds,

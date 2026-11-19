@@ -16,6 +16,7 @@ This section is especially intended for examples such as:
 ## Current Recipes
 
 - [Using -dx and -di to pair and name samples](./sample-name-parsing.md)
+- [Mixed-depth SFS calling and diversity: paper example (draft)](./mixed-depth-sfs.md)
 
 ## Status
 

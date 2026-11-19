@@ -94,6 +94,13 @@ def record_inputs(rad, wgs, group_file=None):
     run['configuration_files'] = configs
 
 
+def record_calling_settings(**values):
+    """Record resolved calling controls without replacing input provenance."""
+    context = _RUN.get()
+    if context is not None:
+        context['run'].setdefault('resolved_calling', {}).update(_jsonable(values))
+
+
 class EvidenceCounts:
     """Accumulate small per-sample summaries while native arrays are in memory."""
     def __init__(self, names, statuses):
@@ -277,6 +284,24 @@ def _publish(outdir, name, stats, body, run=None, embed=True):
     if run.get('calling'):
         run_lines += _section('Calling', [('Mode', run['calling']['mode']),
                               ('Populations file', run['parameters']['populations'] or 'N/A')])
+    resolved = run.get('resolved_calling')
+    if resolved:
+        run_lines += _section('Genotype Acceptance', [
+            ('Model', resolved['genotype_model']),
+            ('Minimum genotype depth', resolved['min_sample_depth']),
+            ('RAD discovery depth', resolved['min_locus_depth']),
+            ('Discovery depth active', resolved['locus_discovery_active']),
+            ('Genotype quality cutoff', resolved['min_geno_q']),
+            ('Site quality cutoff', resolved['min_site_q'])])
+        if resolved.get('sfs'):
+            data = resolved['sfs']
+            run_lines += _section('SFS Calling', [
+                ('Fits converged', len(data['fits'])),
+                ('Native fallback depth', data['native_min_depth']),
+                *[(key.replace('_', ' '), value) for key, value in data['counts'].items()],
+                *[(key.replace('_', ' '), f'{value:.3f} s') for key, value in data['timing_seconds'].items()]])
+            run_lines += ['  Confidence is posterior/model-based, not an empirical error guarantee.',
+                          '  Native fallback handles unsupported variant classes; no zero-read imputation.', '']
     timings = evidence.get('timing_seconds', {})
     storage_lines = _section('Storage and Time', [('HDF5 file size', _bytes(storage['hdf5_bytes'])),
              *[(f'{k} evidence datasets', _bytes(v)) for k,v in storage['evidence_dataset_bytes'].items()],

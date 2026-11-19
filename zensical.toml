@@ -51,6 +51,7 @@ nav = [
     {"empirical PE reference assembly" = "assembly/tutorial-PE-WGS.md"},
     "recipes/wex-recipes.md",
     "recipes/sample-name-parsing.md",
+    {"Mixed-depth SFS example (draft)" = "recipes/mixed-depth-sfs.md"},
 
   ]},
 ]

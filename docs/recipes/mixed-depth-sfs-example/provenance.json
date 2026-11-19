@@ -1,0 +1,41 @@
+{
+  "status": "Documentation draft for review; derived summaries only",
+  "source_package": "mixed-assay-genotypes-diversity-2026-11-19",
+  "source_files": {
+    "analysis/within-assay/taxon-summary-Q13.tsv": "e1b445e18b3b28cf7494f9f639e4f667b0f46eb6c09bbbe008c4073f320a39a1",
+    "analysis/within-assay/VALIDATED.json": "b2676b27a1881c16439c1b78f97cff78b94000c4f3322ec21b412cfaf67004f9",
+    "analysis/diversity/MANUSCRIPT_CLAIMS.json": "296bf9832d4d4833f0dce10e85837e9d433e4b4550a79a98bd210fccae003f0e",
+    "analysis/diversity/VALIDATED.json": "86ace2e4add40f625c70ce14fe034b2fffafd4096ddf928bf63a31cc33c59084",
+    "figures/genotyping/nine-taxon-recovery.png": "603c5e555b19599387ccaf54748387e3c9e7a8f0d889bd8756acb2a60d1eee4a",
+    "draft/RESULTS.txt": "2e5a926a04f38cc1cff8c8906898602621c3fb27b456e231f85640abc691ef18",
+    "draft/METHODS.txt": "c0d03a3002b41820dc2eba5b137b3d7a5691e6aa561800ec6222c62e94d4b58a",
+    "FINAL_VALIDATED.json": "640b5b9a253c1c6cc2851590b4747f5879a6434f5e7f2d5e9f6ed2112c00cde2"
+  },
+  "selection": {
+    "calling": {
+      "depths": [
+        1,
+        4
+      ],
+      "models": [
+        "current_dp5",
+        "sfs_confidence"
+      ],
+      "group_role": "all_companions",
+      "stage": "exported",
+      "benchmark": "full",
+      "depth_bin": "all"
+    },
+    "diversity": "development_and_external_native_SFS_contrasts: calibrated versus native SFS, signed RAD-minus-WGS gaps in percentage points"
+  },
+  "copied_artifacts": {
+    "calibration-transfer-summary.tsv": "9b05e51d4b3581aeae5477654ca729ce34988892629c173894e256d800128e53",
+    "oak-calling-summary.tsv": "c1c9536aad5dafd9cdc32ccc36efb27acec14ad5448d7899f219d4fd43da547b",
+    "oak-genotype-recovery.png": "603c5e555b19599387ccaf54748387e3c9e7a8f0d889bd8756acb2a60d1eee4a"
+  },
+  "limitations": [
+    "Empirical comparators are not known biological truth.",
+    "Source computations used frozen research workflows; the public CLI examples are workflow adaptations, not complete reproductions of the 216 conditions.",
+    "Library calibration results are research context and are not implemented by --genotype-model sfs or --evidence-prior sfs."
+  ]
+}
