@@ -54,69 +54,30 @@ def test_write_callable_regions_bed_can_be_empty(tmp_path: Path) -> None:
     assert out_bed.read_text(encoding="utf-8") == ""
 
 
-def test_get_reference_sort_order_refreshes_stale_fai(
-    monkeypatch,
-    tmp_path: Path,
+@pytest.mark.parametrize("existing_index", [False, True])
+def test_callable_regions_do_not_need_or_modify_a_fasta_index(
+    monkeypatch, tmp_path: Path, existing_index: bool,
 ) -> None:
     reference = tmp_path / "reference.fa"
-    reference.write_text(">locus_1\nACGT\n", encoding="utf-8")
-    fai = reference.with_suffix(reference.suffix + ".fai")
-    fai.write_text("locus_1\t10\t9\t10\t11\n", encoding="utf-8")
-    observed: dict[str, int] = {"faidx_calls": 0}
+    reference.write_text(">chr1\nACNNGT\n", encoding="utf-8")
+    fai = Path(str(reference) + ".fai")
+    if existing_index:
+        # Callable-region scanning reads the FASTA directly, not this stale index.
+        fai.write_text("chr1\t10\t6\t10\t11\n", encoding="utf-8")
+        before = (fai.read_bytes(), fai.stat().st_mtime_ns)
+    regions = tmp_path / "regions.bed"
+    regions.write_text("chr1\t0\t6\n", encoding="utf-8")
 
-    def _fake_run_pipeline(cmds, outfile=None, **kwargs):
-        del kwargs
-        cmd = cmds[0]
-        if cmd[:2] == [beds_module.BIN_SAM, "faidx"]:
-            observed["faidx_calls"] += 1
-            fai.write_text("locus_1\t4\t9\t4\t5\n", encoding="utf-8")
-        elif cmd == ["cut", "-f", "1,2", str(fai)]:
-            assert outfile is not None
-            outfile.write_text("locus_1\t4\n", encoding="utf-8")
-        else:
-            raise AssertionError(cmd)
-        return 0, b"", b""
+    def no_indexing(*args, **kwargs):
+        pytest.fail("Callable-region scanning must not invoke samtools faidx")
 
-    monkeypatch.setattr("ipyrad2.assembler.beds.run_pipeline", _fake_run_pipeline)
-
-    out_path = beds_module.get_reference_sort_order(reference, tmp_path)
-
-    assert observed["faidx_calls"] == 1
-    assert fai.read_text(encoding="utf-8") == "locus_1\t4\t9\t4\t5\n"
-    assert out_path.read_text(encoding="utf-8") == "locus_1\t4\n"
-
-
-def test_write_callable_regions_bed_refreshes_reference_fai(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    reference = tmp_path / "reference.fa"
-    reference.write_text(">locus_1\nACGT\n", encoding="utf-8")
-    fai = reference.with_suffix(reference.suffix + ".fai")
-    fai.write_text("locus_1\t10\t9\t10\t11\n", encoding="utf-8")
-    regions_bed = tmp_path / "regions.bed"
-    regions_bed.write_text("locus_1\t0\t4\n", encoding="utf-8")
-    observed: dict[str, int] = {"faidx_calls": 0}
-
-    def _fake_run_pipeline(cmds, outfile=None, **kwargs):
-        del outfile, kwargs
-        cmd = cmds[0]
-        if cmd[:2] != [beds_module.BIN_SAM, "faidx"]:
-            raise AssertionError(cmd)
-        observed["faidx_calls"] += 1
-        fai.write_text("locus_1\t4\t9\t4\t5\n", encoding="utf-8")
-        return 0, b"", b""
-
-    monkeypatch.setattr("ipyrad2.assembler.beds.run_pipeline", _fake_run_pipeline)
-
-    out_bed = beds_module.write_callable_regions_bed(
-        regions_bed,
-        reference,
-        tmp_path / "callable.refresh.bed",
-    )
-
-    assert observed["faidx_calls"] == 1
-    assert out_bed.read_text(encoding="utf-8") == "locus_1\t0\t4\n"
+    monkeypatch.setattr(beds_module, "run_pipeline", no_indexing)
+    result = beds_module.write_callable_regions_bed(regions, reference, tmp_path / "callable.bed")
+    assert result.read_text() == "chr1\t0\t2\nchr1\t4\t6\n"
+    if existing_index:
+        assert (fai.read_bytes(), fai.stat().st_mtime_ns) == before
+    else:
+        assert not fai.exists()
 
 
 def test_get_fai_values_observes_rewritten_fai(tmp_path: Path) -> None:

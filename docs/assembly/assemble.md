@@ -28,10 +28,25 @@ If no RAD BAMs are available, `assemble` still works, but only when `--loci-bed`
 ## Prerequisites
 
 - mapped BAM files, usually from [`map`](./map.md)
-- the same reference FASTA or denovo pseudoreference used during mapping
+- the same uncompressed reference FASTA or denovo pseudoreference used during mapping
 
 The BAMs do not need to come only from ipyrad2, but they do need to be coordinate-consistent with the
 reference you provide here.
+
+### Reference FASTA indexes
+
+`assemble` reuses an existing `.fai` index without rewriting it. It checks the
+index format, coordinate bounds, and modification times; normal reuse does not
+scan or checksum the entire reference. If the FASTA is newer than its index,
+`assemble` builds a temporary index in its working directory and compares the
+contents. An older index that still matches is reused unchanged.
+
+If an existing index is malformed or differs from that temporary rebuild,
+assembly stops and preserves it. Check that the FASTA is the reference used for
+mapping, then regenerate the index explicitly with `samtools faidx REF.fa` before
+rerunning. A missing index is created beside the FASTA and published only after
+indexing succeeds; this requires write access to the reference directory.
+Concurrent assemblies never overwrite an index published by another run.
 
 <!--
 ## Inputs and Workflow Logic
