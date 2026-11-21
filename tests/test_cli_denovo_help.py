@@ -71,6 +71,7 @@ def test_denovo_parser_defaults_are_updated() -> None:
     assert args.force is False
     assert args.imap is None
     assert args.use_all_samples is False
+    assert args.max_reads is None
     assert args.delim_str is None
     assert args.delim_idx == 1
     assert args.log_level == "INFO"
@@ -115,3 +116,12 @@ def test_denovo_parser_rejects_out_of_range_query_cov(value: str) -> None:
 
     with pytest.raises(SystemExit):
         validate_denovo_args(args, subparsers.choices["denovo"])
+
+
+def test_denovo_read_cap_parser() -> None:
+    parser = _get_denovo_parser()
+    args = parser.parse_args(["-d", "a.fastq.gz", "-x", "20_000_000"])
+    validate_denovo_args(args, parser)
+    assert args.max_reads == 20_000_000
+    with pytest.raises(SystemExit):
+        validate_denovo_args(parser.parse_args(["-d", "a.fastq.gz", "--max-reads", "0"]), parser)

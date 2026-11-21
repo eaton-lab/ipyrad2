@@ -6,7 +6,7 @@ import argparse
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
 
-from .common import RAW_HELP_FORMATTER
+from .common import RAW_HELP_FORMATTER, intlike
 
 
 EPILOG = """\
@@ -28,6 +28,8 @@ def _parser_error_if(parser: ArgumentParser, condition: bool, message: str) -> N
 
 def validate_denovo_args(args: Namespace, parser: ArgumentParser) -> None:
     """Validate denovo CLI arguments after parsing."""
+    _parser_error_if(parser, args.max_reads is not None and args.max_reads < 1,
+                     "--max-reads must be >= 1 when set")
     _parser_error_if(parser, args.cores < 1, "--cores must be >= 1")
     _parser_error_if(parser, args.threads < 1, "--threads must be >= 1")
     _parser_error_if(parser, args.threads > args.cores, "--threads cannot exceed --cores")
@@ -95,6 +97,12 @@ def _setup_denovo_subparser(subparsers: argparse._SubParsersAction, header: str 
     selection.add_argument(
         "--use-all-samples", action="store_true",
         help="Disable automatic sample downselection and use every parsed input sample.",
+    )
+
+    selection.add_argument(
+        "-x", "--max-reads", metavar="int", type=intlike, default=None,
+        help="Randomly keep up to N reads (SE) or matched read pairs (PE) per selected sample. "
+             "Sampling is reproducible. [default=all reads]",
     )
 
     clustering.add_argument(

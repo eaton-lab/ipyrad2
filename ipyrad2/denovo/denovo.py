@@ -22,10 +22,12 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from loguru import logger
 
 from .runtime import StageRecorder, OutputTransaction, tool_version, write_runtime_report
+from .sampling import SAMPLING_SEED, sampled_fastqs
 from ..utils.reporting import jsonable, utc_now
 from .. import __version__
 
@@ -1354,6 +1356,14 @@ def vsearch_cluster_across(
     _run_vsearch_with_progress(cmd1, message="Across-sample clustering")
 
 
+def _cluster_capped_sample(*, max_reads: int, sample_dir: Path, **kwargs) -> dict:
+    """Sample the reads within one worker, releasing scratch after clustering."""
+    names = (kwargs["r1"], kwargs["r2"])
+    with sampled_fastqs(kwargs["sname"], *names, max_reads, sample_dir) as (r1, r2, counts):
+        vsearch_pairs(**(kwargs | {"r1": r1, "r2": r2}))
+    return counts
+
+
 def run_denovo(
     fastqs: list[Path],
     outdir: Path,
@@ -1377,8 +1387,11 @@ def run_denovo(
     log_level: str,
     logged_command: str | None = None,
     invocation: dict | None = None,
+    max_reads: int | None = None,
 ) -> None:
     """Run the denovo reference construction workflow."""
+    if max_reads is not None and (type(max_reads) is not int or max_reads < 1):
+        raise IPyradError("--max-reads must be a positive integer when set")
     params = jsonable(dict(locals()))
     params.pop('invocation', None)
     params.pop('logged_command', None)
@@ -1460,7 +1473,21 @@ def run_denovo(
                         paired=is_paired,
                     )
                     jobs[sname] = (vsearch_pairs, kwargs)
-                run_with_pool(jobs, log_level, workers, msg=msg)
+                if max_reads is None:
+                    run_with_pool(jobs, log_level, workers, msg=msg)
+                else:
+                    # Clean capped FASTQs even if a failed/aborted pool terminates workers.
+                    with TemporaryDirectory(dir=workdir, prefix="subsampled-") as directory:
+                        capped_jobs = {
+                            name: (_cluster_capped_sample, dict(kwargs, max_reads=max_reads,
+                                                                 sample_dir=Path(directory)))
+                            for name, (_, kwargs) in jobs.items()
+                        }
+                        counts = run_with_pool(capped_jobs, log_level, workers, msg=msg)
+                    run["read_sampling"] = {
+                        "seed": SAMPLING_SEED, "unit": "read_pairs" if is_paired else "reads",
+                        "samples": counts,
+                    }
                 logger.info("within-sample clustering complete for {} selected samples", len(fastq_dict))
 
             with recorder.stage('combine_summaries'):

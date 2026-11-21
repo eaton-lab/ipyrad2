@@ -62,6 +62,15 @@ That tells `ipyrad2` to parse sample names from the FASTQ filenames, run the den
 - `--keep-intermediates`: retain the internal denovo working directory instead of cleaning it on success
 
 
+### Read cap
+
+`-x, --max-reads N` caps each selected sample at `N` single-end reads or
+`N` matched paired-end templates before merging and clustering. Samples at or
+below the cap use their original inputs. Larger samples are sampled uniformly
+without replacement in input order, using a fixed seed and the sample name
+for reproducibility. The run JSON reports the input and retained totals.
+Subsampled FASTQs are temporary, including when `--keep-intermediates` is set.
+
 ## Workflow
 
 1. parse sample names from input trimmed FASTQ (single or paired-end)

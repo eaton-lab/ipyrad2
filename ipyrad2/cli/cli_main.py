@@ -390,6 +390,7 @@ def run_subcommand(args, _exit=True):
             force=args.force,
             imap=args.imap,
             use_all_samples=args.use_all_samples,
+            max_reads=args.max_reads,
             allow_reverse_complement=args.allow_reverse_complement,
             delim_str=args.delim_str,
             delim_idx=args.delim_idx,
