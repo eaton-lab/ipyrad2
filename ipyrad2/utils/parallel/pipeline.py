@@ -369,6 +369,9 @@ def _make_atomic_outfile(outfile: Path) -> tuple[BinaryIO, Path]:
     return fout, Path(fout.name)
 
 
+STREAM_FINALIZE_TIMEOUT_S = 60.0
+
+
 class _PipelineLineStream:
     """Incremental stdout reader for a subprocess pipeline."""
 
@@ -492,23 +495,43 @@ class _PipelineLineStream:
         if self.finalized:
             return
         self.finalized = True
-
-        rcs = _wait_for_pipeline(self.procs)
-        err_all = _collect_pipeline_stderr(self.stderr_tmpfiles)
-        bad = _bad_pipeline_rcs(
-            rcs=rcs,
-            ncmds=len(self.cmds),
-            ignore_sigpipe=self.ignore_sigpipe,
-            sigpipe=self.sigpipe,
-        )
-        _cleanup_pipeline_processes(self.procs, self.stderr_tmpfiles)
-        if bad and not suppress_errors:
-            raise _pipeline_error(
-                cmds=self.cmds,
-                err_all=err_all,
-                primary_fail=self.primary_fail,
-                bad=bad,
+        start = time.monotonic()
+        timed_out = False
+        try:
+            # EOF is not process exit. Allow bounded normal finalization rather
+            # than killing a successful command one second after its last byte.
+            if not suppress_errors and self.primary_fail is None:
+                while any(proc.poll() is None for proc in self.procs):
+                    self._poll_failures()
+                    if self.primary_fail is not None:
+                        self._terminate_live()
+                        break
+                    if time.monotonic() - start >= STREAM_FINALIZE_TIMEOUT_S:
+                        timed_out = True
+                        self._terminate_live()
+                        break
+                    time.sleep(0.01)
+            rcs = _wait_for_pipeline(self.procs)
+            if timed_out:
+                raise _pipeline_timeout_error(
+                    self.cmds, STREAM_FINALIZE_TIMEOUT_S, time.monotonic() - start,
+                )
+            err_all = _collect_pipeline_stderr(self.stderr_tmpfiles)
+            bad = _bad_pipeline_rcs(
+                rcs=rcs,
+                ncmds=len(self.cmds),
+                ignore_sigpipe=self.ignore_sigpipe,
+                sigpipe=self.sigpipe,
             )
+            if bad and not suppress_errors:
+                raise _pipeline_error(
+                    cmds=self.cmds,
+                    err_all=err_all,
+                    primary_fail=self.primary_fail,
+                    bad=bad,
+                )
+        finally:
+            _cleanup_pipeline_processes(self.procs, self.stderr_tmpfiles)
 
 
 def run_pipeline(
