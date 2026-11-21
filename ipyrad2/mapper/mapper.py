@@ -300,6 +300,7 @@ def _map_sample(
     unmate: bool,
     mark_dups_by_coords: bool,
     mark_dups_by_umis: bool,
+    relaxed_pairs: bool = False,
 ) -> MappingJobResult:
     """Map one sample and return summary metadata for final-BAM stats."""
     out_bam = _output_bam_path(sname, outdir)
@@ -348,12 +349,14 @@ def _map_sample(
             _primary_alignment_filter_cmd(primary_counts_path),
             _structural_filter_cmd(structural_counts_path),
         ]
-        if is_paired:
+        if is_paired and not relaxed_pairs:
             filter_pipeline.append(_paired_same_scaffold_filter_cmd(same_scaffold_counts_path))
 
         if is_paired and (mark_dups_by_coords or mark_dups_by_umis):
             cmd3 = _namesort_cmd(tmp_prefix, sort_threads, bam_namesort)
-            run_pipeline(filter_pipeline + [cmd3])
+            # Keep primary unmapped mates until fixmate records their relationship.
+            # The primary scan still supplies the exact current reporting counts.
+            run_pipeline((filter_pipeline[:2] if relaxed_pairs else filter_pipeline) + [cmd3])
 
             cmd4 = _fixmate_cmd(threads, bam_namesort, bam_fixmate)
             run_pipeline([cmd4])
@@ -367,7 +370,14 @@ def _map_sample(
                 "-o", str(bam_coordsort),
                 str(bam_fixmate),
             ]
-            run_pipeline([cmd5])
+            if relaxed_pairs:
+                cmd5[-1] = "-"
+                run_pipeline([
+                    [BIN_SAMTOOLS, "view", "-u", str(bam_fixmate)],
+                    _structural_filter_cmd(structural_counts_path), cmd5,
+                ])
+            else:
+                run_pipeline([cmd5])
 
             cmd6 = _markdup_cmd(
                 tmp_prefix=tmp_prefix,
@@ -387,7 +397,7 @@ def _map_sample(
         structural_counts = _load_save_counts(structural_counts_path)
         same_scaffold_counts = (
             _load_save_counts(same_scaffold_counts_path)
-            if is_paired
+            if is_paired and not relaxed_pairs
             else {"records_filter_rejected": 0, "records_filter_accepted": structural_counts["records_filter_accepted"]}
         )
         _finalize_indexed_bam(out_bam_tmp, out_bam)
@@ -498,8 +508,11 @@ def run_mapper(
     delim_idx: int,
     log_level: str,
     logged_command: str | None = None,
+    relaxed_pairs: bool = False,
 ):
     """Run the ipyrad2 map workflow."""
+    if relaxed_pairs and unmate:
+        raise IPyradError("--relaxed-pairs cannot be combined with --unmate.")
     reference = expand_path(reference)
     outdir = expand_path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -565,6 +578,7 @@ def run_mapper(
                 "threads": threads,
                 "is_paired": effective_is_paired,
                 "unmate": unmate,
+                "relaxed_pairs": relaxed_pairs,
                 "mark_dups_by_coords": mark_dups_by_coords,
                 "mark_dups_by_umis": mark_dups_by_umis,
             },
@@ -599,6 +613,7 @@ def run_mapper(
         stats,
         effective_is_paired,
         logged_command=logged_command,
+        relaxed_pairs=relaxed_pairs,
     )
     outstats_txt, outstats_json = _next_stats_paths(outdir)
     outstats_txt.write_text(
@@ -606,6 +621,7 @@ def run_mapper(
             stats,
             effective_is_paired,
             logged_command=logged_command,
+            relaxed_pairs=relaxed_pairs,
         ),
         encoding="utf-8",
     )

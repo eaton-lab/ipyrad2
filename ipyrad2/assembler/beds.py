@@ -480,6 +480,8 @@ def get_coverage_bed_graphs(
     min_merge_distance: int,
     threads: int,
     min_locus_depth: int | None = None,
+    relaxed_pairs: bool = False,
+    min_base_q: int = 13,
 ) -> Path:
     r"""Produce a fragments BED (full inserts) from a coordinate-sorted BAM.
 
@@ -545,6 +547,19 @@ def get_coverage_bed_graphs(
         bedgraph_cmds.append([BIN_BED, "sort", "-i", "-", "-g", str(ref_info)])
         bedgraph_cmds.append([BIN_BED, "genomecov", "-i", "-", "-g", str(ref_info), "-bg"])
         bedgraph_cmds.append(["awk", "-v", f"MIN={min_sample_depth}", r"$4>=MIN", "-"])
+
+        if is_paired and relaxed_pairs:
+            # BEDPE drops orphan/cross-contig mates. Count observed bases using
+            # the caller's filters and overlap treatment, without filling inserts.
+            bedgraph_cmds = [
+                [BIN_BCF, "mpileup", "--count-orphans", "--skip-indels",
+                 "-f", str(reference), "-q", str(min_map_q),
+                 "-Q", str(min_base_q), "-d", "5000", "--ff", "0xF04",
+                 "-a", "FORMAT/DP", "-Ou", str(bam_file)],
+                [BIN_BCF, "query", "-f", "%CHROM\t%POS[\t%DP]\n"],
+                [sys.executable, "-m", "ipyrad2.assembler.coverage_depth",
+                 str(min_sample_depth)],
+            ]
 
         try:
             run_pipeline(

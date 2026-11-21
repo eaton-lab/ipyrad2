@@ -84,12 +84,13 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
     )
     mapped.add_argument(
         "-mt", "--max-tlen", metavar="int", type=int, default=1000,
-        help="Discard pairs with absolute TLEN above this threshold (PE data only). [default=%(default)s]",
+        help="Max absolute TLEN for PE reads; ignored with --relaxed-pairs. [default=%(default)s]",
     )
-    # mapped.add_argument(
-    #     "--require-same-scaffold", action="store_true",
-    #     help="For paired data, require both mates map to the same scaffold.",
-    # )
+    mapped.add_argument(
+        "--relaxed-pairs", action="store_true",
+        help="Retain mapped PE reads regardless of mate mapping, scaffold, or TLEN. "
+             "Other read filters and overlap correction still apply; pairing flags are retained. [default=False]",
+    )
 
     bed.add_argument(
         "--min-locus-depth", metavar="int", type=int, default=None,

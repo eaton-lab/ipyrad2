@@ -125,11 +125,14 @@ def build_mapped_read_filter_expr(
     max_softclip: int | None,
     max_nm: int | None,
     min_aligned_len: int | None,
+    relaxed_pairs: bool = False,
 ) -> str | None:
     """Return one samtools view -e expression for assemble-time BAM filtering."""
     clauses: list[str] = []
 
-    if is_paired:
+    if is_paired and relaxed_pairs:
+        clauses.append("((flag&4)==0)")
+    if is_paired and not relaxed_pairs:
         pair_terms = [
             "((flag&4)==0)",
             "((flag&8)==0)",
@@ -191,6 +194,7 @@ def summarize_read_filter_diagnostics(
     max_softclip: int | None,
     max_nm: int | None,
     min_aligned_len: int | None,
+    relaxed_pairs: bool = False,
 ) -> dict:
     """Count diagnostic failures in one SAM stream, without selecting reads.
 
@@ -202,13 +206,16 @@ def summarize_read_filter_diagnostics(
     settings = {
         "min_map_q": min_map_q,
         "is_paired": is_paired,
+        "relaxed_pairs": relaxed_pairs,
         "max_tlen": max_tlen,
         "max_softclip": max_softclip,
         "max_nm": max_nm,
         "min_aligned_len": min_aligned_len,
     }
     order = ["mapping_quality"]
-    if is_paired:
+    if is_paired and relaxed_pairs:
+        order.append("unmapped")
+    if is_paired and not relaxed_pairs:
         order.append("pair_geometry")
         if max_tlen is not None:
             order.append("template_length")
@@ -235,6 +242,7 @@ def summarize_read_filter_diagnostics(
         missing_nm += nm is None
         failures = {
             "mapping_quality": mq < min_map_q,
+            "unmapped": bool(flag & 4),
             "pair_geometry": bool(flag & 0xC) or f[6] not in ("=", f[2]),
             "template_length": max_tlen is not None and abs(tlen) > max_tlen,
             "softclip": max_softclip is not None and sclen > max_softclip,
@@ -296,6 +304,7 @@ def prepare_filtered_analysis_bam(
     max_nm: int | None,
     min_aligned_len: int | None,
     threads: int,
+    relaxed_pairs: bool = False,
 ) -> FilteredAnalysisBamResult:
     """Write and index one pre-paralog assemble BAM plus its filter counts."""
     out_bam = get_analysis_bam_path(tmpdir, sname)
@@ -303,6 +312,7 @@ def prepare_filtered_analysis_bam(
     diagnostics = collect_read_filter_diagnostics(
         bam_file, threads=threads, min_map_q=min_map_q, is_paired=is_paired, max_tlen=max_tlen,
         max_softclip=max_softclip, max_nm=max_nm, min_aligned_len=min_aligned_len,
+        relaxed_pairs=relaxed_pairs,
     )
     reads_before_filtering = diagnostics["input_records"]
 
@@ -320,6 +330,7 @@ def prepare_filtered_analysis_bam(
     ]
     expr = build_mapped_read_filter_expr(
         is_paired=is_paired,
+        relaxed_pairs=relaxed_pairs,
         max_tlen=max_tlen,
         max_softclip=max_softclip,
         max_nm=max_nm,

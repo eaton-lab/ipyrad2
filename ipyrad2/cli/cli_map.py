@@ -50,6 +50,10 @@ def _setup_map_subparser(subparsers: argparse._SubParsersAction, header: str = N
         "--unmate", action="store_true",
         help="Treat paired FASTQs as single-end by concatenating R1 and R2 per sample before mapping.",
     )
+    core.add_argument(
+        "--relaxed-pairs", action="store_true",
+        help="Keep mapped PE reads regardless of mate location; preserve paired mapping. Cannot combine with --unmate.",
+    )
 
     duplicates.add_argument(
         "-m", "--mark-dups-by-coords", action="store_true",

@@ -34,7 +34,8 @@ def query(vcf):
     return {int(line.split('\t')[0]):line.split('\t')[1:] for line in out.splitlines()}
 
 @pytest.mark.parametrize('paired', [True,False,'proper'])
-def test_both_callers_recover_retained_evidence_and_keep_overlap_correction(tmp_path,paired):
+@pytest.mark.parametrize('relaxed', [False, True])
+def test_both_callers_recover_retained_evidence_and_keep_overlap_correction(tmp_path,paired,relaxed):
     rng=random.Random(81);seq=''.join(rng.choices('ACGT',k=500))
     ref=tmp_path/'ref.fa';ref.write_text('>chr1\n'+seq+'\n')
     run(BIN/'samtools','faidx',ref)
@@ -54,7 +55,7 @@ def test_both_callers_recover_retained_evidence_and_keep_overlap_correction(tmp_
     bam=make_bam(tmp_path,'s',seq,records)
     filtered=prepare_filtered_analysis_bam(sname='s',bam_file=bam,is_paired=paired,
         tmpdir=tmp_path/'filter',min_map_q=30,max_tlen=1000,max_softclip=5,
-        max_nm=5,min_aligned_len=100,threads=1).bam_path
+        max_nm=5,min_aligned_len=100,threads=1,relaxed_pairs=relaxed).bam_path
     stage=tmp_path/'final';(stage/'vcfs').mkdir(parents=True)
     final=get_group_called_variants_in_vcf_chunks(tmpdir=stage,reference=ref,
         bam_files=[filtered],locus_chunk=bed,min_map_q=30,min_base_q=13,threads=1)
@@ -64,6 +65,15 @@ def test_both_callers_recover_retained_evidence_and_keep_overlap_correction(tmp_
         assert call[0]=='1/1'
         assert int(call[1])==20  # overlapping mates count once, not twice
         assert call[2].split(',')[:2]==['0','20']
+    if relaxed and paired:
+        from ipyrad2.assembler.beds import get_coverage_bed_graphs
+        (tmp_path/'REF_info.txt').write_text('chr1\t500\n')
+        get_coverage_bed_graphs('s',filtered,True,ref,tmp_path,30,1,0,1,
+                              relaxed_pairs=True,min_locus_depth=21)
+        depths=[int(row[3]) for line in (tmp_path/'beds/s.fragments.bedgraph').read_text().splitlines()
+                if (row:=line.split())[0]=='chr1' and int(row[1])<=pos-1<int(row[2])]
+        assert depths == [20]  # depth agrees with both callers, including proper pairs
+        assert not (tmp_path/'beds/s.fragments.merged.bed').read_text()  # DP21 discovery, DP1 evidence
     if paired is True:
         # The pre-fix mpileup default really excludes this otherwise eligible pair.
         baseline=run(BIN/'bcftools','mpileup','-f',ref,'-q','30','-Q','13','-a','FORMAT/DP','-Ov',filtered)
@@ -134,3 +144,17 @@ def test_excluded_mate_cannot_mask_eligible_primary(excluded_flag):
     mask_group([a,b],Counter())
     assert a[10]=='I'*120
     assert b[10]=='J'*120
+
+def test_relaxed_coverage_includes_orphan_and_cross_contig_mate(tmp_path):
+    from ipyrad2.assembler.beds import get_coverage_bed_graphs
+    seq='ACGT'*125
+    rows=[record('orphan',73,41,seq[40:160],0),record('cross',65,241,seq[240:360],1)]
+    # Cross-contig mate need not be retained in this BAM.
+    rows[1]=rows[1].replace('\t=\t1\t','\tchr2\t1\t')
+    sam=tmp_path/'s.sam'
+    sam.write_text('@HD\tVN:1.6\tSO:unsorted\n@SQ\tSN:chr1\tLN:500\n@SQ\tSN:chr2\tLN:500\n'+'\n'.join(rows)+'\n')
+    bam=tmp_path/'s.bam';run(BIN/'samtools','sort','-o',bam,sam);run(BIN/'samtools','index',bam)
+    (tmp_path/'REF_info.txt').write_text('chr1\t500\nchr2\t500\n')
+    ref=tmp_path/'ref.fa';ref.write_text('>chr1\n'+seq+'\n>chr2\n'+seq+'\n');run(BIN/'samtools','faidx',ref)
+    get_coverage_bed_graphs('s',bam,True,ref,tmp_path,30,1,0,1,relaxed_pairs=True)
+    assert (tmp_path/'beds/s.fragments.bedgraph').read_text().splitlines()==['chr1\t40\t160\t1','chr1\t240\t360\t1']

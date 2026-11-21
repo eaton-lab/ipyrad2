@@ -68,10 +68,12 @@ def fixture_bam(tmp_path):
 
 
 @pytest.mark.parametrize("paired", [False, True])
-def test_diagnostics_match_native_filters_and_overlap_accounting(tmp_path, paired):
+@pytest.mark.parametrize("relaxed", [False, True])
+def test_diagnostics_match_native_filters_and_overlap_accounting(tmp_path, paired, relaxed):
     bam, lines = fixture_bam(tmp_path)
     settings = dict(
         is_paired=paired,
+        relaxed_pairs=relaxed,
         min_map_q=30,
         max_tlen=1000,
         max_softclip=5,
@@ -95,7 +97,7 @@ def test_diagnostics_match_native_filters_and_overlap_accounting(tmp_path, paire
     assert diag["independent_failures"]["mismatch_count"] == 3
     assert (
         "template_length" in diag["filter_order"]
-        if paired
+        if paired and not relaxed
         else "template_length" not in diag["filter_order"]
     )
     # Native qlen-sclen includes insertions and excludes hard clipping.
@@ -104,6 +106,7 @@ def test_diagnostics_match_native_filters_and_overlap_accounting(tmp_path, paire
     # and missing NM; test first-failure counts against cumulative native gates.
     predicates = {
         "mapping_quality": "mapq >= 30",
+        "unmapped": "(flag&4)==0",
         "pair_geometry": '((flag&4)==0) && ((flag&8)==0) && (rnext=="=" || rnext==rname)',
         "template_length": "tlen>=-1000 && tlen<=1000",
         "softclip": "sclen<=5",
@@ -130,10 +133,12 @@ def test_diagnostics_match_native_filters_and_overlap_accounting(tmp_path, paire
 
 
 @pytest.mark.parametrize("paired", [False, True])
-def test_prepared_bam_unchanged_and_diagnostics_persist(tmp_path, paired):
+@pytest.mark.parametrize("relaxed", [False, True])
+def test_prepared_bam_unchanged_and_diagnostics_persist(tmp_path, paired, relaxed):
     bam, _ = fixture_bam(tmp_path)
     settings = dict(
         is_paired=paired,
+        relaxed_pairs=relaxed,
         min_map_q=30,
         max_tlen=1000,
         max_softclip=5,

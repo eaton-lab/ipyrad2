@@ -395,10 +395,11 @@ def collect_paired_bam_stats(job_result: MappingJobResult) -> dict:
     }
 
 
-def _report_header(is_paired: bool) -> str:
+def _report_header(is_paired: bool, relaxed_pairs: bool = False) -> str:
     """Return a short header block describing map reporting semantics."""
     paired_note = (
-        "# Paired-end final BAMs keep only mapped mates on the same scaffold.\n"
+        ("# Paired-end final BAMs retain mapped reads regardless of mate location.\n"
+         if relaxed_pairs else "# Paired-end final BAMs keep only mapped mates on the same scaffold.\n")
         if is_paired
         else ""
     )
@@ -451,6 +452,7 @@ def build_map_stats_payload(
     stats: dict[str, dict],
     is_paired: bool,
     logged_command: str | None = None,
+    relaxed_pairs: bool = False,
 ) -> dict[str, object]:
     """Build the structured run-level mapper stats payload."""
     if is_paired:
@@ -526,6 +528,7 @@ def build_map_stats_payload(
 
     payload: dict[str, object] = {
         "is_paired": is_paired,
+        "relaxed_pairs": relaxed_pairs,
         "applied_mapping_summary": (
             applied_frame.rename_axis("sample").reset_index().to_dict(orient="records")
         ),
@@ -571,7 +574,7 @@ def render_map_stats_payload_report(payload: dict[str, object]) -> str:
 
     return (
         command_header
-        + _report_header(is_paired)
+        + _report_header(is_paired, bool(payload.get("relaxed_pairs", False)))
         + "## Applied mapping summary\n"
         + "# These counts describe filters already applied during ipyrad2 map.\n"
         + "# Input totals exclude secondary and supplementary alignment records.\n"
@@ -601,11 +604,13 @@ def render_map_stats_report(
     stats: dict[str, dict],
     is_paired: bool,
     logged_command: str | None = None,
+    relaxed_pairs: bool = False,
 ) -> str:
     """Render the final mapper stats report."""
     payload = build_map_stats_payload(
         stats,
         is_paired,
         logged_command=logged_command,
+        relaxed_pairs=relaxed_pairs,
     )
     return render_map_stats_payload_report(payload)

@@ -220,10 +220,15 @@ def _log_mapped_read_filter_settings(
     max_softclip: int | None,
     max_nm: int | None,
     min_aligned_len: int | None,
+    relaxed_pairs: bool = False,
 ) -> None:
     """Log the assemble-time mapped-read filter settings."""
-    parts = [f"MAPQ>={min_map_q}", "same scaffold pairs only"]
-    if max_tlen is not None:
+    pair_policy = (
+        "relaxed pairs (mapped read required; mate geometry and TLEN ignored)"
+        if relaxed_pairs else "same scaffold pairs only"
+    )
+    parts = [f"MAPQ>={min_map_q}", pair_policy]
+    if max_tlen is not None and not relaxed_pairs:
         parts.append(f"abs(TLEN)<={max_tlen}")
     if max_softclip is not None:
         parts.append(f"softclip<={max_softclip}")
@@ -1078,10 +1083,12 @@ def _prepare_analysis_bams(
     threads: int,
     workers: int,
     log_level: str,
+    relaxed_pairs: bool = False,
 ) -> dict[str, FilteredAnalysisBamResult]:
     """Write temp filtered BAMs for all assemble inputs and return their stats."""
     _log_mapped_read_filter_settings(
         min_map_q=min_map_q,
+        relaxed_pairs=relaxed_pairs,
         max_tlen=max_tlen,
         max_softclip=max_softclip,
         max_nm=max_nm,
@@ -1098,6 +1105,7 @@ def _prepare_analysis_bams(
                 "sname": sname,
                 "bam_file": bam_file,
                 "is_paired": sample_layouts[sname],
+                "relaxed_pairs": relaxed_pairs,
                 "tmpdir": tmpdir,
                 "min_map_q": min_map_q,
                 "max_tlen": max_tlen,
@@ -1929,6 +1937,7 @@ def run_assembler(
     sfs_fit_loci: int = 1024,
     sfs_folds: int = 5,
     sfs_max_iter: int = 10000,
+    relaxed_pairs: bool = False,
 ):
     if evidence not in ("none", "snps", "loci"):
         raise IPyradError("evidence must be one of: none, snps, loci.")
@@ -2123,7 +2132,9 @@ def run_assembler(
         n_paired,
         n_single,
     )
-    if n_paired and n_single:
+    if relaxed_pairs and n_paired:
+        logger.info("relaxed paired samples use observed-base coverage with mate overlaps counted once")
+    elif n_paired and n_single:
         logger.info(
             "mixed single-end and paired-end BAMs detected across samples; paired-end samples use fragment-span coverage and single-end samples use read-span coverage during locus delimiting"
         )
@@ -2143,6 +2154,7 @@ def run_assembler(
     filtered_analysis_results = _coerce_filtered_analysis_results(
         _prepare_analysis_bams(
         bam_dict=all_dict,
+        relaxed_pairs=relaxed_pairs,
         sample_layouts=sample_layouts,
         tmpdir=tmpdir,
         min_map_q=min_map_q,
@@ -2209,6 +2221,8 @@ def run_assembler(
             sname=sname,
             bam_file=bam_file,
             is_paired=sample_layouts[sname],
+            relaxed_pairs=relaxed_pairs,
+            min_base_q=min_base_q,
         )
         jobs[sname] = (get_coverage_bed_graphs, ikwargs)
     run_with_pool(jobs, log_level, workers, msg="Building per-sample coverage BEDs")

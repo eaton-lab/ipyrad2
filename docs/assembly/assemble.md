@@ -33,6 +33,35 @@ If no RAD BAMs are available, `assemble` still works, but only when `--loci-bed`
 The BAMs do not need to come only from ipyrad2, but they do need to be coordinate-consistent with the
 reference you provide here.
 
+### Single-end, paired-end, and relaxed pairs
+
+`assemble` detects layout separately for each sample, so SE and PE BAMs can be
+used together against the same reference. Mixing SE and PE primary records
+within one BAM is unsupported. SE filtering is unaffected by paired-read options.
+
+By default, paired reads require a mapped mate on the same scaffold and must
+pass `--max-tlen`. Use `--relaxed-pairs` for short de novo references to retain a
+mapped read even when its mate is unmapped or on another scaffold; this also
+ignores `--max-tlen`. MAPQ, clipping, NM, and aligned-query-length filters remain
+active. This option preserves pairing flags and does not unmate reads.
+
+Relaxed PE coverage uses observed-base pileup depth with the caller's MAPQ,
+base-quality, exclusion-flag, overlap, and depth-cap settings. Orphan and
+cross-scaffold mates contribute where they align; unsequenced insert gaps do
+not acquire coverage. Overlapping mates contribute depth once. These depths
+feed locus discovery and downstream depth masks. With SFS calling, the separate
+`--min-locus-depth` threshold still applies only to RAD locus discovery.
+Strict PE coverage retains its existing fragment-span behavior; SE coverage
+retains read-span behavior. State the coverage policy when comparing assemblies.
+
+Enable relaxed pairs during both `map` and `assemble`. Assembly cannot restore
+reads already discarded by a strict mapping run. For example:
+
+```bash
+ipyrad2 assemble -d RAD_BAMS/*.bam -w WGS_BAMS/*.bam -r denovo_reference.fa \
+  --relaxed-pairs --genotype-model sfs --min-locus-depth 5 -s 1 -o ASSEMBLY
+```
+
 ### Reference FASTA indexes
 
 `assemble` reuses an existing `.fai` index without rewriting it. It checks the

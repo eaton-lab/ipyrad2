@@ -11,6 +11,32 @@ In the normal assembly workflow, `map` comes after [`trim`](./trim.md) and befor
 
 Use `map` when you have sample-level FASTQ files and a reference or denovo pseudoreference sequence (e.g., from [`denovo`](./denovo.md)) to align against. If you already have mapped BAM files, you do not need this step. Start directly at [`assemble`](./assemble.md).
 
+## Paired reads on short references
+
+Use `--relaxed-pairs` when mapping paired reads to short de novo loci where only
+one mate may align, or the two mates may align to different reference entries.
+It retains paired alignment in bwa-mem2 and keeps each primary mapped read
+regardless of mate location. Unmapped and QC-failed reads are still excluded.
+Strict same-scaffold pairing remains the default.
+
+For WGS, this option can be combined with coordinate duplicate removal:
+
+```bash
+ipyrad2 map -d WGS/*_R*.fastq.gz -r denovo_reference.fa -o WGS_BAMS --relaxed-pairs -m
+```
+
+With duplicate removal, unmapped primary mates are retained through `fixmate`
+so their relationships are recorded before unmapped reads are removed. Mapping
+statistics record the pairing policy and the actual filters applied. The
+assembly-filter preview still describes the default strict assembly policy;
+those preview thresholds are not additional mapping filters.
+
+`--unmate` instead concatenates R1 and R2 and maps them as independent single-end
+reads. It cannot be combined with `--relaxed-pairs` or the current duplicate
+removal options. Choose relaxed pairs to retain mate information and overlap
+handling. Use `assemble --relaxed-pairs` as well to keep these reads during
+assembly; the mapping option alone does not change assembly filtering.
+
 ## Prerequisites
 
 - Sample-level FASTQ or FASTQ.gz files, usually from [`trim`](./trim.md)
