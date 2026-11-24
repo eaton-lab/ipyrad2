@@ -177,3 +177,101 @@ def test_no_prior_or_depth_only_reference_fallback(tmp_path):
     block['valid'][:] = False
     gt,_,_,gp = call_block(block,groups,models,5,1,0,0,[1])
     assert (gt == -1).all() and np.isnan(gp).all()
+
+
+def test_reference_fallback_full_axis_and_guards():
+    from ipyrad2.assembler.sfs_calling import reference_fallback
+    row = ['chr','1','.','A','C,G,<*>','.','.','.','DP:AD:PL',
+           '12:12,0,0,0:0,36,120,36,120,120,36,120,120,120']
+    keep, q = reference_fallback([row], [True], 1, 13)
+    expected = 1 / sum(10.**(-int(p)/10) for p in row[9].split(':')[2].split(','))
+    assert keep.tolist() == [True]
+    assert q[0] == pytest.approx(-10*np.log10(1-expected))
+    assert not reference_fallback([row], [False], 1, 13)[0].any()
+    assert not reference_fallback([row], [True], 13, 13)[0].any()
+    assert not reference_fallback([row], [True], 1, q[0]+1e-6)[0].any()
+    for cell in ['4:4,0,0,0:0,36,120,36,120,120,36,120,120,120',
+                 '0:0,0,0,0:0,36,120,36,120,120,36,120,120,120',
+                 '12:12,0,0,0:.', '12:.:0,36,120,36,120,120,36,120,120,120',
+                 '12:12,0,0,0:0,0,0,0,0,0,0,0,0,0',
+                 '12:6,6,0,0:60,0,60,90,90,90,90,90,90,90']:
+        assert not reference_fallback([row[:9]+[cell]], [True], 1, 13)[0].any()
+    assert not reference_fallback([row, row], [True], 1, 13)[0].any()
+    for alt in ['C,<*>', 'C,AA', 'C,G,*', 'C,G,G', 'C,G,<NON_REF>']:
+        changed = row.copy(); changed[4] = alt
+        assert not reference_fallback([changed], [True], 1, 13)[0].any()
+    with pytest.raises(IPyradError, match='cardinality'):
+        reference_fallback([row[:9]+['12:12,0,0,0:0,36,120']], [True], 1, 13)
+
+
+@pytest.mark.parametrize('alt', ['C,G', 'C,G,T', 'C,G,<*>', 'C,G,T,<*>'])
+def test_reference_fallback_allele_order_and_all_genotypes(alt):
+    from ipyrad2.assembler.sfs_calling import reference_fallback
+    n = len(alt.split(','))+1
+    pl = [0]+[60]*(n*(n+1)//2-1)
+    row = ['chr','1','.','A',alt,'.','.','.','DP:AD:PL',
+           '20:'+','.join(map(str,[20]+[0]*(n-1)))+':'+','.join(map(str,pl))]
+    assert reference_fallback([row], [True], 1, 13)[0].all()
+    # Every possible alternative genotype competes, including symbolic alleles.
+    for g in range(1,len(pl)):
+        changed = pl.copy();changed[g] = 0
+        cell = row[9].rsplit(':',1)[0]+':'+','.join(map(str,changed))
+        assert not reference_fallback([row[:9]+[cell]], [True], 1, 0)[0].any()
+
+
+@pytest.mark.parametrize('overlapping_indel', [False, True])
+def test_reference_fallback_native_integration(tmp_path, monkeypatch, overlapping_indel):
+    import ipyrad2.assembler.sfs_calling as module
+    source = fixture(tmp_path/'new')
+    root = tmp_path/'new'; capture = source.paths[0]
+    text = command([BIN_BCF,'view',capture])
+    rows = []
+    for line in text.splitlines():
+        fields = line.split('\t')
+        if not line.startswith('#') and (int(fields[1])-1)%100 in (25, 26):
+            fields[4] = 'C,G,<*>'
+            fields[9:] = ['12:12,0,0,0:0,36,120,36,120,120,36,120,120,120']*3
+        rows.append('\t'.join(fields))
+    raw = root/'vcfs/revised.vcf';raw.write_text('\n'.join(rows)+'\n')
+    command([BIN_BCF,'view','-Ob','-o',capture,raw])
+    native = root/'vcfs/loci.filtered.vcf.gz'
+    text = command([BIN_BCF,'view',native])
+    lines = text.splitlines()
+    header = [x for x in lines if x.startswith('#')]
+    data = [x for x in lines if not x.startswith('#')]
+    if overlapping_indel:
+        # A native deletion's reference span already covers the next base for
+        # the two qualifying samples. A reference decision there is not a new
+        # accepted base, and must not alter the native indel genotype.
+        for i,line in enumerate(data):
+            fields = line.split('\t')
+            if fields[1] == '25':
+                fields[3:5] = ['AA', 'A'];data[i] = '\t'.join(fields)
+    data += [f'chr\t{l*100+27}\t.\tA\tC,G\t60\tPASS\t.\tGT:DP:AD:GQ\t'+
+             '\t'.join(['./.:12:12,0,0:.']*3) for l in range(10)]
+    raw.write_text('\n'.join(header+sorted(data,key=lambda x:int(x.split('\t')[1])))+'\n')
+    command([BIN_BCF,'view','-Oz','-o',native,raw]);command([BIN_BCF,'index','-f',native])
+    # Hold the fitted weights fixed for both complete calling passes.
+    source = NativeSource([capture],source.names,root/'beds/loci.bed',root/'REF_info.txt')
+    groups = {s:np.array([i]) for i,s in enumerate(source.names)}
+    frozen = fit_models(source,groups,folds=5,fit_loci=4,max_iter=10000,cores=1)
+    monkeypatch.setattr(module,'fit_models',lambda *args,**kwargs:frozen)
+    old = tmp_path/'old';shutil.copytree(root,old)
+    kwargs=dict(names=source.names,group_file=None,retained_beds=None,min_depth=1,geno_q=13,site_q=13)
+    result = run_sfs_calling(tmpdir=root,**kwargs)
+    monkeypatch.setattr(module,'reference_fallback',lambda rows,allowed,*args:(np.zeros(len(allowed),bool),None))
+    baseline = run_sfs_calling(tmpdir=old,**kwargs)
+    assert result['fits'] == baseline['fits']
+    assert result['counts']['accepted_native_reference_cells'] == 30
+    assert result['counts']['accepted_sfs_cells'] == baseline['counts']['accepted_sfs_cells']
+    assert command([BIN_BCF,'view','-H',root/'vcfs/loci.filtered.vcf.gz']) == command([BIN_BCF,'view','-H',old/'vcfs/loci.filtered.vcf.gz'])
+    for name in source.names:
+        def positions(path):
+            return {p for line in path.read_text().splitlines() for c,a,b in [line.split()] for p in range(int(a),int(b))}
+        before=positions(old/f'beds/{name}.sfs.mask.bed');after=positions(root/f'beds/{name}.sfs.mask.bed')
+        expected = {l*100+25 for l in range(10)}
+        if overlapping_indel and name != 'WGS':
+            expected.remove(25)
+        assert before-after == expected
+        assert not after-before
+        assert {l*100+26 for l in range(10)} <= after  # existing missing native variants cannot be overridden

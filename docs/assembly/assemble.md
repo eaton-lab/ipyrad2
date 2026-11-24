@@ -245,6 +245,22 @@ and the native GQ/QUAL thresholds. Existing WGS heterozygote allele-balance chec
 and indel-resolution rules still apply. VCF `INFO/IPYRAD_CALLER` distinguishes
 SFS and native fallback records; SFS GQ and QUAL are labeled in the header.
 
+For a single multiallelic nucleotide pileup record with no emitted native
+variant record, SFS mode can also retain a confidence-qualified reference base.
+This fallback requires depth at least `max(5, -s)`, complete native PL and AD,
+positive reference read support, and a uniquely best homozygous-reference
+genotype. It normalizes all native diploid likelihoods with a **uniform genotype
+prior** and applies `-qg` to the resulting reference confidence. This score is
+distinct from the fitted SFS posterior. It does not override existing variant
+records, supported SFS decisions, missing observations, or sample masks, and
+does not apply to indels or multiple records at a position. These reference
+decisions affect consensus acceptance, not variant emission; their count is
+reported separately as `accepted_native_reference_cells`. Downstream indel,
+paralog, and assembly output filters still apply.
+This count records qualifying decisions; some may overlap bases already covered
+by an accepted native indel record, so it is not a count of newly recovered
+consensus bases.
+
 SFS calling captures all-site likelihoods internally even when `--evidence none`
 is selected. `--evidence loci` retains them for subsequent likelihood-based
 `popgen` analyses. Call-confidence masks remain separate from evidence hard

@@ -52,6 +52,40 @@ def allele_axis(records):
     return kind, (a, b), (a*(a+1)//2+a, b*(b+1)//2+a, b*(b+1)//2+b)
 
 
+def reference_fallback(records, allowed, min_depth, geno_q):
+    """Qualify REF only on a single unsupported multiallelic nucleotide record.
+
+    The caller must additionally require absence of a native variant record.
+    Confidence normalizes *all* literal native diploid PL entries with a uniform
+    genotype prior; it is not an SFS posterior or an empirical accuracy score.
+    Missing evidence, indels and multiple records never qualify here.
+    """
+    keep = np.zeros(len(allowed), dtype=bool)
+    quality = np.full(len(allowed), np.nan)
+    if len(records) != 1:
+        return keep, quality
+    row = records[0]
+    alleles = [row[3], *row[4].split(',')]
+    concrete = sum(a in ('A', 'C', 'G', 'T') for a in alleles)
+    if (row[3] not in ('A', 'C', 'G', 'T') or concrete not in (3, 4)
+            or len(set(alleles)) != len(alleles)
+            or any(a not in ('A', 'C', 'G', 'T', '<*>') for a in alleles)):
+        return keep, quality
+    if len(row) - 9 != len(allowed):
+        raise IPyradError('Reference fallback sample count differs from assembled samples.')
+    _, _, values = parse_record_batch([((0, 0), row)])[0]
+    pl, ad, dp = values['PL'], values['AD'], values['DP'][:, 0]
+    valid = (np.asarray(allowed, dtype=bool) & (dp >= max(5, min_depth))
+             & (pl >= 0).all(axis=1) & (ad >= 0).all(axis=1) & (ad[:, 0] > 0))
+    ids = np.flatnonzero(valid)
+    if len(ids):
+        likelihoods = 10. ** (-(pl[ids].astype(float) - pl[ids].min(axis=1)[:, None]) / 10)
+        probability = likelihoods[:, 0] / likelihoods.sum(axis=1)
+        quality[ids] = phred(probability)
+        keep[ids] = (quality[ids] >= geno_q) & (pl[ids, 0, None] < pl[ids, 1:]).all(axis=1)
+    return keep, quality
+
+
 class NativeSource:
     """Repeatable bounded stream; no permanent additional observation database."""
     def __init__(self, paths, names, bed, ref_info, retained_beds=None, block_sites=2048):
@@ -328,6 +362,11 @@ def run_sfs_calling(*, tmpdir, names, group_file, retained_beds, min_depth,
                                              'GT:DP:AD:GQ', *cells])+'\n')
                 else:
                     allowed = source.allows(chrom, np.array([pos]))[:, 0]
+                    if not original:
+                        keep, _ = reference_fallback(rows, allowed, min_depth, geno_q)
+                        counts['accepted_native_reference_cells'] += int(keep.sum())
+                        for i in np.flatnonzero(keep):
+                            accepted.add(i, chrom, pos, pos+1)
                     for row in original:
                         row = list(row)
                         tags = row[8].split(':')
@@ -370,7 +409,7 @@ def run_sfs_calling(*, tmpdir, names, group_file, retained_beds, min_depth,
                   pseudocount=.5, native_min_depth=max(5, min_depth), fits=fits,
                   training_bytes=training_bytes, posterior_block_sites=block_sites,
                   fitting_domain='Post-paralog shared RAD loci; usable DP>=1, independent of output depth/confidence thresholds.',
-                  quality='GQ=-10 log10(1-max GP); QUAL conservative lower bound using max_i P(G_i != REF). Native fallback retains native GQ/QUAL.',
+                  quality='GQ=-10 log10(1-max GP); QUAL conservative lower bound using max_i P(G_i != REF). Native variant fallback retains native GQ/QUAL. Reference-only multiallelic fallback uses all native PL with a uniform genotype prior, requires a unique best REF genotype and DP>=max(5,min_depth), and never overrides an existing native variant record.',
                   uncertainty='Conditional on fitted priors; scores are not empirical accuracy guarantees.',
                   timing_seconds=dict(fitting_and_training_reads=fitting_seconds,
                                       posterior_and_acceptance=time.monotonic()-post_start))
