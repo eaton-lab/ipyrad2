@@ -17,7 +17,8 @@ from ...extracters.snps_extracter import SNPsExtracter
 from ..common import build_sample_data_summary
 from .evidence_backend import _check_individuals
 from .likelihoods import likelihoods_from_pl, posterior_moments
-from .models import PopgenResult
+from .models import PopgenResult, resolve_likelihood_stats
+from .posterior_stats import PosteriorStats
 from .sfs_fitting import CrossFittedSFS
 
 
@@ -88,8 +89,8 @@ def run_locus_evidence_popgen(*, data, requested_stats, min_sample_coverage,
                              evidence_prior='uniform', individual_map=None,
                              sfs_fit_loci=1024, sfs_folds=5, sfs_max_iter=10000):
     """Average posterior chromosome-pair differences over callable RAD bases."""
-    if not set(requested_stats) <= {'pi', 'heterozygosity'}:
-        raise IPyradError('Locus likelihoods currently support pi and heterozygosity only.')
+    requested_stats, capabilities = resolve_likelihood_stats(requested_stats, 'loci')
+    extended = bool(set(requested_stats) & {'theta_w', 'sfs', 'fis'})
     if evidence_prior not in ('uniform', 'population', 'sfs'):
         raise IPyradError('Unknown evidence prior.')
     if evidence_prior in ('population', 'sfs') and not imap:
@@ -153,6 +154,7 @@ def run_locus_evidence_popgen(*, data, requested_stats, min_sample_coverage,
                       callable_unseen_alt_bases=0, callable_observed_alt_bases=0,
                       posterior_pairwise_differences_sum=0., heterozygosity_sum=0.) for g in populations}
         exclusions = Counter()
+        extra = {g: PosteriorStats() for g in populations} if extended else {}
         acgt = model_bases = selected_bases = 0
         for start in range(0, reader.nsites, CHUNK_BASES):
             sites = np.arange(start, min(start+CHUNK_BASES, reader.nsites))
@@ -169,13 +171,15 @@ def run_locus_evidence_popgen(*, data, requested_stats, min_sample_coverage,
             likelihood, good = likelihoods_from_pl(pl[:, keep], good[:, keep])
             for group, indices in ix.items():
                 moments = (sfs.moments(group, likelihood[indices], good[indices],
-                           reader.group['site_map'][sites, 2][keep]) if sfs is not None
-                           else posterior_moments(likelihood[indices], good[indices], evidence_prior))
+                           reader.group['site_map'][sites, 2][keep], include_counts=extended) if sfs is not None
+                           else posterior_moments(likelihood[indices], good[indices], evidence_prior, include_counts=extended))
                 gp = moments['GP']
                 counts[indices] += good[indices].sum(axis=1)
                 het[indices] += np.nansum(gp[..., 1], axis=1)
                 n = moments['n_individuals']
                 valid = n >= max(1, selection.minmap[group])
+                if extended:
+                    extra[group].add(moments, valid)
                 a = agg[group]
                 a['callable_bases'] += int(valid.sum())
                 a['callable_sample_cells'] += int(n[valid].sum())
@@ -199,6 +203,13 @@ def run_locus_evidence_popgen(*, data, requested_stats, min_sample_coverage,
                    acgt_locus_bases=acgt, **a)
         row['posterior_pi'] = a['posterior_pairwise_differences_sum']/denom
         row['posterior_heterozygosity_per_base'] = row.pop('heterozygosity_sum')/denom
+        if extended:
+            additional = extra[g].summary()
+            if 'theta_w' not in requested_stats:
+                additional = {k: v for k, v in additional.items() if 'theta_w' not in k}
+            if 'fis' not in requested_stats:
+                additional = {k: v for k, v in additional.items() if 'fis' not in k}
+            row.update(additional)
         rows.append(row)
     rates = 1-counts/acgt if acgt else np.ones(len(samples))
     summary = dict(input_backend='locus_likelihoods', evidence_scope='loci', evidence_prior=evidence_prior,
@@ -219,7 +230,20 @@ def run_locus_evidence_popgen(*, data, requested_stats, min_sample_coverage,
     if sfs is not None:
         summary['prior_model'] = 'cross-fitted folded finite-sample SFS'
         summary['sfs_prior'] = sfs.metadata()
+    chromosome_counts = posterior_sfs = None
+    if extended:
+        tables = [extra[g].tables(g) for g in populations]
+        chromosome_counts = pd.concat([t[0] for t in tables], ignore_index=True)
+        if 'sfs' in requested_stats:
+            posterior_sfs = pd.concat([t[1] for t in tables], ignore_index=True)
+        summary.update(
+            theta_w_formula='mean P(0<K<M | reads)/a_(M-1) over eligible bases; M=observed chromosome count; no missing-cell imputation',
+            posterior_sfs_policy='expected folded counts stratified by observed chromosome count, including invariant bin; distinct from fitted prior in sfs.tsv',
+            fis_formula='1 - mean posterior Ho / mean posterior He on identical bases with >=2 usable individuals; He uses existing finite-sample corrected gene diversity convention',
+            fis_undefined='NA for no eligible bases or zero He; negative values retained; ratio of summaries, not posterior mean of a ratio')
+    summary['statistic_capabilities'] = capabilities
     return PopgenResult(sample_data_summary=build_sample_data_summary(samples=samples,
         missing_fraction=pd.Series(rates,index=samples),post_imputation_missing_fraction=pd.Series(rates,index=samples),
         imputation_algorithm='not-imputed'),sample_stats=sample_stats,
-        population_stats=pd.DataFrame(rows),summary=summary, sfs=sfs.table() if sfs is not None else None)
+        population_stats=pd.DataFrame(rows),summary=summary, sfs=sfs.table() if sfs is not None else None,
+        chromosome_counts=chromosome_counts, posterior_sfs=posterior_sfs)

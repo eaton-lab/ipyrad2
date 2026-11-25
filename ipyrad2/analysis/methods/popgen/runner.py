@@ -14,6 +14,7 @@ from ....utils.exceptions import IPyradError
 from ..common import ensure_output_paths
 from .models import OUTPUT_TABLE_SPECS
 from .models import ORDERED_STATS
+from .models import resolve_likelihood_stats
 from .models import PopgenRequest
 from .models import PopgenResult
 from .models import SEQUENCE_ONLY_STATS
@@ -286,9 +287,10 @@ def run_popgen_method(
     if genotype_mode == "calls" and (evidence_prior != "uniform" or individual_map is not None or evidence_scope != "snps"):
         raise IPyradError("Evidence scope, prior and individual map require --genotype-mode likelihoods.")
     if genotype_mode == "likelihoods":
-        requested_stats = normalize_stats(stats)
-        if requested_stats == ["all"]:
-            requested_stats = ["pi", "heterozygosity"] if evidence_scope == "loci" else ["heterozygosity"]
+        requested_stats, capabilities = resolve_likelihood_stats(stats, evidence_scope)
+        logger.info("Likelihood statistics requested: {}; computed: {}", capabilities['requested'], requested_stats)
+        for stat, reason in capabilities['unsupported'].items():
+            logger.info("Unsupported {} likelihood statistic {}: {}", evidence_scope, stat, reason)
         if windowing.mode is not None:
             raise IPyradError("Likelihood popgen does not yet support windows.")
     else:
@@ -389,6 +391,8 @@ def run_popgen_method(
         log_level=log_level,
         windowing=windowing,
     )
+    if genotype_mode == "likelihoods":
+        result.summary['statistic_capabilities'] = capabilities
     if "fit" in request.requested_stats and (result.global_stats is None or result.global_stats.empty):
         raise IPyradError("Popgen backend did not return global Fit statistics.")
 
@@ -418,6 +422,8 @@ def run_popgen_method(
         "population_stats": result.population_stats,
         "pairwise_stats": result.pairwise_stats,
         "sfs": result.sfs,
+        "posterior_sfs": result.posterior_sfs,
+        "chromosome_counts": result.chromosome_counts,
         "window_population_stats": result.window_population_stats,
         "window_pairwise_stats": result.window_pairwise_stats,
     }

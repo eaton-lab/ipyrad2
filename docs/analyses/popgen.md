@@ -576,3 +576,54 @@ uncertainty across callable locus bases, and inspect each reported denominator.
 Compare hard calls, uniform likelihoods, and SFS on matched domains when making
 method comparisons; their default usable-cell sets can differ. Neither SFS
 option fits the paper's separate library-specific observation correction.
+
+### Five all-site likelihood statistics
+
+With `--genotype-mode likelihoods --evidence-scope loci`, `--stats all`
+computes `heterozygosity,pi,theta_w,sfs,fis` using the selected uniform,
+population, or SFS prior. Existing hard-call defaults and SNP-likelihood scope
+are unchanged. Explicit requests containing `tajima_d`, `dxy`, `fst`, or `fit`
+fail before fitting or publishing results. `all` reports these omissions in
+both the log and `statistic_capabilities` manifest entry; it never switches to
+hard calls. Tajima's D needs a separately validated posterior variance/sample-size
+policy; between-population statistics need resolved allele identities, which
+symbolic unseen alternatives do not provide. These are implementation/model
+limitations, not a general prohibition on likelihood estimators.
+
+```bash
+ipyrad2 popgen -d assembly.hdf5 -n diversity -o output-diversity \
+  --genotype-mode likelihoods --evidence-scope loci --evidence-prior sfs \
+  --imap populations.tsv --min-genotype-depth 1 --stats all
+```
+
+The existing H and pi calculations are unchanged. Additional output includes:
+
+- `posterior_theta_w`: mean of `P(0<K<M | reads) / a_(M-1)` across eligible
+  physical bases, where `M` is twice the number of observed individuals and
+  `a_(M-1) = sum(1/i, i=1..M-1)`. This is a sitewise variable-sample-size
+  estimator, not a fixed-size projected spectrum. Callable invariant bases
+  contribute zero; sites without evidence do not contribute. Its value is
+  conditional on the observed sample set and retained locus domain.
+- `chromosome_counts.tsv`: callable-base counts, expected segregating-site
+  totals, theta numerators and estimates for each observed chromosome count.
+  Compare strata when missingness differs among methods or assays.
+- `posterior_sfs.tsv`: posterior expected folded site counts by population,
+  observed chromosome count and minor-allele count. Bin zero includes both
+  monomorphic states. Counts sum to eligible bases within each stratum; do not
+  pool different chromosome counts into one spectrum without projection.
+  This evaluation spectrum is distinct from `sfs.tsv`, which continues to
+  contain fitted, cross-fitted prior weights when the SFS prior is used.
+- `posterior_fis`: `1 - mean(Ho)/mean(He)` on identical bases with at least two
+  observed individuals. Ho is the mean individual heterozygote probability;
+  He follows the existing finite-sample-corrected gene-diversity convention.
+  Components and the denominator are reported. Negative values are retained;
+  zero He or no eligible bases produces NA. This is a ratio of posterior
+  summaries, not a posterior expectation of the ratio or an inbreeding
+  model fitted to the reads.
+
+All population quantities integrate the joint allele-count posterior. Under
+shared priors, multiplying marginal GP values would lose covariance and can
+misestimate segregation and diversity. Missing individuals remain missing.
+The fitted prior is not itself the evaluated SFS, and prior-fit uncertainty is
+not included in these point estimates. No external GP format, imputation,
+windowed likelihood analysis, or allele-dropout correction is introduced.

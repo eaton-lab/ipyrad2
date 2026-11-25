@@ -53,6 +53,35 @@ STAT_SPEC_BY_NAME = {spec.name: spec for spec in STAT_SPECS}
 ORDERED_STATS = tuple(spec.name for spec in STAT_SPECS)
 SEQUENCE_STATS = {spec.name for spec in STAT_SPECS if "sequence" in spec.backends}
 SNP_STATS = {spec.name for spec in STAT_SPECS if "snp" in spec.backends}
+LIKELIHOOD_STATS = {
+    "loci": ("heterozygosity", "pi", "theta_w", "sfs", "fis"),
+    "snps": ("heterozygosity",),
+}
+LOCUS_UNSUPPORTED = {
+    "tajima_d": "posterior variance and variable chromosome-count treatment are not implemented",
+    "dxy": "cross-population allele identity is unresolved for symbolic unseen alternatives",
+    "fst": "cross-population allele identity is unresolved for symbolic unseen alternatives",
+    "fit": "pooled cross-population allele identity is unresolved for symbolic unseen alternatives",
+}
+
+
+def resolve_likelihood_stats(stats, scope):
+    """Resolve all without switching estimators; reject explicit unsupported lists."""
+    from ....utils.exceptions import IPyradError
+    original = normalize_stats(stats)
+    supported = LIKELIHOOD_STATS[scope]
+    unsupported = {s: LOCUS_UNSUPPORTED.get(s, "not implemented for SNP likelihood scope")
+                   if scope == "loci" else "not implemented for SNP likelihood scope"
+                   for s in ORDERED_STATS if s not in supported}
+    requested = list(supported) if original == ["all"] else original
+    bad = [s for s in requested if s not in supported]
+    if bad:
+        reasons = "; ".join(f"{s}: {unsupported[s]}" for s in bad)
+        raise IPyradError(f"Unsupported {scope} likelihood statistics: {reasons}. "
+                         "Use --stats all for supported likelihood statistics, or run "
+                         "--genotype-mode calls separately. No hard-call fallback is applied.")
+    return requested, dict(requested=original, computed=requested, unsupported=unsupported,
+                           omitted=unsupported if original == ["all"] else {}, fallback="none")
 SEQUENCE_ONLY_STATS = SEQUENCE_STATS.difference(SNP_STATS)
 
 
@@ -152,6 +181,8 @@ OUTPUT_TABLE_SPECS: tuple[OutputTableSpec, ...] = (
     OutputTableSpec("population_stats", "population_stats.tsv"),
     OutputTableSpec("pairwise_stats", "pairwise_stats.tsv"),
     OutputTableSpec("sfs", "sfs.tsv"),
+    OutputTableSpec("posterior_sfs", "posterior_sfs.tsv"),
+    OutputTableSpec("chromosome_counts", "chromosome_counts.tsv"),
     OutputTableSpec("window_population_stats", "window_population_stats.tsv"),
     OutputTableSpec("window_pairwise_stats", "window_pairwise_stats.tsv"),
 )
@@ -168,6 +199,8 @@ class PopgenResult:
     population_stats: pd.DataFrame | None = None
     pairwise_stats: pd.DataFrame | None = None
     sfs: pd.DataFrame | None = None
+    posterior_sfs: pd.DataFrame | None = None
+    chromosome_counts: pd.DataFrame | None = None
     window_population_stats: pd.DataFrame | None = None
     window_pairwise_stats: pd.DataFrame | None = None
 

@@ -36,7 +36,7 @@ def likelihoods_from_pl(pl, valid=None):
     return np.exp(loglike), good
 
 
-def posterior_moments(likelihoods, valid, prior='uniform'):
+def posterior_moments(likelihoods, valid, prior='uniform', *, include_counts=False):
     """Return marginal GP and joint sampled-chromosome diversity moments.
 
     Each row must represent a distinct individual. Under `population`,
@@ -61,12 +61,15 @@ def posterior_moments(likelihoods, valid, prior='uniform'):
     gp = np.zeros_like(x)
     ek = np.zeros(nv)
     ek2 = np.zeros(nv)
+    count_post = np.zeros((nv, 2*ns+1)) if include_counts else None
     if prior == 'uniform':
         gp = x / x.sum(axis=-1, keepdims=True)
         ds = (gp[..., 1] + 2*gp[..., 2]) * good
         second = (gp[..., 1] + 4*gp[..., 2]) * good
         ek = ds.sum(axis=0)
         ek2 = ek**2 + (second-ds**2).sum(axis=0)
+        if include_counts:
+            count_post = independent_count_posterior(gp, good)
     elif ns:
         h, w = _quadrature(ns)
         logweights = np.empty((len(w), nv))
@@ -80,6 +83,8 @@ def posterior_moments(likelihoods, valid, prior='uniform'):
             conditional = x * hh
             conditional /= conditional.sum(axis=-1, keepdims=True)
             gp += conditional * weight[None, :, None]
+            if include_counts:
+                count_post += independent_count_posterior(conditional, good) * weight[:, None]
             ds = (conditional[..., 1] + 2*conditional[..., 2]) * good
             second = (conditional[..., 1] + 4*conditional[..., 2]) * good
             mean = ds.sum(axis=0)
@@ -91,6 +96,27 @@ def posterior_moments(likelihoods, valid, prior='uniform'):
         frequency = ek/m
         frequency_variance = np.maximum(0., ek2-ek**2)/m**2
         diversity = 2*(m*ek-ek2)/(m*(m-1))
-    return dict(GP=gp, dosage=gp[..., 1]+2*gp[..., 2], n_individuals=n,
+    result = dict(GP=gp, dosage=gp[..., 1]+2*gp[..., 2], n_individuals=n,
                 allele_frequency=frequency, allele_frequency_variance=frequency_variance,
                 gene_diversity=np.where(n > 0, np.maximum(0., diversity), np.nan))
+    if include_counts:
+        count_post[n == 0] = np.nan
+        result['count_posterior'] = count_post
+    return result
+
+
+def independent_count_posterior(probabilities, valid):
+    """Convolve conditionally independent genotypes, not dependent marginal GP.
+
+    Population-prior callers must convolve at each frequency quadrature node
+    before mixing. Missing samples contribute the identity polynomial.
+    """
+    ns, nv = valid.shape
+    post = np.ones((nv, 1))
+    for i in range(ns):
+        p = np.where(valid[i, :, None], probabilities[i], [1., 0., 0.])
+        nxt = np.zeros((nv, post.shape[1]+2))
+        for g in range(3):
+            nxt[:, g:g+post.shape[1]] += post * p[:, g, None]
+        post = nxt
+    return post

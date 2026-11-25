@@ -107,7 +107,7 @@ def _projection(n, m):
         for j in range(2*m+1)] for k in range(2*n+1)])
 
 
-def sfs_posterior_moments(likelihoods, valid, weights):
+def sfs_posterior_moments(likelihoods, valid, weights, *, include_counts=False):
     """Joint posterior with hypergeometric projection onto usable individuals.
 
     Missing cells receive NaN, not imputed posteriors. Count variance retains
@@ -122,6 +122,7 @@ def sfs_posterior_moments(likelihoods, valid, weights):
     n = good.sum(axis=0)
     ek = np.zeros(nv)
     ek2 = np.zeros(nv)
+    count_post = np.zeros((nv, 2*ns+1)) if include_counts else None
     for m in np.unique(n[n > 0]):
         sites = np.flatnonzero(n == m)
         order = np.argsort(~good[:, sites], axis=0, kind='stable')[:m]
@@ -134,6 +135,8 @@ def sfs_posterior_moments(likelihoods, valid, weights):
         if np.any(mass <= 0):
             raise ValueError('SFS prior and likelihoods have no common support.')
         post /= mass
+        if include_counts:
+            count_post[sites, :2*int(m)+1] = post
         k = np.arange(2*m+1)
         ek[sites] = post @ k
         ek2[sites] = post @ (k*k)
@@ -151,6 +154,10 @@ def sfs_posterior_moments(likelihoods, valid, weights):
         frequency = ek/chromosomes
         variance = np.maximum(0., ek2-ek*ek)/chromosomes**2
         diversity = 2*(chromosomes*ek-ek2)/(chromosomes*(chromosomes-1))
-    return dict(GP=gp, dosage=gp[..., 1]+2*gp[..., 2], n_individuals=n,
+    result = dict(GP=gp, dosage=gp[..., 1]+2*gp[..., 2], n_individuals=n,
         allele_frequency=frequency, allele_frequency_variance=variance,
         gene_diversity=np.where(n > 0, np.maximum(0., diversity), np.nan))
+    if include_counts:
+        count_post[n == 0] = np.nan
+        result['count_posterior'] = count_post
+    return result

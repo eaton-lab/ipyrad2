@@ -5,7 +5,7 @@
 import argparse
 from pathlib import Path
 
-from ..analysis.methods.popgen.models import ORDERED_STATS
+from ..analysis.methods.popgen.models import ORDERED_STATS, LIKELIHOOD_STATS
 from .common import RAW_HELP_FORMATTER
 
 
@@ -78,6 +78,8 @@ def _setup_popgen_subparser(
             "Comma-separated statistics to compute. Supported names are "
             f"{SUPPORTED_STATS}. Use `all` for the full panel supported by the "
             "detected input. [default=all]"
+            " All-site likelihoods support " + ",".join(LIKELIHOOD_STATS['loci']) +
+            "; all reports unsupported omissions; explicit unsupported requests fail without hard-call fallback."
         ),
     )
 

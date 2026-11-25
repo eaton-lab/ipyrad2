@@ -93,15 +93,16 @@ class CrossFittedSFS:
                         weight=float(weight), **d))
                 logger.info('SFS {} fold {}: {} informative sites, {} iterations', g, fold, d['informative_sites'], d['iterations'])
 
-    def moments(self, group, likelihoods, valid, loci):
+    def moments(self, group, likelihoods, valid, loci, *, include_counts=False):
         labels = self.fold_ids(loci)
         result = None
         for fold in np.unique(labels):
             take = np.flatnonzero(labels == fold)
-            part = sfs_posterior_moments(likelihoods[:, take], valid[:, take], self.models[group, int(fold)])
+            part = sfs_posterior_moments(likelihoods[:, take], valid[:, take], self.models[group, int(fold)], include_counts=include_counts)
             if result is None:
                 result = {k: np.empty((len(valid), len(labels), 3) if k == 'GP' else
-                    (len(valid), len(labels)) if k == 'dosage' else (len(labels),), dtype=v.dtype)
+                    (len(valid), len(labels)) if k == 'dosage' else
+                    (len(labels), 2*len(valid)+1) if k == 'count_posterior' else (len(labels),), dtype=v.dtype)
                     for k, v in part.items()}
             for key, value in part.items():
                 if key in ('GP', 'dosage'):
