@@ -111,7 +111,7 @@ def test_assemble_help_groups_examples_and_current_descriptions() -> None:
     assert "Store no evidence, SNP evidence, or SNP plus all final-locus evidence. [default=none]" in help_text
     assert "--all-site-evidence" not in help_text
     assert "--no-genotype-evidence" not in help_text
-    assert "File mapping BAM basenames to new names for outputs; overrides BAM headers" in help_text
+    assert "Two-column BAM basename to sample name map; repeated explicit sample names group technical BAMs" in help_text
     assert "Optional site patterns to mask in final assembled sequences. [default=None]" in help_text
     assert "Keep the assemble tmpdir after success; useful for testing." in help_text
     assert "--reindex-reference" not in help_text

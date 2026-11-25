@@ -204,7 +204,7 @@ def _setup_assemble_subparser(subparsers: argparse._SubParsersAction, header: st
     )
     naming.add_argument(
         "--rename", metavar="Path", type=Path,
-        help="File mapping BAM basenames to new names for outputs; overrides BAM headers",
+        help="Two-column BAM basename to sample name map; repeated explicit sample names group technical BAMs",
     )
     naming.add_argument(
         "--masks", metavar="str", nargs="*", type=str,

@@ -11,6 +11,7 @@ from loguru import logger
 import pandas as pd
 from .reporting import record_assembly_run, activate_run_reporting, record_inputs, record_calling_settings
 from .calling_options import resolve_calling_options
+from .bam_grouping import merge_grouped_bams
 import time
 from .beds import (
     get_name_from_bam,
@@ -917,6 +918,9 @@ def _normalize_bam_subsample_file(
                 unknown.append(token)
                 continue
             if len(matches) > 1:
+                if all(rename_map.get(path.name) == token for path in matches):
+                    selected_paths.update(matches)
+                    continue
                 ambiguous[token] = sorted(path.name for path in matches)
                 continue
             selected_paths.add(next(iter(matches)))
@@ -945,16 +949,59 @@ def _normalize_bam_subsample_file(
 def _collect_named_bams(
     bam_paths: list[Path],
     rename_map: dict[str, str],
-) -> tuple[dict[str, Path], list[tuple[str, str]]]:
-    """Resolve final sample names for BAM inputs from header names plus overrides."""
-    bam_dict: dict[str, Path] = {}
+) -> tuple[dict[str, Path | tuple[Path, ...]], list[tuple[str, str]]]:
+    """Resolve BAM names, permitting only explicitly requested many-to-one groups."""
+    groups: dict[str, list[Path]] = {}
     resolved_names, renamed = _resolve_final_bam_names(bam_paths, rename_map)
     for bam_file in bam_paths:
-        sname = resolved_names[bam_file]
-        if sname in bam_dict:
-            raise IPyradError(f"Multiple input files of sample name {sname}")
-        bam_dict[sname] = bam_file
+        groups.setdefault(resolved_names[bam_file], []).append(bam_file)
+    bam_dict: dict[str, Path | tuple[Path, ...]] = {}
+    for sname, paths in groups.items():
+        if len(paths) == 1:
+            bam_dict[sname] = paths[0]
+            continue
+        if not all(rename_map.get(path.name) == sname for path in paths):
+            raise IPyradError(f"Multiple input files of sample name {sname}; "
+                              "explicitly assign every member in --rename to group them")
+        if len({path.resolve() for path in paths}) != len(paths):
+            raise IPyradError(f"Repeated input BAM in explicit sample group {sname}")
+        bam_dict[sname] = tuple(paths)
     return bam_dict, renamed
+
+
+def _prepare_grouped_input(
+    *, sname: str, bam_paths: tuple[Path, ...], tmpdir: Path,
+    reference: Path, threads: int,
+) -> Path:
+    """Validate every original member, then materialize one biological sample."""
+    metadata = {str(path): _probe_bam_metadata(path) for path in bam_paths}
+    if len({m["layout"] for m in metadata.values()}) != 1:
+        raise IPyradError(
+            f"Explicit BAM group {sname} mixes single-end and paired-end inputs; "
+            "group only BAMs with the same sequencing layout."
+        )
+    _validate_bam_header_records_match_reference(
+        {path: m["header_records"] for path, m in metadata.items()}, tmpdir, reference,
+    )
+    return merge_grouped_bams(sname=sname, bam_paths=bam_paths,
+                              tmpdir=tmpdir, threads=threads)
+
+
+def _materialize_grouped_bams(
+    bam_dict: dict[str, Path | tuple[Path, ...]], *, tmpdir: Path,
+    reference: Path, threads: int, workers: int, log_level: str,
+) -> dict[str, Path]:
+    jobs = {
+        name: (_prepare_grouped_input, dict(sname=name, bam_paths=paths,
+               tmpdir=tmpdir, reference=reference, threads=threads))
+        for name, paths in bam_dict.items() if isinstance(paths, tuple)
+    }
+    if not jobs:
+        return dict(bam_dict)
+    logger.info("combining {} explicitly grouped samples from {} input BAMs",
+                len(jobs), sum(len(kwargs["bam_paths"]) for _, kwargs in jobs.values()))
+    merged = run_with_pool(jobs, log_level, max_workers=workers, msg="Grouping technical BAMs")
+    return {name: merged[name] if name in merged else path for name, path in bam_dict.items()}
 
 
 def _validate_input_bam_paths(
@@ -2120,6 +2167,17 @@ def run_assembler(
 
     record_inputs(bam_dict, wgs_dict, group_samples_file)
 
+    # Report original input paths above, not temporary merged BAM paths.
+    # Validate the reference dictionary before grouping, then retain the
+    # original one-BAM-per-sample downstream pipeline.
+    has_groups = any(isinstance(paths, tuple) for paths in all_dict.values())
+    if has_groups:
+        get_reference_sort_order(reference, tmpdir)
+        all_dict = _materialize_grouped_bams(
+            all_dict, tmpdir=tmpdir, reference=reference, threads=threads,
+            workers=max(1, cores // max(3, threads)), log_level=log_level,
+        )
+
     bam_metadata = _collect_bam_metadata(all_dict, log_level, startup_workers)
     sample_layouts = {
         sname: (bam_metadata[sname]["layout"] == "paired")
@@ -2140,7 +2198,8 @@ def run_assembler(
         )
 
     logger.debug("fetching reference scaffold order")
-    get_reference_sort_order(reference, tmpdir)
+    if not has_groups:
+        get_reference_sort_order(reference, tmpdir)
     logger.info("validating BAM headers against the reference")
     _validate_bam_header_records_match_reference(
         {
@@ -2167,6 +2226,8 @@ def run_assembler(
         log_level=log_level,
         )
     )
+    if has_groups and not keep_tmpdir:
+        shutil.rmtree(tmpdir / "grouped_bams")
     all_dict = {
         sname: filtered_analysis_results[sname].bam_path
         for sname in snames

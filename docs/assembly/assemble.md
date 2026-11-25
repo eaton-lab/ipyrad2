@@ -99,7 +99,7 @@ RAD-defined assembly, not because `assemble` has become a general-purpose whole-
 ### Sample naming and grouping
 
 - `--subsample`: first-column table selecting BAM filenames or sample names
-- `--rename`: two-column table mapping BAM basenames to final sample names
+- `--rename`: two-column table mapping BAM basenames to final sample names; explicitly repeated names group technical BAMs
 - `-p, --populations`: grouped-calling populations file
 - `-x, --masks`: optional sequence patterns to mask in the final assembled sequences
 
@@ -296,7 +296,7 @@ final shared BED is accepted.
 ### Sample Naming, Grouping, and Masks
 
 - `--subsample`: select a subset of BAMs by filename or sample name
-- `--rename`: rename final sample names from BAM basenames
+- `--rename`: rename and optionally group BAMs by final sample name
 - `--populations`: grouped-calling populations file
 - `-x, --masks`: site-pattern masks applied in the final assembled sequences
 
@@ -560,6 +560,33 @@ ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa -p pops.tsv -o OUT
 ```bash
 ipyrad2 assemble -d BAMS/RAD/*.bam -r REF.fa --rename rename.tsv -o OUT
 ```
+
+### Combine technical-replicate BAMs with `--rename`
+
+A two-column rename file can intentionally assign multiple BAM basenames to
+one final sample name:
+
+```text
+library1.bam specimen-A
+library2.bam specimen-A
+library3.bam specimen-B
+```
+
+All BAMs in a group must be explicitly listed with the same name, mapped
+against the assembly reference, and have the same read layout (SE or PE)
+and data type (RAD or WGS). A repeated header sample name without an explicit
+assignment remains an error, as does a name shared across RAD and WGS inputs.
+A group counts as one sample at locus discovery, paralog filtering, and
+genotype calling. A row containing `specimen-A` in the `--subsample` table selects the
+whole group; a BAM basename still selects an individual input. No alignment
+records are deduplicated across technical BAMs in this step.
+
+The original BAMs are unchanged. Grouped scratch BAMs normalize read-group
+sample names, retain existing unique read-group IDs, disambiguate colliding
+IDs and namespace read names by source to avoid pairing unrelated templates.
+Scratch BAMs are removed after read filtering unless `--keep-tmpdir` is
+specified. Assembly stats record the original member paths as a list for a
+group; single-input samples retain their existing path representation.
 
 ### WGS-only assembly inside a supplied loci BED
 
