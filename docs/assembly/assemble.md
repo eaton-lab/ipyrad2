@@ -231,8 +231,8 @@ The explicit `-s` floor applies in addition to confidence. Increasing it rejects
 more calls but does not change the fitted SFS or avoid evaluating the underlying
 likelihoods. `--min-locus-depth`, locus occupancy, and `--loci-bed` control the
 domain to process; `--sfs-fit-loci` limits fitting work. Fitting buffers are capped
-at 256 MiB of SAF training arrays, with at most four concurrent fits, and
-posterior evaluation streams bounded blocks. These are component limits, not a
+at 8 GiB across groups for SAF training arrays and locus indices, with at most
+four concurrent fits, and posterior evaluation streams bounded blocks. These are component limits, not a
 total-memory guarantee. Capture, fitting, and posterior times are reported
 separately.
 

@@ -129,15 +129,24 @@ def test_native_formats_reference_masks_and_fallback(tmp_path):
 
 def test_stream_chunking_and_training_failures(tmp_path,monkeypatch):
     source=fixture(tmp_path,block_sites=7);groups={'all':np.arange(3)}
-    models,_,_=fit_models(source,groups,folds=5,fit_loci=4,max_iter=10000,cores=1)
+    models,_,training_bytes=fit_models(source,groups,folds=5,fit_loci=4,max_iter=10000,cores=1)
     source.block_sites=113
     other,_,_=fit_models(source,groups,folds=5,fit_loci=4,max_iter=10000,cores=2)
     for k in models:np.testing.assert_array_equal(models[k],other[k])
     with pytest.raises(IPyradError,match='group all.*fold.*converge'):
         fit_models(source,groups,folds=5,fit_loci=4,max_iter=1,cores=1)
-    monkeypatch.setattr('ipyrad2.assembler.sfs_calling.TRAINING_BYTES',1)
-    with pytest.raises(IPyradError,match='256 MiB'):
+    # The exact accounted budget succeeds without changing fitted models;
+    # one byte less fails, and the error describes the configured limit.
+    monkeypatch.setattr('ipyrad2.assembler.sfs_calling.TRAINING_BYTES',training_bytes)
+    bounded,_,used=fit_models(source,groups,folds=5,fit_loci=4,max_iter=10000,cores=1)
+    assert used == training_bytes
+    for k in models:np.testing.assert_array_equal(models[k],bounded[k])
+    monkeypatch.setattr('ipyrad2.assembler.sfs_calling.TRAINING_BYTES',training_bytes-1)
+    limit=f'{(training_bytes-1) / 1024**2:g} MiB'
+    with pytest.raises(IPyradError) as error:
         fit_models(source,groups,folds=5,fit_loci=4,max_iter=10000,cores=1)
+    assert limit in str(error.value)
+    assert 'total process memory is higher' in str(error.value)
 
 
 def test_retained_domain_controls_training_and_calls(tmp_path):

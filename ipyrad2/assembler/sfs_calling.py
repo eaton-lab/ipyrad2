@@ -22,7 +22,9 @@ from .genotype_evidence import _read_header, _coordinate_groups
 from .rad_evidence_hdf5 import read_rad_intervals
 from .variants import BIN_BCF, BIN_BED
 
-TRAINING_BYTES = 256 * 1024**2
+# Guard cumulative SAF arrays and locus indices, not total process memory.
+# Keep the training recipe intact for assemblies with hundreds of singleton groups.
+TRAINING_BYTES = 8 * 1024**3
 
 
 def phred(probability):
@@ -202,7 +204,11 @@ def fit_models(source, groups, *, folds, fit_loci, max_iter, cores):
             matrix = folded_saf(block['x'][ix][:, take], block['valid'][ix][:, take])
             nbytes += matrix.nbytes + take.size*8
             if nbytes > TRAINING_BYTES:
-                raise IPyradError('SFS training exceeds 256 MiB; reduce --sfs-fit-loci or use smaller explicit cohorts.')
+                raise IPyradError(
+                    f'SFS training exceeds {TRAINING_BYTES / 1024**2:g} MiB '
+                    'of SAF arrays and locus indices; total process memory is higher. '
+                    'Reduce --sfs-fit-loci or use smaller explicit cohorts.'
+                )
             parts[g].append(matrix); labels[g].append(block['loci'][take])
     matrices = {g: np.concatenate(v) for g, v in parts.items()}
     labels = {g: np.concatenate(v) for g, v in labels.items()}
