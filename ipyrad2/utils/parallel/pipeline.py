@@ -7,8 +7,10 @@ from __future__ import annotations
 import atexit
 from contextlib import ExitStack
 import multiprocessing as mp
+import math
 import os
 import select
+import selectors
 import signal
 import subprocess as sp
 import tempfile
@@ -47,6 +49,9 @@ def safe_popen(argv: Sequence[str], **kwargs) -> sp.Popen:
     kwargs.setdefault("start_new_session", True)
     proc = sp.Popen(argv, **kwargs)
     with _CHILD_PROCS_LOCK:
+        # A prior canceled child might have left kernel I/O only after its
+        # cleanup deadline. Reap and forget it before registering new work.
+        _CHILD_PROCS.difference_update(p for p in tuple(_CHILD_PROCS) if p.poll() is not None)
         _CHILD_PROCS.add(proc)
     try:
         if _CHILD_PG_QUEUE is not None:
@@ -178,47 +183,58 @@ def _launch_pipeline(
     stderr_tmpfiles: list[tempfile.NamedTemporaryFile] = []
     prev: sp.Popen | None = None
 
-    with ExitStack() as stack:
-        input_file = None
-        if stdin_text is not None:
-            # A file lets the child read input while the parent drains output.
-            input_file = stack.enter_context(tempfile.TemporaryFile())
-            input_file.write(stdin_text.encode(stdin_encoding, errors="strict"))
-            input_file.seek(0)
+    try:
+        with ExitStack() as stack:
+            input_file = None
+            if stdin_text is not None:
+                # A file lets the child read input while the parent drains output.
+                input_file = stack.enter_context(tempfile.TemporaryFile())
+                input_file.write(stdin_text.encode(stdin_encoding, errors="strict"))
+                input_file.seek(0)
 
-        for idx, argv in enumerate(cmds):
-            is_first = idx == 0
-            is_last = idx == len(cmds) - 1
+            for idx, argv in enumerate(cmds):
+                is_first = idx == 0
+                is_last = idx == len(cmds) - 1
 
-            stdout_target = last_stdout_target if is_last else sp.PIPE
-            stdin_source = input_file if is_first else prev.stdout
+                stdout_target = last_stdout_target if is_last else sp.PIPE
+                stdin_source = input_file if is_first else prev.stdout
 
-            if is_last and last_stderr_pipe:
-                stderr_target = sp.PIPE
-            else:
-                tmpf = tempfile.NamedTemporaryFile(prefix="pipe-stderr-", delete=False)
-                stderr_target = tmpf
-                stderr_tmpfiles.append(tmpf)
+                if is_last and last_stderr_pipe:
+                    stderr_target = sp.PIPE
+                else:
+                    tmpf = tempfile.NamedTemporaryFile(prefix="pipe-stderr-", delete=False)
+                    stderr_target = tmpf
+                    stderr_tmpfiles.append(tmpf)
 
-            child_context = {}
-            if env is not None:
-                child_context["env"] = env
-            if cwd is not None:
-                child_context["cwd"] = cwd
-            proc = safe_popen(
-                argv,
-                stdin=stdin_source,
-                stdout=stdout_target,
-                stderr=stderr_target,
-                text=False,
-                **child_context,
-            )
+                child_context = {}
+                if env is not None:
+                    child_context["env"] = env
+                if cwd is not None:
+                    child_context["cwd"] = cwd
+                proc = safe_popen(
+                    argv,
+                    stdin=stdin_source,
+                    stdout=stdout_target,
+                    stderr=stderr_target,
+                    text=False,
+                    **child_context,
+                )
 
-            if prev is not None and prev.stdout is not None:
-                prev.stdout.close()
-
-            procs.append(proc)
-            prev = proc
+                procs.append(proc)
+                if prev is not None and prev.stdout is not None:
+                    prev.stdout.close()
+                prev = proc
+    except BaseException as exc:
+        # A later executable can fail to start after earlier children launched.
+        _terminate_pipeline(procs)
+        try:
+            _wait_for_pipeline(procs, timeout_s=PIPELINE_FAILURE_REAP_TIMEOUT_S)
+        except Exception as cleanup:
+            if hasattr(exc, "add_note"):
+                exc.add_note(str(cleanup))
+        finally:
+            _cleanup_pipeline_processes(procs, stderr_tmpfiles)
+        raise
 
     return _LaunchedPipeline(procs=procs, stderr_tmpfiles=stderr_tmpfiles)
 
@@ -232,31 +248,45 @@ def _terminate_pipeline(procs: list[sp.Popen]) -> None:
         _terminate_proc(proc, signal.SIGKILL)
 
 
-def _wait_for_pipeline(procs: list[sp.Popen]) -> list[int]:
-    """Wait for pipeline processes to exit and return their return codes."""
-    rcs: list[int] = []
-    for proc in procs:
-        try:
-            rc = proc.poll()
-            if rc is None:
-                rc = proc.wait(timeout=1.0)
-        except sp.TimeoutExpired:
-            _terminate_proc(proc, signal.SIGKILL)
-            rc = proc.wait(timeout=0.2)
-        except Exception:
-            rc = proc.returncode if proc.returncode is not None else 1
-        rcs.append(int(rc) if rc is not None else 0)
-    return rcs
+# Keep a shared short teardown budget for actual failures/deadlines; a
+# deliberately truncated successful scan can tolerate delayed filesystem I/O.
+PIPELINE_FAILURE_REAP_TIMEOUT_S = 1.2
+STREAM_EARLY_CLOSE_REAP_TIMEOUT_S = 30.0
+
+
+def _wait_for_pipeline(
+    procs: list[sp.Popen], *, timeout_s: float = PIPELINE_FAILURE_REAP_TIMEOUT_S,
+) -> list[int]:
+    """Reap a whole pipeline against one deadline, not one timeout per child.
+
+    Callers send termination signals before waiting on canceled pipelines.
+    SIGKILL cannot immediately release a process blocked in kernel I/O.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        rcs = [proc.poll() for proc in procs]
+        if all(rc is not None for rc in rcs):
+            return [int(rc) for rc in rcs]
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            pending = [str(proc.args) for proc, rc in zip(procs, rcs) if rc is None]
+            raise PipelineTimeoutError(
+                f"pipeline cleanup exceeded {timeout_s:g}s after termination; "
+                f"unreaped children: {', '.join(pending)}"
+            )
+        time.sleep(min(0.01, remaining))
 
 
 def _cleanup_pipeline_processes(
     procs: list[sp.Popen],
     stderr_tmpfiles: list[tempfile.NamedTemporaryFile],
 ) -> None:
-    """Close process pipes, unregister children, and clean stderr tempfiles."""
+    """Close pipes and temporary files; unregister only reaped children."""
     for proc in procs:
         with _CHILD_PROCS_LOCK:
-            _CHILD_PROCS.discard(proc)
+            # Retain a still-live child for later reaping/worker shutdown.
+            if proc.poll() is not None:
+                _CHILD_PROCS.discard(proc)
         try:
             if proc.stdin is not None:
                 proc.stdin.close()
@@ -416,12 +446,18 @@ class _PipelineLineStream:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
-        self.close()
+        try:
+            self.close(fast=exc_type is not None)
+        except Exception as cleanup:
+            if exc is None:
+                raise
+            if hasattr(exc, "add_note"):
+                exc.add_note(str(cleanup))
         return False
 
     def __del__(self) -> None:
         try:
-            self.close()
+            self.close(fast=True)
         except Exception:
             pass
 
@@ -457,13 +493,27 @@ class _PipelineLineStream:
 
             self._poll_failures()
 
-    def close(self) -> None:
-        """Terminate any live subprocesses and release resources."""
+    def close(self, *, fast: bool = False) -> None:
+        """Cancel a deliberately truncated stream and release resources."""
         if self.closed:
             return
         self.closed = True
+        if self.finalized:
+            return
+        # If a producer has already failed before cancellation, do not
+        # suppress that genuine failure as an intentional truncation.
+        if self.primary_fail is None:
+            self._poll_failures()
+        already_failed = self.primary_fail is not None
+        # Early callers intentionally stop after a bounded sample of lines.
+        # Release the pipe before signaling, so producers blocked on output
+        # can exit promptly rather than waiting for the pipe to drain.
+        if self.last.stdout is not None:
+            self.last.stdout.close()
         self._terminate_live()
-        self._finalize(suppress_errors=True)
+        budget = (PIPELINE_FAILURE_REAP_TIMEOUT_S if fast or already_failed
+                  else STREAM_EARLY_CLOSE_REAP_TIMEOUT_S)
+        self._finalize(suppress_errors=fast or not already_failed, reap_timeout_s=budget)
 
     def _pop_line(self) -> str | None:
         newline = self.buffer.find(b"\n")
@@ -491,7 +541,8 @@ class _PipelineLineStream:
     def _terminate_live(self) -> None:
         _terminate_pipeline(self.procs)
 
-    def _finalize(self, suppress_errors: bool = False) -> None:
+    def _finalize(self, suppress_errors: bool = False, *,
+                  reap_timeout_s: float = PIPELINE_FAILURE_REAP_TIMEOUT_S) -> None:
         if self.finalized:
             return
         self.finalized = True
@@ -511,7 +562,19 @@ class _PipelineLineStream:
                         self._terminate_live()
                         break
                     time.sleep(0.01)
-            rcs = _wait_for_pipeline(self.procs)
+            try:
+                rcs = _wait_for_pipeline(self.procs, timeout_s=reap_timeout_s)
+            except PipelineTimeoutError as cleanup:
+                if timed_out:
+                    raise _pipeline_timeout_error(
+                        self.cmds, STREAM_FINALIZE_TIMEOUT_S, time.monotonic() - start,
+                    ) from cleanup
+                if self.primary_fail is not None and not suppress_errors:
+                    raise _pipeline_error(
+                        self.cmds, _collect_pipeline_stderr(self.stderr_tmpfiles),
+                        self.primary_fail, [self.primary_fail],
+                    ) from cleanup
+                raise
             if timed_out:
                 raise _pipeline_timeout_error(
                     self.cmds, STREAM_FINALIZE_TIMEOUT_S, time.monotonic() - start,
@@ -544,13 +607,19 @@ def run_pipeline(
     env: dict[str, str] | None = None,
     cwd: str | Path | None = None,
 ) -> Tuple[int, bytes, bytes]:
-    """Run a shell-like pipeline of cmds with pipefail + fail-fast semantics."""
+    """Run a shell-like pipeline with pipefail and an optional operation deadline.
+
+    Once the deadline expires, all children are canceled and given one short,
+    shared cleanup budget. The longer intentional stream-close grace does not
+    apply to this API.
+    """
     import signal as _signal
 
     if not cmds:
         raise ValueError("run_pipeline(): cmds must be a non-empty list of argv sequences")
     if timeout_s is not None:
-        if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)) or timeout_s <= 0:
+        if (isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float))
+                or not math.isfinite(timeout_s) or timeout_s <= 0):
             raise ValueError("run_pipeline(): timeout_s must be a positive number")
 
     sigpipe = _signal.SIGPIPE
@@ -560,25 +629,22 @@ def run_pipeline(
     fout: BinaryIO | None = None
     outfile_tmp: Path | None = None
 
-    last_out = b""
-    last_err = b""
-    comm_exc: BaseException | None = None
-    comm_done = threading.Event()
+    stdout_buffer = bytearray()
+    stderr_buffer = bytearray()
     timed_out = False
     elapsed_s = 0.0
+    primary_fail: tuple[int, int] | None = None
+    cleanup_attempted = False
 
-    def _communicate_last(last: sp.Popen) -> None:
-        nonlocal last_out, last_err, comm_exc
-        try:
-            if outfile is not None:
-                _out, last_err = last.communicate()
-                last_out = b""
+    def drain_ready(selector, timeout: float) -> bool:
+        ready = selector.select(timeout)
+        for key, _ in ready:
+            block = os.read(key.fd, 65536)
+            if block:
+                key.data.extend(block)
             else:
-                last_out, last_err = last.communicate()
-        except BaseException as exc:
-            comm_exc = exc
-        finally:
-            comm_done.set()
+                selector.unregister(key.fileobj)
+        return bool(ready)
 
     try:
         if outfile is not None:
@@ -598,52 +664,63 @@ def run_pipeline(
 
         last = procs[-1]
         start_time = time.monotonic()
-        comm_thread = threading.Thread(target=_communicate_last, args=(last,), daemon=True)
-        comm_thread.start()
+        deadline = start_time + timeout_s if timeout_s is not None else None
 
-        primary_fail: tuple[int, int] | None = None
+        with selectors.DefaultSelector() as selector:
+            if last.stdout is not None:
+                selector.register(last.stdout, selectors.EVENT_READ, stdout_buffer)
+            if last.stderr is not None:
+                selector.register(last.stderr, selectors.EVENT_READ, stderr_buffer)
 
-        # EOF from the final stage does not prove upstream processes have exited.
-        # Keep every stage under the caller's deadline until exit is confirmed.
-        while True:
-            all_exited = True
-            for idx, proc in enumerate(procs):
-                rc = proc.poll()
-                if rc is None:
-                    all_exited = False
-                    continue
-                if rc == 0:
-                    continue
-                if ignore_sigpipe and idx < len(procs) - 1 and _is_sigpipe_rc(rc, sigpipe):
-                    continue
-                primary_fail = (idx, rc)
-                break
-            if primary_fail is not None or (
-                comm_done.is_set() and (all_exited or comm_exc is not None)
-            ):
-                break
-            if timeout_s is not None:
-                elapsed_s = time.monotonic() - start_time
-                if elapsed_s >= timeout_s:
-                    timed_out = True
+            # EOF is not proof of upstream exit. Every process and stdout/stderr
+            # pipe remains subject to the operation deadline until completed.
+            while True:
+                rcs = [proc.poll() for proc in procs]
+                bad = [
+                    (i, rc) for i, rc in enumerate(rcs)
+                    if rc not in (None, 0) and not (
+                        ignore_sigpipe and i < len(procs) - 1 and _is_sigpipe_rc(rc, sigpipe)
+                    )
+                ]
+                if bad:
+                    primary_fail = bad[0]
                     break
-            time.sleep(0.005)
+                if all(rc is not None for rc in rcs) and not selector.get_map():
+                    break
+                remaining = deadline - time.monotonic() if deadline is not None else None
+                if remaining is not None and remaining <= 0:
+                    timed_out = True
+                    elapsed_s = time.monotonic() - start_time
+                    break
+                wait = min(0.01, remaining) if remaining is not None else 0.01
+                if selector.get_map():
+                    drain_ready(selector, wait)
+                else:
+                    time.sleep(wait)
 
-        if primary_fail is None:
-            for idx, proc in enumerate(procs):
-                rc = proc.poll()
-                if rc is None or rc == 0:
-                    continue
-                if ignore_sigpipe and idx < len(procs) - 1 and _is_sigpipe_rc(rc, sigpipe):
-                    continue
-                primary_fail = (idx, rc)
-                break
+            if primary_fail is not None or timed_out:
+                _terminate_pipeline(procs)
 
-        if primary_fail is not None or timed_out or comm_exc is not None:
-            _terminate_pipeline(procs)
-
-        comm_done.wait(timeout=1.0)
-        comm_thread.join(timeout=1.0)
+            # On failure, collect already-buffered stderr without waiting for
+            # an uninterruptibly blocked child or a slow descendant.
+            cleanup_attempted = True
+            try:
+                rcs = _wait_for_pipeline(procs, timeout_s=PIPELINE_FAILURE_REAP_TIMEOUT_S)
+            except PipelineTimeoutError as cleanup:
+                # Do not replace the operation timeout or primary exit error.
+                if timed_out:
+                    raise _pipeline_timeout_error(cmds, float(timeout_s), elapsed_s) from cleanup
+                if primary_fail is not None:
+                    drain_ready(selector, 0)
+                    err = bytes(stderr_buffer) + _collect_pipeline_stderr(stderr_tmpfiles)
+                    raise _pipeline_error(cmds, err, primary_fail, [primary_fail]) from cleanup
+                raise
+            drain_deadline = time.monotonic() + 0.05
+            while selector.get_map() and time.monotonic() < drain_deadline:
+                # Children have exited; drain buffered output, but never wait
+                # for an unrelated descendant that inherited a pipe.
+                if not drain_ready(selector, 0):
+                    break
 
         if fout is not None:
             try:
@@ -652,17 +729,10 @@ def run_pipeline(
                 fout.close()
                 fout = None
 
-        rcs = _wait_for_pipeline(procs)
-
         if timed_out:
             raise _pipeline_timeout_error(cmds, float(timeout_s), elapsed_s or (time.monotonic() - start_time))
 
-        if comm_exc is not None:
-            raise comm_exc
-
-        err_all = bytearray()
-        if last_err:
-            err_all.extend(last_err)
+        err_all = stderr_buffer
         err_all.extend(_collect_pipeline_stderr(stderr_tmpfiles))
         bad = _bad_pipeline_rcs(
             rcs=rcs,
@@ -682,10 +752,16 @@ def run_pipeline(
             os.replace(outfile_tmp, outfile)
             outfile_tmp = None
 
-        return 0, last_out, bytes(err_all)
+        return 0, bytes(stdout_buffer), bytes(err_all)
 
-    except Exception:
-        _terminate_pipeline(procs)
+    except BaseException as exc:
+        if not cleanup_attempted:
+            _terminate_pipeline(procs)
+            try:
+                _wait_for_pipeline(procs, timeout_s=PIPELINE_FAILURE_REAP_TIMEOUT_S)
+            except Exception as cleanup:
+                if hasattr(exc, "add_note"):
+                    exc.add_note(str(cleanup))
         raise
 
     finally:
